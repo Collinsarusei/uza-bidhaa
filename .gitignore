@@ -38,3 +38,6 @@ yarn-error.log*
 next-env.d.ts
 
 .genkit/*
+.env.local
+.env*.local # More general rule to ignore .env.development.local, .env.production.local etc.
+.env # Also ignore generic .env files if you use them
