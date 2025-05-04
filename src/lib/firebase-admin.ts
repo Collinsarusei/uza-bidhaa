@@ -2,40 +2,47 @@
 
 import admin from 'firebase-admin';
 
-// --- Ensure environment variables are loaded and available ---
-if (!process.env.FIREBASE_PROJECT_ID) {
-    console.error("FATAL ERROR: FIREBASE_PROJECT_ID environment variable is not set.");
-    throw new Error('Firebase Admin Setup Failed: Missing FIREBASE_PROJECT_ID');
-}
-if (!process.env.FIREBASE_CLIENT_EMAIL) {
-    console.error("FATAL ERROR: FIREBASE_CLIENT_EMAIL environment variable is not set.");
-    throw new Error('Firebase Admin Setup Failed: Missing FIREBASE_CLIENT_EMAIL');
-}
-if (!process.env.FIREBASE_PRIVATE_KEY) {
-    console.error("FATAL ERROR: FIREBASE_PRIVATE_KEY environment variable is not set.");
-    throw new Error('Firebase Admin Setup Failed: Missing FIREBASE_PRIVATE_KEY');
-}
-
-// --- Format the private key correctly ---
-const privateKey = process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
-
-// --- Construct the Service Account object ---
-const serviceAccount: admin.ServiceAccount = {
-    projectId: process.env.FIREBASE_PROJECT_ID,
-    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-    privateKey: privateKey,
-};
-
 let app: admin.app.App;
 
-// --- Initialize Firebase Admin SDK (if not already initialized) ---
+// --- Initialize Firebase Admin SDK (if not already initialized) --- 
 if (!admin.apps.length) {
-    const expectedBucketName = `${process.env.FIREBASE_PROJECT_ID}.firebasestorage.app`;
-    console.log(`Attempting to initialize Firebase Admin SDK with bucket: ${expectedBucketName}`);
+    console.log("Attempting to initialize Firebase Admin SDK...");
+
+    // --- Read and Validate Environment Variables *inside* the init block --- 
+    const projectId = process.env.FIREBASE_PROJECT_ID;
+    const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+    const privateKeyEnv = process.env.FIREBASE_PRIVATE_KEY;
+
+    if (!projectId) {
+        console.error("FATAL ERROR: FIREBASE_PROJECT_ID environment variable is not set.");
+        throw new Error('Firebase Admin Setup Failed: Missing FIREBASE_PROJECT_ID');
+    }
+    if (!clientEmail) {
+        console.error("FATAL ERROR: FIREBASE_CLIENT_EMAIL environment variable is not set.");
+        throw new Error('Firebase Admin Setup Failed: Missing FIREBASE_CLIENT_EMAIL');
+    }
+    if (!privateKeyEnv) {
+        console.error("FATAL ERROR: FIREBASE_PRIVATE_KEY environment variable is not set.");
+        throw new Error('Firebase Admin Setup Failed: Missing FIREBASE_PRIVATE_KEY');
+    }
+    // --- End Validation --- 
+
+    // --- Format the private key correctly ---
+    const privateKey = privateKeyEnv.replace(/\\n/g, '\n');
+
+    // --- Construct the Service Account object ---
+    const serviceAccount: admin.ServiceAccount = {
+        projectId: projectId,
+        clientEmail: clientEmail,
+        privateKey: privateKey,
+    };
+
+    const expectedBucketName = `${projectId}.firebasestorage.app`;
+    console.log(`Using bucket name for init: ${expectedBucketName}`);
+    
     try {
         admin.initializeApp({
             credential: admin.credential.cert(serviceAccount),
-            // --- Using the .firebasestorage.app format --- 
             storageBucket: expectedBucketName 
         });
         console.log('Firebase Admin SDK Initialized Successfully.');
@@ -46,9 +53,13 @@ if (!admin.apps.length) {
         throw new Error(`Firebase Admin Initialization Failed: ${error.message}`);
     }
 } 
+
+// Assign the app instance (either newly created or existing)
 app = admin.app(); 
 
 // --- Export the initialized Firebase Admin services ---
+// These assume initialization succeeded or was already done.
+// The error handling above should prevent the app from reaching here if init failed.
 export const adminAuth = app.auth();
 export const adminDb = app.firestore();
 export const adminStorage = app.storage();
