@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
-import type { Item } from '@/lib/types'; // Import the Item type
-import { adminDb } from '@/lib/firebase-admin'; // Use Firebase Admin SDK
+import type { Item } from '@/lib/types';
+import { adminDb } from '@/lib/firebase-admin';
 import { getServerSession } from "next-auth/next";
-import { authOptions } from '../auth/[...nextauth]/route'; // Adjust path if needed
-import { FieldValue } from 'firebase-admin/firestore'; // For Timestamps
-import { v4 as uuidv4 } from 'uuid'; // For generating item IDs
+import { authOptions } from '../auth/[...nextauth]/route';
+import { FieldValue } from 'firebase-admin/firestore';
+import { v4 as uuidv4 } from 'uuid';
+import { createNotification } from '@/lib/notifications'; // Import the helper
 
 const itemsCollection = adminDb.collection('items');
 
@@ -12,9 +13,9 @@ const itemsCollection = adminDb.collection('items');
 export async function GET(request: Request) {
     console.log("API: Fetching items from Firestore");
     const { searchParams } = new URL(request.url);
-    const userIdToExclude = searchParams.get('userId'); // For main dashboard (exclude user's own)
-    const sellerIdToInclude = searchParams.get('sellerId'); // For "My Listings" (fetch only user's own)
-    const itemIdToFetch = searchParams.get('itemId'); // For single item details
+    const userIdToExclude = searchParams.get('userId');
+    const sellerIdToInclude = searchParams.get('sellerId');
+    const itemIdToFetch = searchParams.get('itemId');
 
     try {
         let query: FirebaseFirestore.Query<FirebaseFirestore.DocumentData> = itemsCollection;
@@ -25,31 +26,27 @@ export async function GET(request: Request) {
             if (!itemDoc.exists) {
                 return NextResponse.json({ message: "Item not found" }, { status: 404 });
             }
-            // Return as an array for consistency with message page expectation
-             return NextResponse.json([itemDoc.data()], { status: 200 });
+            return NextResponse.json([itemDoc.data()], { status: 200 });
         } else if (sellerIdToInclude) {
             console.log(`API: Filtering items to include only seller ID: ${sellerIdToInclude}`);
-            query = query.where('sellerId', '==', sellerIdToInclude);
+            // Firestore index needed: sellerId ASC, createdAt DESC
+            query = query.where('sellerId', '==', sellerIdToInclude).orderBy('createdAt', 'desc');
         } else if (userIdToExclude) {
             console.log(`API: Filtering items to exclude user ID: ${userIdToExclude}`);
-            // Firestore doesn't directly support '!=' queries efficiently on their own.
-            // Fetch all and filter, or fetch based on other criteria and filter.
-            // For simplicity here, fetching all available items and filtering in code.
-            // A better approach for large datasets might involve different data modeling or more complex queries.
-             query = query.where('status', '==', 'available'); // Example: Fetch only available items first
+            // Firestore index needed: status ASC, createdAt DESC
+            // Fetch available items NOT belonging to the user
+            query = query.where('status', '==', 'available').orderBy('createdAt', 'desc');
+            // Filtering out the user's own items happens later in code
         } else {
              console.log(`API: Fetching all available items.`);
-             // Fetch only available items for the general homepage/dashboard view
-             query = query.where('status', '==', 'available');
+             // Firestore index needed: status ASC, createdAt DESC
+             query = query.where('status', '==', 'available').orderBy('createdAt', 'desc');
         }
-
-        // Add ordering, e.g., by creation date descending
-        query = query.orderBy('createdAt', 'desc');
 
         const snapshot = await query.get();
         let itemsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Item[];
 
-        // Apply exclusion filter if needed (after fetching)
+        // Apply exclusion filter in code if needed (for homepage)
         if (userIdToExclude && !sellerIdToInclude && !itemIdToFetch) {
              itemsData = itemsData.filter(item => item.sellerId !== userIdToExclude);
              console.log(`API: Found ${itemsData.length} items after excluding user ID: ${userIdToExclude}.`);
@@ -61,6 +58,11 @@ export async function GET(request: Request) {
 
     } catch (error: any) {
         console.error("API Error fetching items:", error);
+        // Check for missing index error specifically
+        if (error.code === 'FAILED_PRECONDITION' && error.message.includes('index')) {
+            console.error("Firestore index missing for items query. Check required indexes based on query type (status/createdAt or sellerId/createdAt).");
+            return NextResponse.json({ message: 'Database query failed. Index potentially missing.', details: error.message }, { status: 500 });
+        }
         return NextResponse.json({ message: 'Failed to fetch items', error: error.message }, { status: 500 });
     }
 }
@@ -70,7 +72,6 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
     console.log("API: Attempting to create item in Firestore");
 
-    // --- Get Authenticated User (Seller) ---
     const session = await getServerSession(authOptions);
     if (!session || !session.user?.id) {
         console.warn("API Create Item: Unauthorized attempt.");
@@ -78,21 +79,12 @@ export async function POST(request: Request) {
     }
     const sellerId = session.user.id;
 
-    // --- TODO: Check KYC Status (when implemented) ---
-    // Fetch user data from DB
-    // const userDoc = await adminDb.collection('users').doc(sellerId).get();
-    // const userData = userDoc.data();
-    // if (!userData?.kycVerified) {
-    //     console.warn(`API Create Item: User ${sellerId} attempted to list without KYC.`);
-    //     return NextResponse.json({ message: 'KYC verification required to list items.' }, { status: 403 });
-    // }
-    // --- End KYC Check ---
+    // --- TODO: Check KYC Status --- 
 
     try {
         const body = await request.json();
         console.log("API: Received item data for creation:", body);
 
-        // --- Basic Validation (Consider using Zod for more robust validation) ---
         const requiredFields = ['title', 'description', 'price', 'category', 'location'];
         const missingFields = requiredFields.filter(field => !(field in body) || !body[field]);
 
@@ -100,17 +92,10 @@ export async function POST(request: Request) {
             console.log(`API Create Item: Missing required fields: ${missingFields.join(', ')}`);
             return NextResponse.json({ message: `Missing required fields: ${missingFields.join(', ')}` }, { status: 400 });
         }
-        if (!body.mediaUrls || body.mediaUrls.length === 0) {
-             // Handle media URLs - assume they are passed in after upload for now
-            console.log(`API Create Item: Missing mediaUrls`);
-             //return NextResponse.json({ message: 'At least one media URL is required' }, { status: 400 });
-             // For now, allow listing without images if needed, but maybe enforce later
-        }
 
-        // --- Prepare Item Data for Firestore ---
-         const itemId = uuidv4(); // Generate a unique ID for the item
+        const itemId = uuidv4();
          const newItemData = {
-            id: itemId, // Store ID within the document too
+            id: itemId,
             sellerId: sellerId,
             title: body.title,
             description: body.description,
@@ -120,21 +105,33 @@ export async function POST(request: Request) {
             offersDelivery: body.offersDelivery ?? false,
             acceptsInstallments: body.acceptsInstallments ?? false,
             discountPercentage: body.discountPercentage ?? null,
-            mediaUrls: body.mediaUrls ?? [], // Should come from file upload process
+            mediaUrls: body.mediaUrls ?? [],
             status: 'available', // Initial status
-            createdAt: FieldValue.serverTimestamp(), // Use Firestore server timestamp
+            createdAt: FieldValue.serverTimestamp(),
             updatedAt: FieldValue.serverTimestamp(),
          };
 
-        // --- Save to Firestore ---
         await itemsCollection.doc(itemId).set(newItemData);
         console.log(`API: Created new item in Firestore with ID: ${itemId} by seller: ${sellerId}`);
 
-         // Fetch the newly created doc to return timestamps correctly
+        // --- Create Notification for Seller --- 
+        try {
+            await createNotification({
+                userId: sellerId,
+                type: 'item_listed',
+                message: `Your item "${body.title}" has been successfully listed!`,
+                relatedItemId: itemId,
+            });
+        } catch (notificationError) {
+             console.error("Failed to create notification after listing item:", notificationError);
+             // Decide if this failure should affect the API response
+        }
+        // --- End Notification --- 
+
         const createdDoc = await itemsCollection.doc(itemId).get();
         const responseData = createdDoc.data();
 
-        return NextResponse.json(responseData, { status: 201 }); // Respond with the created item data
+        return NextResponse.json(responseData, { status: 201 });
 
     } catch (error: any) {
         console.error("API Error creating item:", error);

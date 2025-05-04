@@ -44,7 +44,7 @@ export async function confirmPayment(paymentId: string): Promise<Payment> {
 
   return {
     amount: 100,
-    currency: 'USD',
+    currency: 'KES',
     status: 'confirmed',
   };
 }

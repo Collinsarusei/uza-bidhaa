@@ -1,18 +1,23 @@
 // src/components/icons.tsx
 
 import {
+  AlertTriangle,
   ArrowRight,
+  BellOff,
   Check,
   ChevronsUpDown,
   Circle,
+  CircleDollarSign,
   Copy,
   Edit,
   ExternalLink,
+  Eye,        // Added
+  EyeOff,     // Added
   File,
   HelpCircle,
   Home,
   Loader2,
-  Lock, // <-- Added import for Lock
+  Lock,
   LogOut,
   Mail,
   MessageSquare,
@@ -20,12 +25,13 @@ import {
   Plus,
   PlusCircle,
   Search,
-  Send, // <-- Added import for Send
+  Send,
   Server,
   Settings,
   Share2,
   Shield,
   Sun,
+  Tag,
   Trash,
   User,
   X,
@@ -36,21 +42,25 @@ import {
   Key,
   Inbox,
   Bell,
-  Bot, // <-- Added import for Bot
-  // Add any other Lucide icons you need here
+  Bot,
 } from "lucide-react";
 
 const Icons = {
   // --- General Icons ---
+  alertTriangle: AlertTriangle,
   arrowRight: ArrowRight,
+  bellOff: BellOff,
   check: Check,
-  chevronDown: ChevronsUpDown, // Often used for dropdowns/selects
+  chevronDown: ChevronsUpDown,
   circle: Circle,
-  workflow: Workflow, // Also used for logo
+  circleDollarSign: CircleDollarSign,
+  workflow: Workflow,
   close: X,
   copy: Copy,
   edit: Edit,
   externalLink: ExternalLink,
+  eye: Eye,          // Added
+  eyeOff: EyeOff,    // Added
   file: File,
   help: HelpCircle,
   home: Home,
@@ -63,14 +73,15 @@ const Icons = {
   settings: Settings,
   share: Share2,
   shield: Shield,
+  tag: Tag,
   trash: Trash,
   user: User,
   image: Image,
   phone: Phone,
   info: Info,
   key: Key,
-  lock: Lock, // <-- Added lock property
-  send: Send, // <-- Added send property
+  lock: Lock,
+  send: Send,
 
   // --- Theme Icons ---
   dark: Moon,
@@ -78,21 +89,16 @@ const Icons = {
 
   // --- Loading / Status ---
   loader: Loader2,
-  spinner: Loader2, // Alias for loader often used
+  spinner: Loader2,
 
   // --- Navigation / UI Specific ---
   inbox: Inbox,
   bell: Bell,
   logOut: LogOut,
-  bot: Bot, // <-- Added bot property
+  bot: Bot,
 
   // --- Branding ---
-  logo: Workflow, // Using Workflow icon for the logo as defined before
+  logo: Workflow,
 };
 
-// Export the Icons object for use in other components
 export { Icons };
-
-// Optional: If you need to pass props like size/color, you might export
-// the icons directly or create wrapper components, but for basic usage,
-// exporting the object is common.

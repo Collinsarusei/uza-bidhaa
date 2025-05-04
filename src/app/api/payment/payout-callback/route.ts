@@ -1,13 +1,14 @@
 import { NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import crypto from 'crypto';
-import { adminDb } from '@/lib/firebase-admin'; // Import Firebase Admin
-import { FieldValue } from 'firebase-admin/firestore'; // For Timestamps
+import { adminDb } from '@/lib/firebase-admin';
+import { FieldValue, UpdateData } from 'firebase-admin/firestore'; // Correct import
+import { createNotification } from '@/lib/notifications';
+import type { Payment } from '@/lib/types'; // Import Payment type
 
 // --- Firestore Collections ---
 const paymentsCollection = adminDb.collection('payments');
-// We might need itemsCollection if payout failure requires reverting item status
-// const itemsCollection = adminDb.collection('items');
+const itemsCollection = adminDb.collection('items');
 
 // --- Intasend Secret Key ---
 const INTASEND_SECRET_KEY = process.env.INTASEND_SECRET_KEY;
@@ -22,15 +23,13 @@ export async function POST(req: Request) {
 
     let rawBody;
     try {
-        const signature = headers().get('X-Intasend-Signature');
+        const signature = (await headers()).get('X-Intasend-Signature');
         if (!signature) {
             console.warn("Payout Callback Warning: Missing X-Intasend-Signature header.");
             return NextResponse.json({ message: 'Missing signature header' }, { status: 400 });
         }
 
-        // --- Verify Signature ---
-        rawBody = await req.text(); // Read raw body ONCE
-
+        rawBody = await req.text();
         const hmac = crypto.createHmac('sha256', INTASEND_SECRET_KEY);
         const digest = Buffer.from(hmac.update(rawBody).digest('hex'), 'utf8');
         const checksum = Buffer.from(signature, 'utf8');
@@ -41,18 +40,11 @@ export async function POST(req: Request) {
         }
 
         console.log("Payout Callback Signature Verified Successfully.");
-
         const payload = JSON.parse(rawBody);
         console.log("Intasend Payout Callback Payload:", payload);
 
-        // Extract relevant details (adjust based on actual Intasend Payout webhook payload)
-        // Common fields: transaction_id, status, state, failure_code, failure_reason, reference, amount, currency, name, account
-        const { transaction_id, status, state, failure_code, failure_reason, reference } = payload;
-
-        // --- Find Payment Record in Firestore ---
-        // Use the Intasend Payout Transaction ID (or reference) to find our internal payment record.
-        // We stored this ID in the 'intasendPayoutId' field during the release step.
-        const paymentIdentifier = transaction_id || reference; // Use transaction_id if present
+        const { transaction_id, status, state, failure_code, failure_reason, reference, amount, currency } = payload;
+        const paymentIdentifier = transaction_id || reference;
 
         if (!paymentIdentifier) {
              console.error("Payout Callback Error: Missing transaction_id or reference in payload.");
@@ -60,75 +52,92 @@ export async function POST(req: Request) {
         }
 
         const paymentQuery = paymentsCollection.where('intasendPayoutId', '==', paymentIdentifier).limit(1);
-        // Alternative: If you passed paymentId in callback_url, parse it from the URL.
-        // Or use the `reference` field if it uniquely identifies your payment record.
-
         const paymentSnapshot = await paymentQuery.get();
 
         if (paymentSnapshot.empty) {
             console.error(`Payout Callback Error: Payment record not found in Firestore for Intasend Payout ID/Reference: ${paymentIdentifier}`);
-            // Return 200 OK to Intasend to prevent retries
             return NextResponse.json({ received: true, message: 'Payment record not found internally for this payout' }, { status: 200 });
         }
 
         const paymentDocRef = paymentSnapshot.docs[0].ref;
-        const paymentData = paymentSnapshot.docs[0].data();
-        const internalPaymentId = paymentData?.id; // Our internal payment ID
+        const paymentData = paymentSnapshot.docs[0].data() as Payment; // Cast to Payment
+        const internalPaymentId = paymentData?.id;
+        const sellerId = paymentData?.sellerId;
+        const itemId = paymentData?.itemId;
 
-        // --- Process the Callback based on Payout Status ---
-        const finalStatus = state || status; // Use 'state' if available
-        let dbUpdateData: FirebaseFirestore.UpdateData = {
-            payoutLastCallbackStatus: finalStatus, // Store the latest payout status
-            payoutFailureReason: failure_reason || failure_code || null, // Store failure reason if present
+        const finalStatus = state || status;
+        // Corrected: Added <Payment> type argument to UpdateData
+        let dbUpdateData: UpdateData<Payment> = {
+            payoutLastCallbackStatus: finalStatus,
+            payoutFailureReason: failure_reason || failure_code || null,
             updatedAt: FieldValue.serverTimestamp()
         };
-         let notificationNeeded = false;
+         let notificationPromise: Promise<any> | null = null;
+         let statusChanged = false;
 
-        // Intasend payout statuses might include: ACKNOWLEDGED, PROCESSING, COMPLETE, FAILED
         if (finalStatus === 'COMPLETE') {
             console.log(`Payout ${paymentIdentifier} completed successfully for payment ${internalPaymentId}.`);
-             // Only update if not already marked as released
              if (paymentData?.status !== 'released') {
-                dbUpdateData.status = 'released'; // Mark payment as fully released
-                 notificationNeeded = true; // Notify seller on success
+                dbUpdateData.status = 'released';
+                statusChanged = true;
+                if (sellerId && itemId) {
+                    notificationPromise = itemsCollection.doc(itemId).get().then(itemDoc => {
+                         // Corrected: Use itemDoc.exists property, not function
+                         const itemTitle = itemDoc.exists ? itemDoc.data()?.title : 'your item';
+                         const paymentAmount = amount || paymentData?.amount;
+                         const paymentCurrency = currency || paymentData?.currency || 'KES';
+                         return createNotification({
+                             userId: sellerId,
+                             type: 'payment_released',
+                             message: `Funds (${paymentCurrency} ${paymentAmount}) for "${itemTitle}" have been successfully sent to your account.`,
+                             relatedItemId: itemId,
+                         });
+                    }).catch(err => console.error("Error creating payout success notification:", err));
+                }
              } else {
                  console.log(`Payout Callback Info: Payment ${internalPaymentId} already marked as 'released'. Ignoring COMPLETE callback.`);
              }
 
         } else if (finalStatus === 'FAILED') {
             console.warn(`Payout ${paymentIdentifier} failed for payment ${internalPaymentId}. Status: ${finalStatus}, Reason: ${dbUpdateData.payoutFailureReason}`);
-             // Only update if not already marked as failed
              if (paymentData?.status !== 'payout_failed') {
-                 dbUpdateData.status = 'payout_failed'; // Mark payment as failed payout
-                 notificationNeeded = true; // Notify admin/seller on failure
-                 // Consider: Should the item status be reverted from 'sold'? Depends on business logic.
+                 dbUpdateData.status = 'payout_failed';
+                 statusChanged = true;
+                  if (sellerId && itemId) {
+                      notificationPromise = itemsCollection.doc(itemId).get().then(itemDoc => {
+                           // Corrected: Use itemDoc.exists property, not function
+                           const itemTitle = itemDoc.exists ? itemDoc.data()?.title : 'your item';
+                           return createNotification({
+                               userId: sellerId,
+                               type: 'unusual_activity',
+                               message: `Payout for "${itemTitle}" failed. Reason: ${dbUpdateData.payoutFailureReason || 'Unknown'}. Please check your payout details or contact support.`,
+                               relatedItemId: itemId,
+                           });
+                      }).catch(err => console.error("Error creating payout failure notification:", err));
+                  }
              } else {
                   console.log(`Payout Callback Info: Payment ${internalPaymentId} already marked as 'payout_failed'. Ignoring FAILED callback.`);
              }
 
         } else {
             console.log(`Received Intasend payout callback for ${internalPaymentId} with unhandled status/state: ${finalStatus}. Acknowledging receipt.`);
-            // Statuses like ACKNOWLEDGED, PROCESSING usually don't require a DB status change here,
-            // but you might log them or update a 'last checked' timestamp.
         }
 
-        // --- Perform Database Update ---
-         if (dbUpdateData.status) { // Only update if status changed
-             console.log(`Payout Callback: Updating payment ${internalPaymentId} with data:`, dbUpdateData);
-             await paymentDocRef.update(dbUpdateData);
-             console.log(`Payout Callback: Payment ${internalPaymentId} status updated successfully.`);
+        if (statusChanged) {
+            console.log(`Payout Callback: Updating payment ${internalPaymentId} with data:`, dbUpdateData);
+            const updatePromises = [paymentDocRef.update(dbUpdateData)];
+            if (notificationPromise) updatePromises.push(notificationPromise);
 
-             // --- Trigger Notifications (Optional) ---
-             if (notificationNeeded) {
-                 if (dbUpdateData.status === 'released') {
-                     console.log(`Simulating notification to seller ${paymentData?.sellerId} about successful payout for payment ${internalPaymentId}.`);
-                 } else if (dbUpdateData.status === 'payout_failed') {
-                     console.log(`Simulating notification to admin/seller ${paymentData?.sellerId} about failed payout for payment ${internalPaymentId}. Reason: ${dbUpdateData.payoutFailureReason}`);
-                 }
-             }
-         }
+            await Promise.all(updatePromises);
+            console.log(`Payout Callback: Payment ${internalPaymentId} status and notification processed.`);
+        } else {
+            await paymentDocRef.update({
+                payoutLastCallbackStatus: dbUpdateData.payoutLastCallbackStatus,
+                payoutFailureReason: dbUpdateData.payoutFailureReason,
+                updatedAt: dbUpdateData.updatedAt
+            });
+        }
 
-        // --- Acknowledge Receipt ---
         console.log(`Acknowledging receipt for Intasend Payout callback (ID: ${paymentIdentifier}, Status: ${finalStatus}).`);
         return NextResponse.json({ received: true }, { status: 200 });
 
