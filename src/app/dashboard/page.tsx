@@ -15,7 +15,6 @@ import { Badge } from "@/components/ui/badge";
 import { Item } from "@/lib/types";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Icons } from "@/components/icons";
-// Import signOut and useSession from next-auth/react
 import { useSession, signOut } from "next-auth/react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -29,25 +28,29 @@ import {
 import { useIsMobile } from "@/hooks/use-mobile";
 import { ProfileContent } from "@/components/profile-content";
 import { NotificationsContent } from "@/components/notifications-content";
-import { useRouter } from 'next/navigation'; // Import router for redirect after logout
+import { useRouter } from 'next/navigation';
+// Import the Notification Provider and hook
+import { NotificationProvider, useNotifications } from "@/components/providers/notification-provider";
 
-export default function DashboardPage() {
+// Create a separate component for the main dashboard content
+// This allows it to consume the notification context
+function DashboardContent() {
   const { data: session, status } = useSession();
-  const router = useRouter(); // Initialize router
+  const router = useRouter();
   const [items, setItems] = useState<Item[]>([]);
   const [isLoadingItems, setIsLoadingItems] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const isMobile = useIsMobile();
   const [isProfileSheetOpen, setIsProfileSheetOpen] = useState(false);
   const [isNotificationsSheetOpen, setIsNotificationsSheetOpen] = useState(false);
+  // Use the notification context hook
+  const { unreadCount, markAllAsRead } = useNotifications();
 
-  // --- Logout Handler ---
   const handleLogout = async () => {
-      await signOut({ redirect: false }); // Sign out without automatic redirect
-      router.push('/'); // Redirect to homepage after logout
+      await signOut({ redirect: false }); 
+      router.push('/'); 
   };
 
-  // Fetch items
   useEffect(() => {
     const fetchItems = async () => {
       setIsLoadingItems(true);
@@ -55,7 +58,6 @@ export default function DashboardPage() {
       const currentUserId = session?.user?.id;
       const apiUrl = currentUserId ? `/api/items?userId=${currentUserId}` : '/api/items';
       console.log(`Fetching items from: ${apiUrl}`);
-
       try {
         const response = await fetch(apiUrl);
         if (!response.ok) {
@@ -78,11 +80,25 @@ export default function DashboardPage() {
     }
   }, [session, status]);
 
-  // --- Header with Logout Button ---
+  // --- Mark Notifications Read Handler ---
+  const handleOpenNotifications = () => {
+      if (unreadCount > 0) {
+          console.log("Opening notifications - marking as read...");
+          markAllAsRead(); // Call the context function
+      }
+      // If mobile, navigate; if desktop, open sheet
+      if (isMobile) {
+          router.push('/notifications');
+      } else {
+          setIsNotificationsSheetOpen(true);
+      }
+  };
+
   const renderHeader = () => (
      <div className="flex justify-between items-center mb-6 border-b pb-4">
         <h1 className="text-3xl font-bold">Marketplace</h1>
-        <div className="flex items-center gap-1 md:gap-2"> {/* Reduced gap */}
+        <div className="flex items-center gap-1 md:gap-2"> 
+            {/* My Listings Button */} 
             {session?.user && (
                 <TooltipProvider>
                     <Tooltip>
@@ -95,6 +111,7 @@ export default function DashboardPage() {
                     </Tooltip>
                  </TooltipProvider>
             )}
+            {/* Sell Button */} 
             <TooltipProvider>
                 <Tooltip>
                     <TooltipTrigger asChild>
@@ -108,7 +125,7 @@ export default function DashboardPage() {
                 </Tooltip>
              </TooltipProvider>
 
-             {/* Profile */}
+             {/* Profile Button/Sheet */} 
              <TooltipProvider>
                  <Tooltip>
                      <TooltipTrigger asChild>
@@ -129,7 +146,7 @@ export default function DashboardPage() {
                  </Tooltip>
             </TooltipProvider>
 
-            {/* Messages */}
+             {/* Messages Button */} 
             <TooltipProvider>
                 <Tooltip>
                     <TooltipTrigger asChild>
@@ -141,26 +158,41 @@ export default function DashboardPage() {
                 </Tooltip>
             </TooltipProvider>
 
-            {/* Notifications */}
+            {/* Notifications Button/Sheet with Badge */} 
             <TooltipProvider>
                 <Tooltip>
                     <TooltipTrigger asChild>
-                         {isMobile ? (
-                             <Link href="/notifications" passHref>
-                                 <Button variant="ghost" size="icon"><Icons.bell className="h-5 w-5" /></Button>
-                             </Link>
-                         ) : (
-                             <Sheet open={isNotificationsSheetOpen} onOpenChange={setIsNotificationsSheetOpen}>
-                                 <SheetTrigger asChild>
-                                     <Button variant="ghost" size="icon" className="relative"><Icons.bell className="h-5 w-5" /></Button>
-                                 </SheetTrigger>
-                                 <SheetContent className="w-[400px] sm:w-[500px] flex flex-col p-0"><SheetHeader className="p-4 border-b"><SheetTitle>Notifications</SheetTitle></SheetHeader><div className="flex-1 overflow-y-auto p-2"><NotificationsContent /></div></SheetContent>
-                             </Sheet>
-                         )}
+                        {/* Use a single Button/SheetTrigger approach, handle action in onClick */} 
+                        <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            className="relative" 
+                            onClick={handleOpenNotifications} // Call unified handler
+                        >
+                            <Icons.bell className="h-5 w-5" />
+                            {unreadCount > 0 && (
+                                <Badge 
+                                    variant="destructive" // Use destructive variant for attention
+                                    className="absolute -top-1 -right-1 h-4 w-4 justify-center rounded-full p-0.5 text-xs"
+                                >
+                                    {unreadCount > 9 ? '9+' : unreadCount} {/* Show 9+ if count is high */} 
+                                </Badge>
+                            )}
+                        </Button>
                      </TooltipTrigger>
                      <TooltipContent><p>Notifications</p></TooltipContent>
                  </Tooltip>
             </TooltipProvider>
+             {/* Desktop Sheet for Notifications (conditionally rendered but controlled by state) */} 
+            {!isMobile && (
+                <Sheet open={isNotificationsSheetOpen} onOpenChange={setIsNotificationsSheetOpen}>
+                    {/* SheetTrigger is handled by the button above, only Content needed here */} 
+                     <SheetContent className="w-[400px] sm:w-[500px] flex flex-col p-0">
+                         <SheetHeader className="p-4 border-b"><SheetTitle>Notifications</SheetTitle></SheetHeader>
+                         <div className="flex-1 overflow-y-auto p-2"><NotificationsContent /></div>
+                    </SheetContent>
+                </Sheet>
+            )}
 
              {/* Logout Button */}
              {session?.user && (
@@ -180,8 +212,6 @@ export default function DashboardPage() {
      </div>
   );
 
-
-  // --- Item Card Rendering (No changes needed) ---
   const renderItemCard = (item: Item) => (
     <Card key={item.id} className="flex flex-col">
       <CardHeader>
@@ -268,13 +298,11 @@ export default function DashboardPage() {
   return (
     <div className="container mx-auto p-4 md:p-6">
       {renderHeader()}
-
       {error && (
         <div className="text-center text-red-600">
           <p>Error loading items: {error}</p>
         </div>
       )}
-
       {!error && items.length === 0 && (
         <div className="text-center text-muted-foreground">
            {session?.user ? (
@@ -294,12 +322,20 @@ export default function DashboardPage() {
                      )}
                 </div>
             )}
-
             {!error && items.length > 0 && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                     {items.map(renderItemCard)}
                 </div>
             )}
         </div>
+    );
+}
+
+// Default export now wraps DashboardContent with the provider
+export default function DashboardPage() {
+    return (
+        <NotificationProvider>
+            <DashboardContent />
+        </NotificationProvider>
     );
 }

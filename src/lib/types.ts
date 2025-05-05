@@ -1,6 +1,7 @@
 import { Timestamp } from 'firebase-admin/firestore';
 
 export interface UserProfile {
+  name: string;
   id: string;
   username: string;
   email: string;
@@ -34,6 +35,7 @@ export interface Item {
 }
 
 export interface Notification {
+  isRead: any;
   id: string;
   userId: string;
   type: 'new_message' | 'item_listed' | 'payment_received' | 'payment_released' | 'unusual_activity' | 'item_sold' | 'kyc_approved' | 'kyc_rejected';
