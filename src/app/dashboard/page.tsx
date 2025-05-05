@@ -29,11 +29,10 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { ProfileContent } from "@/components/profile-content";
 import { NotificationsContent } from "@/components/notifications-content";
 import { useRouter } from 'next/navigation';
-// Import the Notification Provider and hook
-import { NotificationProvider, useNotifications } from "@/components/providers/notification-provider";
+// Import ONLY the hook now, not the provider
+import { useNotifications } from "@/components/providers/notification-provider"; 
 
-// Create a separate component for the main dashboard content
-// This allows it to consume the notification context
+// Keep DashboardContent as the main component that uses the hook
 function DashboardContent() {
   const { data: session, status } = useSession();
   const router = useRouter();
@@ -43,7 +42,7 @@ function DashboardContent() {
   const isMobile = useIsMobile();
   const [isProfileSheetOpen, setIsProfileSheetOpen] = useState(false);
   const [isNotificationsSheetOpen, setIsNotificationsSheetOpen] = useState(false);
-  // Use the notification context hook
+  // Use the hook - it will find the provider from the RootLayout
   const { unreadCount, markAllAsRead } = useNotifications();
 
   const handleLogout = async () => {
@@ -56,7 +55,8 @@ function DashboardContent() {
       setIsLoadingItems(true);
       setError(null);
       const currentUserId = session?.user?.id;
-      const apiUrl = currentUserId ? `/api/items?userId=${currentUserId}` : '/api/items';
+      // Fetch items excluding the user's own (this logic might need adjustment)
+      const apiUrl = currentUserId ? `/api/items?userId=${currentUserId}` : '/api/items'; 
       console.log(`Fetching items from: ${apiUrl}`);
       try {
         const response = await fetch(apiUrl);
@@ -64,7 +64,7 @@ function DashboardContent() {
           throw new Error(`HTTP error! status: ${response.status}`);
         }
         const data = await response.json();
-        setItems(data);
+        setItems(data); 
       } catch (err) {
          let message = "Failed to fetch items.";
           if (err instanceof Error) { message = err.message; }
@@ -75,18 +75,19 @@ function DashboardContent() {
       }
     };
 
-    if (status !== "loading") {
+    if (status === "authenticated") { // Only fetch if authenticated
       fetchItems();
+    } else if (status === 'unauthenticated') {
+        setIsLoadingItems(false); // Stop loading if not logged in
+        setItems([]); // Clear items if logged out
     }
-  }, [session, status]);
+  }, [session?.user?.id, status]); // Depend on userId and status
 
-  // --- Mark Notifications Read Handler ---
   const handleOpenNotifications = () => {
       if (unreadCount > 0) {
           console.log("Opening notifications - marking as read...");
-          markAllAsRead(); // Call the context function
+          markAllAsRead(); 
       }
-      // If mobile, navigate; if desktop, open sheet
       if (isMobile) {
           router.push('/notifications');
       } else {
@@ -126,67 +127,71 @@ function DashboardContent() {
              </TooltipProvider>
 
              {/* Profile Button/Sheet */} 
-             <TooltipProvider>
-                 <Tooltip>
-                     <TooltipTrigger asChild>
-                         {isMobile ? (
-                             <Link href="/profile" passHref>
-                                 <Button variant="ghost" size="icon"><Icons.user className="h-5 w-5" /></Button>
-                             </Link>
-                         ) : (
-                             <Sheet open={isProfileSheetOpen} onOpenChange={setIsProfileSheetOpen}>
-                                 <SheetTrigger asChild>
-                                     <Button variant="ghost" size="icon"><Icons.user className="h-5 w-5" /></Button>
-                                 </SheetTrigger>
-                                 <SheetContent className="w-[400px] sm:w-[540px] p-0"><SheetHeader className="p-6 border-b"><SheetTitle>My Profile</SheetTitle><SheetDescription>View your profile details.</SheetDescription></SheetHeader><div className="overflow-y-auto p-6"><ProfileContent /></div></SheetContent>
-                             </Sheet>
-                         )}
-                     </TooltipTrigger>
-                     <TooltipContent><p>Profile</p></TooltipContent>
-                 </Tooltip>
-            </TooltipProvider>
+             {session?.user && (
+                <TooltipProvider>
+                    <Tooltip>
+                        <TooltipTrigger asChild>
+                            {isMobile ? (
+                                <Link href="/profile" passHref>
+                                    <Button variant="ghost" size="icon"><Icons.user className="h-5 w-5" /></Button>
+                                </Link>
+                            ) : (
+                                <Sheet open={isProfileSheetOpen} onOpenChange={setIsProfileSheetOpen}>
+                                    <SheetTrigger asChild>
+                                        <Button variant="ghost" size="icon"><Icons.user className="h-5 w-5" /></Button>
+                                    </SheetTrigger>
+                                    <SheetContent className="w-[400px] sm:w-[540px] p-0"><SheetHeader className="p-6 border-b"><SheetTitle>My Profile</SheetTitle><SheetDescription>View your profile details.</SheetDescription></SheetHeader><div className="overflow-y-auto p-6"><ProfileContent /></div></SheetContent>
+                                </Sheet>
+                            )}
+                        </TooltipTrigger>
+                        <TooltipContent><p>Profile</p></TooltipContent>
+                    </Tooltip>
+                </TooltipProvider>
+             )}
 
              {/* Messages Button */} 
-            <TooltipProvider>
-                <Tooltip>
-                    <TooltipTrigger asChild>
-                         <Link href="/messages" passHref>
-                            <Button variant="ghost" size="icon"><Icons.mail className="h-5 w-5" /></Button>
-                        </Link>
-                    </TooltipTrigger>
-                    <TooltipContent><p>Messages</p></TooltipContent>
-                </Tooltip>
-            </TooltipProvider>
+             {session?.user && (
+                 <TooltipProvider>
+                     <Tooltip>
+                         <TooltipTrigger asChild>
+                            <Link href="/messages" passHref>
+                                <Button variant="ghost" size="icon"><Icons.mail className="h-5 w-5" /></Button>
+                            </Link>
+                         </TooltipTrigger>
+                         <TooltipContent><p>Messages</p></TooltipContent>
+                     </Tooltip>
+                 </TooltipProvider>
+             )}
 
             {/* Notifications Button/Sheet with Badge */} 
-            <TooltipProvider>
-                <Tooltip>
-                    <TooltipTrigger asChild>
-                        {/* Use a single Button/SheetTrigger approach, handle action in onClick */} 
-                        <Button 
-                            variant="ghost" 
-                            size="icon" 
-                            className="relative" 
-                            onClick={handleOpenNotifications} // Call unified handler
-                        >
-                            <Icons.bell className="h-5 w-5" />
-                            {unreadCount > 0 && (
-                                <Badge 
-                                    variant="destructive" // Use destructive variant for attention
-                                    className="absolute -top-1 -right-1 h-4 w-4 justify-center rounded-full p-0.5 text-xs"
-                                >
-                                    {unreadCount > 9 ? '9+' : unreadCount} {/* Show 9+ if count is high */} 
-                                </Badge>
-                            )}
-                        </Button>
-                     </TooltipTrigger>
-                     <TooltipContent><p>Notifications</p></TooltipContent>
-                 </Tooltip>
-            </TooltipProvider>
-             {/* Desktop Sheet for Notifications (conditionally rendered but controlled by state) */} 
+             {session?.user && (
+                <TooltipProvider>
+                    <Tooltip>
+                        <TooltipTrigger asChild>
+                            <Button 
+                                variant="ghost" 
+                                size="icon" 
+                                className="relative" 
+                                onClick={handleOpenNotifications}
+                            >
+                                <Icons.bell className="h-5 w-5" />
+                                {unreadCount > 0 && (
+                                    <Badge 
+                                        variant="destructive"
+                                        className="absolute -top-1 -right-1 h-4 w-4 justify-center rounded-full p-0.5 text-xs"
+                                    >
+                                        {unreadCount > 9 ? '9+' : unreadCount} 
+                                    </Badge>
+                                )}
+                            </Button>
+                        </TooltipTrigger>
+                        <TooltipContent><p>Notifications</p></TooltipContent>
+                    </Tooltip>
+                </TooltipProvider>
+             )}
+             {/* Desktop Sheet for Notifications */} 
             {!isMobile && (
                 <Sheet open={isNotificationsSheetOpen} onOpenChange={setIsNotificationsSheetOpen}>
-                    {/* SheetTrigger is handled by the button above, only Content needed here */} 
                      <SheetContent className="w-[400px] sm:w-[500px] flex flex-col p-0">
                          <SheetHeader className="p-4 border-b"><SheetTitle>Notifications</SheetTitle></SheetHeader>
                          <div className="flex-1 overflow-y-auto p-2"><NotificationsContent /></div>
@@ -194,7 +199,7 @@ function DashboardContent() {
                 </Sheet>
             )}
 
-             {/* Logout Button */}
+             {/* Logout Button */} 
              {session?.user && (
                  <TooltipProvider>
                     <Tooltip>
@@ -207,6 +212,13 @@ function DashboardContent() {
                         <TooltipContent><p>Logout</p></TooltipContent>
                     </Tooltip>
                  </TooltipProvider>
+             )}
+             {/* Login/Register Buttons if not logged in */} 
+             {!session?.user && status !== 'loading' && (
+                 <>
+                     <Link href="/auth" passHref><Button variant="outline" size={isMobile ? "sm" : "default"}>Login</Button></Link>
+                     <Link href="/auth/register" passHref><Button size={isMobile ? "sm" : "default"}>Register</Button></Link>
+                 </>
              )}
         </div>
      </div>
@@ -221,7 +233,7 @@ function DashboardContent() {
            <div className="aspect-video w-full bg-secondary rounded-md mb-4 flex items-center justify-center text-muted-foreground">No Image</div>
         )}
         <CardTitle>{item.title}</CardTitle>
-        <CardDescription className="text-sm text-muted-foreground">Posted by: {item.sellerId}</CardDescription>
+        {/* <CardDescription className="text-sm text-muted-foreground">Posted by: {item.sellerId}</CardDescription> */}
         <CardDescription className="text-sm text-muted-foreground">{item.location}</CardDescription>
       </CardHeader>
       <CardContent className="flex-grow">
@@ -238,13 +250,13 @@ function DashboardContent() {
         <Button variant="outline" className="w-full">
              View Details
         </Button>
-        {session?.user ? (
+        {session?.user && session.user.id !== item.sellerId ? (
             <Link href={`/messages?sellerId=${item.sellerId}&itemId=${item.id}`} passHref>
                 <Button className="w-full">
                     Message Seller
                 </Button>
             </Link>
-        ) : (
+        ) : !session?.user ? (
             <TooltipProvider>
                 <Tooltip>
                     <TooltipTrigger asChild>
@@ -257,6 +269,10 @@ function DashboardContent() {
                     </TooltipContent>
                 </Tooltip>
             </TooltipProvider>
+        ) : ( // User is logged in but is the seller
+             <Button className="w-full" disabled>
+                Your Listing
+             </Button>
         )}
       </CardFooter>
     </Card>
@@ -284,10 +300,11 @@ function DashboardContent() {
      ))
   );
 
-  if (status === "loading" || isLoadingItems) {
+  // Show loading skeletons if session is loading OR items are loading
+  if (status === "loading" || (status === "authenticated" && isLoadingItems)) {
     return (
         <div className="container mx-auto p-4 md:p-6">
-            {renderHeader()}
+            {renderHeader()} {/* Render header even while loading */}
              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                 {renderLoadingSkeletons()}
             </div>
@@ -298,44 +315,45 @@ function DashboardContent() {
   return (
     <div className="container mx-auto p-4 md:p-6">
       {renderHeader()}
+
       {error && (
-        <div className="text-center text-red-600">
+        <div className="text-center text-red-600 my-6">
           <p>Error loading items: {error}</p>
         </div>
       )}
-      {!error && items.length === 0 && (
-        <div className="text-center text-muted-foreground">
+
+      {!error && items.length === 0 && status !== 'loading' && (
+        <div className="text-center text-muted-foreground mt-10">
            {session?.user ? (
               <p>No items from other sellers available yet.</p>
            ) : (
-               <p>No items listed yet. Log in to see more.</p>
+               <p>No items listed yet. Explore or log in!</p>
            )}
           {!session?.user && (
-                         <Link href="/auth/register" passHref>
-                            <Button variant="link" className="mt-2">Create an Account</Button>
-                        </Link>
-                    )}
-                     {session?.user && (
-                         <Link href="/sell" passHref>
-                            <Button variant="link" className="mt-2">List an Item</Button>
-                        </Link>
-                     )}
-                </div>
-            )}
-            {!error && items.length > 0 && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                    {items.map(renderItemCard)}
-                </div>
-            )}
+              <div className="mt-4 space-x-4">
+                 <Link href="/auth" passHref><Button>Login</Button></Link>
+                 <Link href="/auth/register" passHref><Button variant="outline">Register</Button></Link>
+             </div>
+          )}
+          {session?.user && (
+             <Link href="/sell" passHref>
+                <Button variant="link" className="mt-2">List an Item</Button>
+            </Link>
+          )}
         </div>
-    );
+       )}
+
+        {!error && items.length > 0 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                {items.map(renderItemCard)}
+            </div>
+        )}
+    </div>
+  );
 }
 
-// Default export now wraps DashboardContent with the provider
+// Default export is just the content component now
+// Provider is handled in RootLayout
 export default function DashboardPage() {
-    return (
-        <NotificationProvider>
-            <DashboardContent />
-        </NotificationProvider>
-    );
+    return <DashboardContent />;
 }
