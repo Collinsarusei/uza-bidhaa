@@ -1,24 +1,25 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
 import { Card, CardContent } from '@/components/ui/card';
-import { Skeleton } from '@/components/ui/skeleton';
-import { Icons } from '@/components/icons';
+import { Skeleton } from "@/components/ui/skeleton";
+import { Icons } from "@/components/icons";
 import { Badge } from '@/components/ui/badge';
-import { formatDistanceToNow } from 'date-fns';
+import { formatDistanceToNow, parseISO } from 'date-fns'; // Import parseISO
 import type { Notification as NotificationType } from '@/lib/types';
+import { cn } from "@/lib/utils";
+import { useToast } from "@/hooks/use-toast";
+import { Button } from "@/components/ui/button";
+import { useNotifications } from "@/components/providers/notification-provider";
 
-interface ProcessedNotification extends Omit<NotificationType, 'createdAt'> {
-  createdAt: Date;
-}
-
-// Reusable component for displaying notifications
 export function NotificationsContent() {
   const { data: session, status } = useSession();
-  const [notifications, setNotifications] = useState<ProcessedNotification[]>([]);
+  const [notifications, setNotifications] = useState<NotificationType[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { toast } = useToast();
+  const { markAllAsRead: contextMarkAllAsRead } = useNotifications(); 
 
   useEffect(() => {
     const fetchNotifications = async () => {
@@ -26,18 +27,15 @@ export function NotificationsContent() {
         setIsLoading(true);
         setError(null);
         try {
+          console.log("NotificationsContent: Fetching notifications...");
           const response = await fetch('/api/notifications');
           if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            const errData = await response.json().catch(() => ({}));
+            throw new Error(errData.message || `HTTP error! status: ${response.status}`);
           }
           const data: NotificationType[] = await response.json();
-          const processedData: ProcessedNotification[] = data.map(n => ({
-              ...n,
-              createdAt: n.createdAt && typeof n.createdAt === 'object' && 'seconds' in n.createdAt
-                  ? new Date(n.createdAt.seconds * 1000 + n.createdAt.nanoseconds / 1000000)
-                  : n.createdAt instanceof Date ? n.createdAt : new Date()
-          }));
-          setNotifications(processedData);
+          console.log(`NotificationsContent: Fetched ${data.length} notifications.`);
+          setNotifications(data);
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Failed to fetch notifications.';
           setError(message);
@@ -54,6 +52,45 @@ export function NotificationsContent() {
     fetchNotifications();
   }, [session, status]);
 
+  const handleNotificationClick = useCallback(async (notificationId: string) => {
+      console.log(`handleNotificationClick: Clicked notification ${notificationId}`);
+      const clickedNotification = notifications.find(n => n.id === notificationId);
+      
+      if (!clickedNotification) {
+          console.warn(`handleNotificationClick: Notification ${notificationId} not found in state.`);
+          return;
+      }
+
+      if (!clickedNotification.isRead) {
+          console.log(`handleNotificationClick: Marking ${notificationId} as read.`);
+          setNotifications(prev => 
+              prev.map(n => n.id === notificationId ? { ...n, isRead: true } : n)
+          );
+
+          try {
+              const response = await fetch('/api/notifications/mark-one-read', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ notificationId })
+              });
+
+              if (!response.ok) {
+                  const result = await response.json().catch(() => ({}));
+                  throw new Error(result.message || 'API Error');
+              }
+              console.log(`handleNotificationClick: API call successful for ${notificationId}`);
+          } catch (err) {
+              console.error("Mark one read API Error:", err);
+              toast({ title: "Error", description: "Could not update notification status.", variant: "destructive" });
+              setNotifications(prev => 
+                  prev.map(n => n.id === notificationId ? { ...n, isRead: false } : n)
+              );
+          }
+      } else {
+          console.log(`handleNotificationClick: Notification ${notificationId} is already read.`);
+      }
+  }, [notifications, toast]);
+
   const getIconForType = (type: NotificationType['type']) => {
     switch (type) {
         case 'new_message': return <Icons.mail className="h-5 w-5 text-blue-500" />;
@@ -68,42 +105,62 @@ export function NotificationsContent() {
     }
   };
 
-  const renderNotification = (notification: ProcessedNotification) => (
-    <Card key={notification.id} className={`mb-3 shadow-sm ${notification.readStatus ? 'opacity-70' : 'border-l-4 border-primary'}`}>
-      <CardContent className="p-3 flex items-start space-x-3">
-        <div className="flex-shrink-0 pt-0.5">
-          {getIconForType(notification.type)}
-        </div>
-        <div className="flex-grow">
-          <p className={`text-sm leading-snug ${!notification.readStatus ? 'font-medium' : ''}`}>{notification.message}</p>
-          <p className="text-xs text-muted-foreground mt-1">
-            {formatDistanceToNow(notification.createdAt, { addSuffix: true })}
-          </p>
-        </div>
-        {!notification.readStatus && (
-          <Badge variant="destructive" className="flex-shrink-0 h-2 w-2 p-0 rounded-full"></Badge>
-        )}
-      </CardContent>
-    </Card>
-  );
+  const renderNotification = (notification: NotificationType) => {
+    let createdAtDate: Date | null = null;
+    // --- FIX: Only check for string type, as that's what API provides --- 
+    if (typeof notification.createdAt === 'string') {
+        try {
+            createdAtDate = parseISO(notification.createdAt);
+            if (isNaN(createdAtDate.getTime())) createdAtDate = null; 
+        } catch (e) { console.error("Error parsing timestamp string:", e); }
+    }
+    // --- End FIX ---
+
+    return (
+        <Card 
+            key={notification.id}
+            className={cn(
+                "mb-2 shadow-sm cursor-pointer transition-colors hover:bg-muted/50", 
+                notification.isRead ? "bg-card/50 opacity-75" : "bg-card border-l-4 border-primary"
+            )}
+            onClick={() => handleNotificationClick(notification.id)}
+        >
+            <CardContent className="p-3 flex items-start space-x-3">
+                <div className="flex-shrink-0 pt-0.5">
+                {getIconForType(notification.type)}
+                </div>
+                <div className="flex-grow">
+                <p className={cn(
+                    "text-sm leading-snug", 
+                    !notification.isRead ? "font-medium text-foreground" : "text-muted-foreground"
+                )}>
+                    {notification.message}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                    {createdAtDate ? formatDistanceToNow(createdAtDate, { addSuffix: true }) : 'Date unavailable'}
+                </p>
+                </div>
+            </CardContent>
+        </Card>
+    );
+  };
 
   const renderLoadingSkeletons = () => (
     Array.from({ length: 5 }).map((_, index) => (
-      <Card key={index} className="mb-3 shadow-sm">
+      <Card key={index} className="mb-2 shadow-sm">
         <CardContent className="p-3 flex items-start space-x-3">
           <Skeleton className="h-5 w-5 rounded-full flex-shrink-0 mt-0.5" />
           <div className="flex-grow space-y-1.5">
             <Skeleton className="h-4 w-4/5" />
             <Skeleton className="h-3 w-1/3" />
           </div>
-          <Skeleton className="h-2 w-2 rounded-full flex-shrink-0" />
         </CardContent>
       </Card>
     ))
   );
 
   if (isLoading || status === 'loading') {
-    return <div className="space-y-3 p-1">{renderLoadingSkeletons()}</div>;
+    return <div className="space-y-2 p-1">{renderLoadingSkeletons()}</div>;
   }
 
   if (error) {
@@ -122,7 +179,7 @@ export function NotificationsContent() {
     return (
       <Card className="border-none shadow-none m-1">
         <CardContent className="p-6 text-center text-muted-foreground">
-          <Icons.bellOff className="h-10 w-10 mx-auto mb-3 text-gray-400" /> {/* Assuming bellOff icon */}
+          <Icons.bellOff className="h-10 w-10 mx-auto mb-3 text-gray-400" />
           <p>No notifications yet.</p>
         </CardContent>
       </Card>
@@ -130,8 +187,7 @@ export function NotificationsContent() {
   }
 
   return (
-    <div className="space-y-3 p-1">
-       {/* Add "Mark all as read" button later */}
+    <div className="space-y-2 p-1">
        {notifications.map(renderNotification)}
     </div>
   );

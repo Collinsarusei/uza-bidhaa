@@ -3,22 +3,36 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { v4 as uuidv4 } from 'uuid';
 import type { Notification } from './types';
 
-const notificationsCollection = adminDb.collection('notifications');
+// --- Null Check --- 
+if (!adminDb) {
+     console.error("FATAL: notifications.ts - Firebase Admin DB not initialized.");
+     // Throw or handle as appropriate for your app's startup logic
+}
+const notificationsCollection = adminDb!.collection('notifications'); // Use non-null assertion or handle above
 
-// Type definition for the data needed to create a notification (excluding auto-generated fields)
-type CreateNotificationData = Omit<Notification, 'id' | 'createdAt' | 'readStatus'>;
+// Type definition for the data needed to create a notification
+// Omit fields that are auto-generated or have fixed defaults within this function
+type CreateNotificationData = Omit<Notification, 'id' | 'createdAt' | 'isRead' | 'readAt'>;
 
 /**
  * Creates a notification document in Firestore.
+ * Sets isRead to false and createdAt to server timestamp automatically.
  * @param data - The notification data (userId, type, message, optional related IDs).
  */
 export async function createNotification(data: CreateNotificationData): Promise<void> {
     try {
+        if (!notificationsCollection) { // Runtime check just in case
+             console.error("Cannot create notification: notificationsCollection is not available.");
+             return;
+        }
         const notificationId = uuidv4(); // Generate a unique ID
-        const newNotification: Omit<Notification, 'createdAt'> & { createdAt: FieldValue } = {
+        
+        // Construct the full notification object to be saved
+        // Explicitly define the type being created
+        const newNotification: Omit<Notification, 'createdAt' | 'readAt'> & { createdAt: FieldValue } = {
             ...data,
             id: notificationId,
-            readStatus: false, // Always start as unread
+            isRead: false, // Always set to false initially
             createdAt: FieldValue.serverTimestamp(), // Use Firestore server timestamp
         };
 
@@ -27,7 +41,7 @@ export async function createNotification(data: CreateNotificationData): Promise<
 
     } catch (error) {
         console.error("Error creating notification:", error);
-        // Decide if you want to throw the error, log it, or handle it silently
-        // Depending on the context, failing to create a notification might not be critical
+        // Rethrow or handle as needed
+        // throw error; 
     }
 }

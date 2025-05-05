@@ -1,289 +1,424 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback, Suspense } from 'react'; // Import Suspense
-import { useSearchParams, useRouter } from 'next/navigation';
+import { useState, useEffect, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
-import { Button } from '@/components/ui/button';
-import { Textarea } from '@/components/ui/textarea';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Skeleton } from '@/components/ui/skeleton';
-import { Icons } from '@/components/icons';
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Icons } from "@/components/icons";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Conversation, Message } from '@/lib/types';
+import { formatDistanceToNow, parseISO } from 'date-fns'; // Import parseISO
 import { useToast } from "@/hooks/use-toast";
-import type { Item } from '@/lib/types';
+import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { format } from 'date-fns';
 
-interface Message {
-  id: string;
-  senderId: string;
-  text: string;
-  timestamp: string | null;
+// --- Types --- 
+interface CategorizedConversations {
+  incoming: Conversation[];
+  inbox: Conversation[];
 }
 
-// Extracted content into a separate component to be wrapped by Suspense
-function MessageContent() {
-  const searchParams = useSearchParams(); // useSearchParams is called here
-  const router = useRouter();
+// --- Main Component --- 
+export default function MessagesPage() {
   const { data: session, status } = useSession();
-  const { toast } = useToast();
-
+  const [conversations, setConversations] = useState<CategorizedConversations>({ incoming: [], inbox: [] });
+  const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState("");
-  const [isLoadingMessages, setIsLoadingMessages] = useState(true);
-  const [isLoadingItem, setIsLoadingItem] = useState(true);
+  const [isLoadingConversations, setIsLoadingConversations] = useState(true);
+  const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [isSending, setIsSending] = useState(false);
-  const [itemDetails, setItemDetails] = useState<Item | null>(null);
-  const [recipientId, setRecipientId] = useState<string | null>(null);
-  const [itemId, setItemId] = useState<string | null>(null);
-  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [isApproving, setIsApproving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isPaying, setIsPaying] = useState(false);
-  const [isConfirming, setIsConfirming] = useState(false);
+  const [activeTab, setActiveTab] = useState<'inbox' | 'incoming'>('inbox');
+  const { toast } = useToast();
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const currentUserId = session?.user?.id;
 
-  const scrollToBottom = useCallback(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, []);
-
+  // --- Fetch Conversations List --- 
   useEffect(() => {
-      const itemIdParam = searchParams.get('itemId');
-      const sellerIdParam = searchParams.get('sellerId');
-      const convIdParam = searchParams.get('conversationId');
-
-      if (!itemIdParam) {
-          setError("Item ID missing.");
-          setIsLoadingItem(false); setIsLoadingMessages(false);
-          return;
-      }
-      
-      setItemId(itemIdParam);
-      setConversationId(convIdParam);
-
-      const fetchInitialData = async () => {
-          if (status !== 'authenticated' || !session?.user?.id) return;
-          const currentUserId = session.user.id;
-
-          setIsLoadingItem(true); setIsLoadingMessages(true); setError(null);
-          try {
-              const itemRes = await fetch(`/api/items?itemId=${itemIdParam}`);
-              if (!itemRes.ok) { const d = await itemRes.json().catch(()=>{}); throw new Error(d?.message || `Item fetch failed: ${itemRes.statusText}`); }
-              const itemDataArray = await itemRes.json();
-              if (!itemDataArray || itemDataArray.length === 0) { throw new Error('Item not found.'); }
-              const fetchedItem = itemDataArray[0] as Item;
-              setItemDetails(fetchedItem);
-
-              const fetchedRecipientId = fetchedItem.sellerId === currentUserId ? searchParams.get('buyerId') : fetchedItem.sellerId;
-              const finalRecipientId = sellerIdParam || fetchedRecipientId;
-              if (!finalRecipientId) { throw new Error("Cannot determine recipient."); }
-              setRecipientId(finalRecipientId);
-
-              const messagesApiUrl = convIdParam ? `/api/messages?conversationId=${convIdParam}` : `/api/messages?recipientId=${finalRecipientId}&itemId=${itemIdParam}`;
-              const messagesRes = await fetch(messagesApiUrl);
-              if (!messagesRes.ok) { const d=await messagesRes.json().catch(()=>{}); throw new Error(d?.message || `Messages fetch failed: ${messagesRes.statusText}`); }
-              const messagesData = await messagesRes.json();
-              setMessages(messagesData.messages || []);
-
-          } catch (err: any) {
-              console.error("Msg Page Load Error:", err);
-              setError(err.message || "Failed to load conversation.");
-          } finally {
-              setIsLoadingItem(false);
-              setIsLoadingMessages(false);
+    const fetchConversations = async () => {
+      if (status === 'authenticated' && currentUserId) {
+        setIsLoadingConversations(true);
+        setError(null);
+        try {
+          console.log("MessagesPage: Fetching conversations...");
+          const response = await fetch('/api/conversations');
+          if (!response.ok) {
+            const errData = await response.json().catch(() => ({}));
+            throw new Error(errData.message || `HTTP error! ${response.status}`);
           }
-      };
+          const data: CategorizedConversations = await response.json();
+          console.log(`MessagesPage: Fetched conversations - Incoming: ${data.incoming.length}, Inbox: ${data.inbox.length}`);
+          setConversations(data);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Failed to fetch conversations.';
+          setError(message);
+          console.error("Error fetching conversations:", err);
+        } finally {
+          setIsLoadingConversations(false);
+        }
+      }
+    };
+    fetchConversations();
+  }, [status, currentUserId]);
 
-      if (status === 'authenticated') { fetchInitialData(); }
-       else if (status === 'unauthenticated') { setError("Login required."); setIsLoadingItem(false); setIsLoadingMessages(false); }
-
-  }, [searchParams, status, session]); // searchParams is a dependency
-
-  useEffect(() => { scrollToBottom(); }, [messages, scrollToBottom]);
-
-  const handleSendMessage = async () => {
-      if (!newMessage.trim() || !recipientId || !itemId || isSending || status !== 'authenticated') return;
-      setIsSending(true);
-      const originalMessage = newMessage; setNewMessage("");
-       const optimisticMessage: Message = { id: `temp-${Date.now()}`, senderId: session!.user!.id!, text: originalMessage.trim(), timestamp: new Date().toISOString() };
-       setMessages(prev => [...prev, optimisticMessage]);
-       scrollToBottom();
+  // --- Fetch Messages for Selected Conversation --- 
+  useEffect(() => {
+    const fetchMessages = async () => {
+      if (!selectedConversation?.id) {
+         setMessages([]);
+         return;
+      }
+      setIsLoadingMessages(true);
+      setError(null);
       try {
-          const response = await fetch('/api/messages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ recipientId, itemId, text: originalMessage.trim() }) });
-          const result = await response.json();
-          if (!response.ok) { throw new Error(result.message || `Send failed: ${response.statusText}`); }
-      } catch (err: any) {
-          console.error("Send Msg Error:", err);
-          toast({ title: "Error Sending", description: err.message, variant: "destructive" });
-          setMessages(prev => prev.filter(msg => msg.id !== optimisticMessage.id));
-          setNewMessage(originalMessage);
-      } finally { setIsSending(false); }
+        console.log(`MessagesPage: Fetching messages for conv ${selectedConversation.id}...`);
+        const response = await fetch(`/api/messages?conversationId=${selectedConversation.id}`);
+        if (!response.ok) {
+          const errData = await response.json().catch(() => ({}));
+          throw new Error(errData.message || `HTTP error! ${response.status}`);
+        }
+        const data = await response.json();
+        console.log(`MessagesPage: Fetched ${data.messages.length} messages.`);
+        setMessages(data.messages || []);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to fetch messages.';
+        setError(message);
+        console.error("Error fetching messages:", err);
+      } finally {
+        setIsLoadingMessages(false);
+      }
+    };
+    fetchMessages();
+  }, [selectedConversation?.id]);
+
+  // --- Handle Sending Message --- 
+  const handleSendMessage = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!newMessage.trim() || !selectedConversation?.id || !currentUserId) return;
+    
+    const recipientId = selectedConversation.participantIds.find(id => id !== currentUserId);
+    if (!recipientId) {
+        console.error("Could not determine recipient ID.");
+        toast({ title: "Error", description: "Could not send message.", variant: "destructive" });
+        return;
+    }
+
+    setIsSending(true);
+    const tempMessageId = `temp_${Date.now()}`;
+    const messageText = newMessage.trim();
+
+    setMessages(prev => [...prev, {
+        id: tempMessageId,
+        senderId: currentUserId,
+        text: messageText,
+        timestamp: new Date().toISOString(), 
+    }]);
+    setNewMessage("");
+
+    try {
+      console.log(`MessagesPage: Sending message to conv ${selectedConversation.id}...`);
+      const response = await fetch('/api/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recipientId: recipientId,
+          itemId: selectedConversation.itemId,
+          itemTitle: selectedConversation.itemTitle || 'Item',
+          itemImageUrl: selectedConversation.itemImageUrl,
+          text: messageText,
+        }),
+      });
+
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(result.message || 'Failed to send message');
+      }
+      console.log("MessagesPage: Message sent successfully via API.");
+      
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to send message.';
+      setError(message);
+      console.error("Error sending message:", err);
+      toast({ title: "Send Error", description: message, variant: "destructive" });
+      setMessages(prev => prev.filter(msg => msg.id !== tempMessageId));
+    } finally {
+      setIsSending(false);
+    }
   };
 
-   const handlePayItem = async () => {
-        if (!itemDetails || !session?.user?.id || itemDetails.sellerId === session.user.id) return;
-        setIsPaying(true);
-        try {
-            const response = await fetch('/api/payment/initiate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ itemId: itemDetails.id, amount: itemDetails.price, buyerName: session.user.name || 'Buyer', buyerEmail: session.user.email }) });
-            const result = await response.json();
-            if (!response.ok) { throw new Error(result.message || 'Payment init failed.'); }
-             if (result.checkoutUrl) { window.location.href = result.checkoutUrl; }
-              else { throw new Error('Checkout URL missing.'); }
-        } catch (err: any) { console.error("Pay Init Error:", err); toast({ title: "Payment Error", description: err.message, variant: "destructive" }); setIsPaying(false); }
-   };
+  // --- Handle Approving Conversation --- 
+  const handleApprove = async (conversationId: string) => {
+    setIsApproving(true);
+    setError(null);
+    try {
+      console.log(`MessagesPage: Approving conversation ${conversationId}...`);
+      const response = await fetch(`/api/conversations/${conversationId}/approve`, {
+        method: 'PATCH',
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(result.message || 'Failed to approve conversation');
+      }
+       console.log(`MessagesPage: Conversation ${conversationId} approved via API.`);
+      setConversations(prev => {
+          const approvedConv = prev.incoming.find(c => c.id === conversationId);
+          if (!approvedConv) return prev;
+          return {
+              incoming: prev.incoming.filter(c => c.id !== conversationId),
+              inbox: [ { ...approvedConv, approved: true }, ...prev.inbox]
+          };
+      });
+      toast({ title: "Conversation Approved", description: "You can now chat freely." });
+      const approvedConv = conversations.incoming.find(c => c.id === conversationId);
+      if(approvedConv) setSelectedConversation({ ...approvedConv, approved: true }); 
+      setActiveTab('inbox');
 
-   const handleConfirmReceived = async () => {
-        if (!itemDetails || !session?.user?.id || itemDetails.sellerId === session.user.id) return;
-        setIsConfirming(true);
-        try {
-            const response = await fetch('/api/payment/release', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ itemId: itemDetails.id }) });
-            const result = await response.json();
-            if (!response.ok) { throw new Error(result.message || 'Failed to confirm receipt.'); }
-            toast({ title: "Success", description: "Payment release initiated!" });
-            setItemDetails(prev => prev ? { ...prev, status: 'sold' } : null);
-        } catch (err: any) {
-            console.error("Confirmation error:", err);
-            toast({ title: "Confirmation Failed", description: err.message, variant: "destructive" });
-        } finally { setIsConfirming(false); }
-   };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to approve conversation.';
+      setError(message);
+      console.error("Error approving conversation:", err);
+      toast({ title: "Approval Error", description: message, variant: "destructive" });
+    } finally {
+      setIsApproving(false);
+    }
+  };
 
-  if (status === 'loading') {
-      // Still show skeleton while session is resolving
-      return <MessagesPageSkeleton />;
+  // --- Helper to get other participant's info --- 
+  const getOtherParticipant = (conversation: Conversation) => {
+      if (!currentUserId || !conversation.participantsData) return { name: 'Unknown', avatar: null };
+      const otherId = conversation.participantIds.find(id => id !== currentUserId);
+      return otherId ? conversation.participantsData[otherId] || { name: 'User', avatar: null } : { name: 'Unknown', avatar: null };
+  };
+  
+  // --- Helper to format timestamp strings ---
+  const formatTimestamp = (timestamp: string | null): string => {
+     if (!timestamp) return '';
+     try {
+         // Parse the ISO string and then format
+         return formatDistanceToNow(parseISO(timestamp), { addSuffix: true });
+     } catch (e) {
+         console.error("Error formatting timestamp:", e);
+         return 'Invalid date';
+     }
   }
 
-   if (error) {
+  // --- Render Skeletons --- 
+  const renderConversationSkeleton = () => (
+      <div className="flex items-center space-x-3 p-3 border-b">
+          <Skeleton className="h-10 w-10 rounded-full" />
+          <div className="flex-1 space-y-1.5">
+              <Skeleton className="h-4 w-2/5" />
+              <Skeleton className="h-3 w-4/5" />
+          </div>
+      </div>
+  );
+  const renderMessageSkeleton = () => (
+      <div className="flex items-start space-x-2 p-2">
+          <Skeleton className="h-8 w-8 rounded-full" />
+          <div className="flex-1 space-y-1 rounded-md bg-muted p-2">
+               <Skeleton className="h-3 w-1/4" />
+               <Skeleton className="h-4 w-3/4" />
+          </div>
+      </div>
+  );
+
+  // --- Render Conversation List Item --- 
+  const renderConversationItem = (conv: Conversation, isIncoming: boolean) => {
+      const otherParticipant = getOtherParticipant(conv);
+      const isSelected = selectedConversation?.id === conv.id;
+      const hasUnread = false; // Placeholder
+
+      return (
+          <div
+              key={conv.id}
+              onClick={() => { if(!isIncoming) setSelectedConversation(conv); }}
+              className={cn(
+                  "flex items-start space-x-3 p-3 border-b cursor-pointer transition-colors",
+                  isSelected && !isIncoming ? "bg-muted" : "hover:bg-muted/50",
+                  isIncoming && "opacity-80 hover:opacity-100"
+              )}
+          >
+              <Avatar className="h-10 w-10 border">
+                  {/* FIX: Provide default string for alt prop */}
+                  <AvatarImage src={otherParticipant.avatar ?? undefined} alt={otherParticipant.name ?? 'User avatar'} /> 
+                  <AvatarFallback>{otherParticipant.name?.charAt(0)?.toUpperCase() || 'U'}</AvatarFallback>
+              </Avatar>
+              <div className="flex-1 overflow-hidden">
+                  <div className="flex justify-between items-center">
+                       <p className={cn("text-sm font-medium truncate", hasUnread && !isIncoming && "font-bold")}>
+                           {otherParticipant.name}
+                       </p>
+                       {/* FIX: Format timestamp correctly */}
+                       <p className="text-xs text-muted-foreground whitespace-nowrap ml-2">
+                            {formatTimestamp(conv.lastMessageTimestamp)}
+                       </p>
+                  </div>
+                   <p className={cn("text-xs text-muted-foreground truncate", hasUnread && !isIncoming && "text-foreground")}>
+                       {conv.lastMessageSnippet || 'No messages yet'}
+                   </p>
+                   <p className="text-xs text-muted-foreground truncate italic">
+                       Item: {conv.itemTitle || 'Unknown Item'}
+                   </p>
+              </div>
+              {isIncoming && (
+                  <Button 
+                      size="sm" 
+                      variant="outline" 
+                      onClick={(e) => { e.stopPropagation(); handleApprove(conv.id); }}
+                      disabled={isApproving}
+                      className="ml-auto self-center"
+                  >
+                     {isApproving ? <Icons.spinner className="h-4 w-4 animate-spin" /> : "Approve"}
+                  </Button>
+              )}
+               {hasUnread && !isIncoming && (
+                    <Badge variant="destructive" className="flex-shrink-0 h-2 w-2 p-0 rounded-full self-center ml-2"></Badge>
+               )}
+          </div>
+      );
+  };
+
+  // --- Render Chat Area --- 
+  const renderChatArea = () => {
+      if (!selectedConversation) {
+           return (
+               <div className="flex-1 flex items-center justify-center text-muted-foreground">
+                   <p>Select a conversation from the inbox to start chatting.</p>
+               </div>
+           );
+      }
+      if (isLoadingMessages) {
+          return (
+              <div className="flex-1 flex flex-col justify-between p-4">
+                   <div className="space-y-3 overflow-y-auto">
+                       {Array.from({ length: 5 }).map((_, i) => renderMessageSkeleton())}
+                   </div>
+                   <Skeleton className="h-20 w-full mt-4" />
+              </div>
+          );
+      }
+
+      const otherParticipant = getOtherParticipant(selectedConversation);
+
+      return (
+          <div className="flex-1 flex flex-col border-l">
+              <div className="p-3 border-b flex items-center space-x-3">
+                  <Avatar className="h-9 w-9 border">
+                       {/* FIX: Provide default string for alt prop */}
+                      <AvatarImage src={otherParticipant.avatar ?? undefined} alt={otherParticipant.name ?? 'User avatar'} />
+                      <AvatarFallback>{otherParticipant.name?.charAt(0)?.toUpperCase() || 'U'}</AvatarFallback>
+                  </Avatar>
+                  <div>
+                     <p className="font-medium text-sm">{otherParticipant.name}</p>
+                     <p className="text-xs text-muted-foreground italic truncate">Item: {selectedConversation.itemTitle || 'Unknown Item'}</p>
+                  </div>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                  {messages.map((msg) => {
+                      const isSender = msg.senderId === currentUserId;
+                      return (
+                           <div key={msg.id} className={cn("flex", isSender ? "justify-end" : "justify-start")}>
+                               <div className={cn("rounded-lg px-3 py-2 max-w-[70%] text-sm", 
+                                   isSender ? "bg-primary text-primary-foreground" : "bg-muted"
+                               )}>
+                                   <p>{msg.text}</p>
+                                   {/* FIX: Format timestamp correctly */}
+                                   <p className={cn("text-xs mt-1", isSender ? "text-primary-foreground/70" : "text-muted-foreground/70", "text-right")}>
+                                       {formatTimestamp(msg.timestamp)}
+                                   </p>
+                               </div>
+                           </div>
+                      );
+                  })}
+              </div>
+               <div className="border-t p-3 bg-background">
+                   <form onSubmit={handleSendMessage} className="flex items-center space-x-2">
+                       <Textarea
+                           placeholder="Type your message..."
+                           value={newMessage}
+                           onChange={(e) => setNewMessage(e.target.value)}
+                           rows={1}
+                           className="flex-1 resize-none max-h-24 overflow-y-auto p-2 text-sm"
+                           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) handleSendMessage(e); }}
+                           disabled={isSending}
+                       />
+                       <Button type="submit" size="icon" disabled={!newMessage.trim() || isSending}>
+                          {isSending ? <Icons.spinner className="h-4 w-4 animate-spin" /> : <Icons.send className="h-4 w-4" />}
+                           <span className="sr-only">Send</span>
+                       </Button>
+                   </form>
+               </div>
+          </div>
+      );
+  };
+
+  // --- Main Render --- 
+  if (status === 'loading') {
        return (
-           <div className="container mx-auto p-4 max-w-3xl">
-               <Alert variant="destructive">
-                   <Icons.alertTriangle className="h-4 w-4" />
-                   <AlertTitle>Error</AlertTitle>
-                   <AlertDescription>{error}</AlertDescription>
-               </Alert>
+           <div className="flex h-screen">
+                <div className="w-1/3 lg:w-1/4 border-r"><Skeleton className="h-full w-full"/></div>
+                <div className="flex-1"><Skeleton className="h-full w-full"/></div>
            </div>
        );
-   }
-
-    const currentUserId = session?.user?.id;
-    const isBuyer = !!currentUserId && !!itemDetails && itemDetails.sellerId !== currentUserId;
-    const isSeller = !!currentUserId && !!itemDetails && itemDetails.sellerId === currentUserId;
+  }
+  if (status === 'unauthenticated') {
+      return <div className="p-6 text-center">Please log in to view messages.</div>;
+  }
 
   return (
-    <div className="container mx-auto p-4 flex flex-col h-[calc(100vh-80px)] max-w-4xl">
-      <Card className="mb-4 flex-shrink-0">
-           {isLoadingItem ? ( <CardHeader><Skeleton className="h-8 w-3/4"/></CardHeader> ) :
-            itemDetails ? (
-                <CardHeader className="flex flex-row items-center space-x-4">
-                     <div className="flex-shrink-0">
-                         <img 
-                              src={itemDetails.mediaUrls?.[0] || '/placeholder.png'}
-                              alt={itemDetails.title}
-                              className="h-16 w-16 rounded-md object-cover border"
-                         />
-                     </div>
-                      <div className="flex-grow">
-                          <CardTitle className="text-xl mb-1">{itemDetails.title}</CardTitle>
-                          <CardDescription>Conversation about item</CardDescription>
-                           <div className="mt-2 flex gap-2 flex-wrap items-center">
-                               {isBuyer && itemDetails.status === 'available' && (
-                                   <Button onClick={handlePayItem} disabled={isPaying || isConfirming} size="sm">
-                                       {isPaying && <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />} 
-                                       Pay (KES {itemDetails.price.toLocaleString()})
-                                   </Button>
-                               )}
-                                {isBuyer && itemDetails.status === 'paid_escrow' && (
-                                    <Button variant="default" onClick={handleConfirmReceived} disabled={isConfirming || isPaying} size="sm">
-                                       {isConfirming && <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />} 
-                                       Confirm Received
-                                   </Button>
-                                )}
-                               {itemDetails.status === 'sold' && (<Badge variant="destructive">Sold</Badge>)}
-                                {itemDetails.status === 'paid_escrow' && (<Badge variant="default" className="bg-yellow-500 text-white hover:bg-yellow-600">In Escrow</Badge>)}
-                                 {itemDetails.status === 'available' && !isBuyer && !isSeller && (<Badge variant="secondary">Available</Badge>)}
-                           </div>
-                     </div>
-                </CardHeader>
-           ) :
-            ( <CardHeader><CardTitle>Item Not Found</CardTitle></CardHeader> )
-           }
-       </Card>
+    <div className="flex h-[calc(100vh-theme(spacing.16))] border-t"> 
+      <div className="w-full md:w-1/3 lg:w-1/4 border-r flex flex-col">
+          <div className="flex border-b">
+              <Button 
+                  variant="ghost" 
+                  className={cn("flex-1 justify-center rounded-none", activeTab === 'inbox' && "bg-muted font-semibold")}
+                  onClick={() => setActiveTab('inbox')}
+              >
+                  Inbox ({conversations.inbox.length})
+              </Button>
+              <Button 
+                  variant="ghost" 
+                  className={cn("flex-1 justify-center rounded-none border-l", activeTab === 'incoming' && "bg-muted font-semibold")}
+                  onClick={() => setActiveTab('incoming')}
+              >
+                 Incoming ({conversations.incoming.length})
+              </Button>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+               {isLoadingConversations && (
+                   <div className="p-3 space-y-2">
+                      {Array.from({ length: 5 }).map((_, i) => renderConversationSkeleton())}
+                   </div>
+               )}
+                {!isLoadingConversations && activeTab === 'inbox' && conversations.inbox.length === 0 && (
+                    <p className="p-4 text-center text-sm text-muted-foreground">Your inbox is empty.</p>
+                )}
+                {!isLoadingConversations && activeTab === 'incoming' && conversations.incoming.length === 0 && (
+                    <p className="p-4 text-center text-sm text-muted-foreground">No incoming message requests.</p>
+                )}
+                {!isLoadingConversations && activeTab === 'inbox' && (
+                    conversations.inbox.map(conv => renderConversationItem(conv, false))
+                )}
+                {!isLoadingConversations && activeTab === 'incoming' && (
+                    conversations.incoming.map(conv => renderConversationItem(conv, true))
+                )}
+          </div>
+      </div>
 
-      <div className="flex-grow overflow-y-auto mb-4 bg-muted/40 p-4 rounded-md border">
-           {isLoadingMessages ? (
-               <div className="space-y-4">
-                   <Skeleton className="h-16 w-3/4" />
-                   <Skeleton className="h-16 w-3/4 ml-auto" />
-               </div>
-           ) : messages.length === 0 ? (
-               <div className="text-center text-muted-foreground py-10">
-                   <Icons.messageSquare className="h-12 w-12 mx-auto mb-3 text-gray-400"/>
-                   <p>No messages yet.</p>
-               </div>
-           ) : (
-                <div className="space-y-4">
-                    {messages.map((message) => {
-                        const dateObj = message.timestamp ? new Date(message.timestamp) : null;
-                        return (
-                            <div key={message.id} className={`flex ${message.senderId === currentUserId ? 'justify-end' : 'justify-start'}`}>
-                                <div className={`max-w-[75%] p-3 rounded-lg ${message.senderId === currentUserId ? 'bg-primary text-primary-foreground' : 'bg-background border'}`}>
-                                    <p className="text-sm whitespace-pre-wrap">{message.text}</p>
-                                    <p className={`text-xs mt-1 ${message.senderId === currentUserId ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
-                                        {dateObj ? format(dateObj, 'p') : 'Sending...'}
-                                    </p>
-                                </div>
-                            </div>
-                        );
-                    })}
-                     <div ref={messagesEndRef} />
-                </div>
-           )}
-       </div>
-
-       <div className="flex-shrink-0 flex items-center gap-2 border-t pt-4">
-           <Textarea
-               placeholder="Type your message..."
-               value={newMessage}
-               onChange={(e) => setNewMessage(e.target.value)}
-               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); } }}
-               rows={1}
-               className="flex-grow resize-none min-h-[40px] max-h-[120px]"
-               disabled={isSending || isLoadingMessages || isLoadingItem || itemDetails?.status === 'sold'}
-           />
-           <Button onClick={handleSendMessage} disabled={isSending || !newMessage.trim() || itemDetails?.status === 'sold'}>
-               {isSending ? <Icons.spinner className="h-4 w-4 animate-spin" /> : <Icons.send className="h-4 w-4" />}
-               <span className="sr-only">Send</span>
-           </Button>
-       </div>
+      <div className="hidden md:flex flex-1">
+          {renderChatArea()}
+      </div>
     </div>
   );
-}
-
-// Skeleton component for the page loading state
-function MessagesPageSkeleton() {
-    return (
-        <div className="container mx-auto p-4 max-w-4xl">
-            <Card className="mb-4">
-                <CardHeader><Skeleton className="h-8 w-3/4" /></CardHeader>
-            </Card>
-            <div className="space-y-4 mb-4 border p-4 rounded-md">
-                <Skeleton className="h-16 w-3/4" />
-                <Skeleton className="h-16 w-3/4 ml-auto" />
-                <Skeleton className="h-16 w-3/4" />
-            </div>
-            <div className="flex gap-2 border-t pt-4">
-                <Skeleton className="h-10 flex-grow"/>
-                <Skeleton className="h-10 w-10"/>
-            </div>
-        </div>
-    );
-}
-
-// The main page component now wraps MessageContent in Suspense
-export default function MessagesPage() {
-    return (
-        <Suspense fallback={<MessagesPageSkeleton />}>
-            <MessageContent />
-        </Suspense>
-    );
 }
