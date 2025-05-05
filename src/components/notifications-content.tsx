@@ -100,7 +100,7 @@ export function NotificationsContent() {
         case 'item_sold': return <Icons.tag className="h-5 w-5 text-purple-500" />;
         case 'unusual_activity': return <Icons.shield className="h-5 w-5 text-red-500" />;
         case 'kyc_approved': return <Icons.check className="h-5 w-5 text-green-500" />;
-        case 'kyc_rejected': return <Icons.close className="h-5 w-5 text-red-500" />;
+        case 'kyc_rejected': return <Icons.x className="h-5 w-5 text-red-500" />;
         default: return <Icons.bell className="h-5 w-5 text-gray-500" />;
     }
   };

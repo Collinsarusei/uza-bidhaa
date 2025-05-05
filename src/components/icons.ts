@@ -1,7 +1,8 @@
-// src/components/icons.tsx
+// src/components/icons.ts
 
 import {
   AlertTriangle,
+  ArrowLeft, // Added for back buttons
   ArrowRight,
   BellOff,
   Check,
@@ -11,8 +12,8 @@ import {
   Copy,
   Edit,
   ExternalLink,
-  Eye,        // Added
-  EyeOff,     // Added
+  Eye,
+  EyeOff,
   File,
   HelpCircle,
   Home,
@@ -20,6 +21,7 @@ import {
   Lock,
   LogOut,
   Mail,
+  Menu, // Added Menu icon
   MessageSquare,
   Moon,
   Plus,
@@ -43,62 +45,56 @@ import {
   Inbox,
   Bell,
   Bot,
+  MapPin // Added MapPin
 } from "lucide-react";
 
-const Icons = {
-  // --- General Icons ---
+// Re-export all icons for easier import
+export const Icons = {
   alertTriangle: AlertTriangle,
+  arrowLeft: ArrowLeft,
   arrowRight: ArrowRight,
   bellOff: BellOff,
   check: Check,
-  chevronDown: ChevronsUpDown,
+  chevronsUpDown: ChevronsUpDown,
   circle: Circle,
   circleDollarSign: CircleDollarSign,
-  workflow: Workflow,
-  close: X,
   copy: Copy,
   edit: Edit,
   externalLink: ExternalLink,
-  eye: Eye,          // Added
-  eyeOff: EyeOff,    // Added
+  eye: Eye,
+  eyeOff: EyeOff,
   file: File,
-  help: HelpCircle,
+  helpCircle: HelpCircle,
   home: Home,
+  loader2: Loader2,
+  lock: Lock,
+  logOut: LogOut,
   mail: Mail,
+  menu: Menu, // Added Menu icon export
   messageSquare: MessageSquare,
+  moon: Moon,
   plus: Plus,
   plusCircle: PlusCircle,
   search: Search,
+  send: Send,
   server: Server,
   settings: Settings,
-  share: Share2,
+  share2: Share2,
   shield: Shield,
+  sun: Sun,
   tag: Tag,
   trash: Trash,
   user: User,
+  x: X,
+  workflow: Workflow,
   image: Image,
   phone: Phone,
   info: Info,
   key: Key,
-  lock: Lock,
-  send: Send,
-
-  // --- Theme Icons ---
-  dark: Moon,
-  light: Sun,
-
-  // --- Loading / Status ---
-  loader: Loader2,
-  spinner: Loader2,
-
-  // --- Navigation / UI Specific ---
   inbox: Inbox,
   bell: Bell,
-  logOut: LogOut,
   bot: Bot,
-
-  // --- Branding ---
-  logo: Workflow,
+  mapPin: MapPin, 
+  // Add spinner alias for convenience if needed
+  spinner: Loader2, 
 };
-
-export { Icons };

@@ -5,7 +5,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { useSession } from 'next-auth/react';
+import { useSession, signOut } from 'next-auth/react'; // Import signOut
 import { useRouter } from 'next/navigation';
 import { toast } from '@/hooks/use-toast';
 import { User } from 'lucide-react';
@@ -13,6 +13,14 @@ import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/componen
 import { Skeleton } from '@/components/ui/skeleton';
 import { Item } from '@/lib/types';
 import { Icons } from '@/components/icons';
+import {
+    Sheet,
+    SheetContent,
+    SheetDescription,
+    SheetHeader,
+    SheetTitle,
+    SheetTrigger,
+} from "@/components/ui/sheet"; // Import Sheet components
 
 // --- Animated Images Setup ---
 const images = [
@@ -38,8 +46,8 @@ export default function HomePage() {
   const [items, setItems] = useState<Item[]>([]);
   const [itemsLoading, setItemsLoading] = useState(true);
   const [itemsError, setItemsError] = useState<string | null>(null);
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false); // State for mobile nav
 
-  // --- Animated Header Effect ---
   useEffect(() => {
     const intervalId = setInterval(() => {
       setCurrentIndex((prevIndex) => (prevIndex + 1) % images.length);
@@ -47,7 +55,6 @@ export default function HomePage() {
     return () => clearInterval(intervalId);
   }, []);
 
-  // --- Fetch Items Effect ---
   useEffect(() => {
     const fetchItems = async () => {
       setItemsLoading(true);
@@ -58,7 +65,7 @@ export default function HomePage() {
           throw new Error(`HTTP error! status: ${response.status}`);
         }
         const data = await response.json();
-        setItems(data.slice(0, 8)); // Limit items displayed
+        setItems(data.slice(0, 8)); 
       } catch (err) {
         let message = "Failed to fetch featured items.";
         if (err instanceof Error) message = err.message;
@@ -71,26 +78,19 @@ export default function HomePage() {
     fetchItems();
   }, []);
 
-  // --- Click Handlers ---
   const handleSellClick = () => {
     if (status === 'loading') return;
     if (!session) {
       router.push('/auth');
       return;
     }
-    // Add KYC check here when implemented
     router.push('/sell');
   };
 
-  const handleMessageSellerClick = () => {
-    if (status === 'loading') return;
-    if (!session) {
-      toast({ title: 'Login Required', description: 'Please log in to message sellers.' });
-      router.push('/auth');
-    } else {
-      toast({ title: 'Action Required', description: 'Please message sellers from the dashboard.' });
-      router.push('/dashboard');
-    }
+  const handleLogout = async () => { // Add logout handler
+      await signOut({ redirect: false }); 
+      setIsMobileNavOpen(false); // Close nav on logout
+      // No explicit redirect needed, session change will update UI
   };
 
   // --- Component Render ---
@@ -101,20 +101,21 @@ export default function HomePage() {
         <Link href="/" className="flex items-center gap-2" prefetch={false}>
           <span className="font-semibold text-lg">Uza Bidhaa Marketplace</span>
         </Link>
-        <nav className="flex items-center gap-2"> {/* Reduced gap */}
+        
+        {/* --- Desktop Nav --- */} 
+        <nav className="hidden md:flex items-center gap-2"> 
           <Button onClick={handleSellClick}>Sell</Button>
-          {/* Conditional rendering based on authentication status */}
           {status === 'loading' ? (
-             <Skeleton className="h-9 w-9 rounded-full" /> /* Loading state */
+             <Skeleton className="h-9 w-9 rounded-full" /> 
           ) : status === 'authenticated' && session.user ? (
-            <Link href="/dashboard/profile"> {/* Corrected Link destination */}
+            <Link href="/dashboard"> {/* Link to dashboard for logged in user */} 
               <Avatar className="h-9 w-9">
                 {session.user.image && <AvatarImage src={session.user.image} alt={session.user.name ?? 'User'} />}
                 <AvatarFallback>{session.user.name?.[0]?.toUpperCase() ?? 'U'}</AvatarFallback>
               </Avatar>
             </Link>
           ) : (
-            <> {/* Use Fragment for multiple elements */}
+            <> 
               <Link href="/auth/register" passHref>
                  <Button variant="outline">Sign Up</Button>
               </Link>
@@ -124,6 +125,45 @@ export default function HomePage() {
             </>
           )}
         </nav>
+
+        {/* --- Mobile Nav Trigger --- */} 
+         <div className="md:hidden">
+            <Sheet open={isMobileNavOpen} onOpenChange={setIsMobileNavOpen}>
+                 <SheetTrigger asChild>
+                     <Button variant="ghost" size="icon">
+                        <Icons.menu className="h-6 w-6" /> 
+                        <span className="sr-only">Open Menu</span>
+                     </Button>
+                </SheetTrigger>
+                <SheetContent side="right" className="w-[250px]">
+                     <SheetHeader className="border-b pb-4 mb-4">
+                         <SheetTitle>Menu</SheetTitle>
+                     </SheetHeader>
+                     <div className="flex flex-col gap-3">
+                         {/* Always show Sell */} 
+                         <Button variant="ghost" onClick={() => { handleSellClick(); setIsMobileNavOpen(false); }} className="w-full justify-start">Sell Item</Button>
+                         <hr/> { /* Separator */ }
+                         {status === 'loading' ? (
+                             <Skeleton className="h-8 w-full rounded-md" />
+                         ) : status === 'authenticated' ? (
+                             <>
+                                 <Link href="/dashboard" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">Dashboard</Button></Link>
+                                 <Link href="/messages" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">Messages</Button></Link>
+                                 <Link href="/notifications" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">Notifications</Button></Link>
+                                 <Link href="/profile" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">Profile</Button></Link>
+                                 <Button variant="ghost" onClick={handleLogout} className="w-full justify-start text-red-600 hover:text-red-700">Logout</Button>
+                             </>
+                         ) : (
+                             <>
+                                 <Link href="/auth/register" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">Sign Up</Button></Link>
+                                 <Link href="/auth" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">Login</Button></Link>
+                             </>
+                         )}
+                     </div>
+                </SheetContent>
+             </Sheet>
+        </div>
+
       </header>
 
       {/* Main Content */}
@@ -148,7 +188,7 @@ export default function HomePage() {
         <section className="py-12 px-4 md:px-6">
           <h2 className="text-3xl font-bold text-center mb-8">Featured Items</h2>
           {itemsLoading && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+             <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
                 {Array.from({ length: 8 }).map((_, index) => (
                     <Card key={index}><CardHeader className="p-0"><Skeleton className="h-48 w-full rounded-t-lg" /></CardHeader><CardContent className="p-4"><Skeleton className="h-5 w-3/4 mb-2" /><Skeleton className="h-4 w-1/2" /></CardContent><CardFooter className="p-4 pt-0"><Skeleton className="h-10 w-full" /></CardFooter></Card>
                 ))}
@@ -157,14 +197,27 @@ export default function HomePage() {
           {!itemsLoading && itemsError && ( <p className="text-center text-destructive">Error loading items: {itemsError}</p> )}
           {!itemsLoading && !itemsError && items.length === 0 && ( <p className="text-center text-muted-foreground">No featured items available.</p> )}
           {!itemsLoading && !itemsError && items.length > 0 && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+            <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6"> {/* Adjusted grid */} 
               {items.map((item) => (
                  <Card key={item.id} className="flex flex-col overflow-hidden">
-                    <CardHeader className="p-0"><div className="relative h-48 w-full">
-                        <Image src={item.mediaUrls && item.mediaUrls.length > 0 ? item.mediaUrls[0] : '/images/default-item.jpg'} alt={item.title} fill={true} style={{ objectFit: 'cover' }} sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 25vw" />
-                    </div></CardHeader>
-                    <CardContent className="p-4 flex-grow"><CardTitle className="text-lg font-semibold mb-1 truncate">{item.title}</CardTitle><p className="text-gray-700 dark:text-gray-300 font-medium">KES {item.price.toLocaleString()}</p></CardContent>
-                    <CardFooter className="p-4 pt-0"><Button className="w-full" onClick={handleMessageSellerClick}> Message Seller </Button></CardFooter>
+                    <CardHeader className="p-0">
+                        <Link href={`/item/${item.id}`} passHref className="block relative h-48 w-full"> {/* Link wrapper */} 
+                            <Image src={item.mediaUrls && item.mediaUrls.length > 0 ? item.mediaUrls[0] : '/images/default-item.jpg'} alt={item.title} fill={true} style={{ objectFit: 'cover' }} sizes="(max-width: 640px) 50vw, (max-width: 1024px) 50vw, 25vw" className="rounded-t-lg" />
+                         </Link>
+                    </CardHeader>
+                    <CardContent className="p-4 flex-grow">
+                         <Link href={`/item/${item.id}`} passHref>
+                             <CardTitle className="text-lg font-semibold mb-1 truncate hover:underline">{item.title}</CardTitle>
+                         </Link>
+                         <p className="text-gray-700 dark:text-gray-300 font-medium">KES {item.price.toLocaleString()}</p>
+                    </CardContent>
+                     <CardFooter className="p-4 pt-0">
+                         {/* Use Link for View Details */} 
+                         <Link href={`/item/${item.id}`} passHref className="w-full">
+                              <Button variant="outline" className="w-full"> View Details </Button>
+                         </Link>
+                         {/* Message seller button removed from homepage as it requires login and context */}
+                     </CardFooter>
                  </Card>
               ))}
             </div>
@@ -172,18 +225,19 @@ export default function HomePage() {
         </section>
 
         {/* Chatbot Placeholder */}
-        <div className="fixed bottom-4 right-4 bg-primary text-primary-foreground p-3 rounded-full shadow-lg cursor-pointer hover:bg-primary/90 z-40">
+        {/* Consider conditionally rendering based on page or user state */}
+        {/* <div className="fixed bottom-4 right-4 bg-primary text-primary-foreground p-3 rounded-full shadow-lg cursor-pointer hover:bg-primary/90 z-40">
           <Icons.bot className="h-6 w-6" /> <span className="sr-only">Chat with us</span>
-        </div>
+        </div> */}
       </main>
 
       {/* Footer */}
-       <footer className="bg-black text-white p-6 md:py-8 w-full border-t border-gray-700">
+       <footer className="bg-black text-white p-6 md:py-8 w-full border-t border-gray-700 mt-auto"> {/* Added mt-auto */} 
         <div className="container mx-auto flex flex-col md:flex-row items-center justify-center gap-4">
            <p className="text-xs">© {new Date().getFullYear()} Uza Bidhaa Marketplace. All rights reserved.</p>
            <nav className="flex gap-4">
-             <Link href="/terms" className="text-xs hover:underline hover:text-gray-300 underline-offset-4" prefetch={false}>Terms of Service</Link>
-             <Link href="/privacy" className="text-xs hover:underline hover:text-gray-300 underline-offset-4" prefetch={false}>Privacy Policy</Link>
+             <Link href="/terms" className="text-xs hover:underline hover:text-gray-300 underline-offset-4" prefetch={false}>Terms</Link>
+             <Link href="/privacy" className="text-xs hover:underline hover:text-gray-300 underline-offset-4" prefetch={false}>Privacy</Link>
            </nav>
          </div>
        </footer>
