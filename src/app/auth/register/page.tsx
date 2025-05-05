@@ -31,7 +31,7 @@ export default function RegisterPage() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [phoneNumber, setPhoneNumber] = useState("");
-  const [username, setUsername] = useState("");
+  const [username, setUsername] = useState(""); // Keep state name as username for input binding
   const [otp, setOtp] = useState("");
   
   const [isLoading, setIsLoading] = useState(false);
@@ -66,29 +66,53 @@ export default function RegisterPage() {
    }, [auth, toast]);
    // -----------------------
 
+  // --- Phone Number Formatting Helper ---
+  const formatPhoneNumberForBackend = (num: string): string | null => {
+    const trimmedNum = num.trim();
+    if (trimmedNum.startsWith('07') || trimmedNum.startsWith('01')) {
+      return `+254${trimmedNum.substring(1)}`;
+    }
+    // Basic check if it already looks like E.164 for +254
+    if (trimmedNum.startsWith('+254') && trimmedNum.length >= 13) { 
+      return trimmedNum;
+    }
+    // Add more robust validation/formatting if needed
+    console.warn("Phone number might not be in expected Kenyan format for backend conversion:", trimmedNum);
+    // Decide whether to return potentially invalid format or null
+    // Returning null might be safer to force correction
+    // return trimmedNum; // Or return null if strict formatting is required
+    return null; // Returning null to indicate formatting failed
+  };
+  // ----------------------------------
+
   // --- Handle Send OTP --- 
   const handleSendOtp = async () => {
       setError(null);
       if (!phoneNumber.trim()) { setError("Phone number needed."); return; }
       if (!window.recaptchaVerifier) { setError("reCAPTCHA not ready."); return; }
-       let formattedPhoneNumber = phoneNumber.trim();
-       if (formattedPhoneNumber.startsWith('07')) formattedPhoneNumber = `+254${formattedPhoneNumber.substring(1)}`;
-       else if (formattedPhoneNumber.startsWith('7')) formattedPhoneNumber = `+254${formattedPhoneNumber}`;
-       else if (!formattedPhoneNumber.startsWith('+254')) { setError("Invalid phone format."); return; }
+      
+      // Use the same formatting logic here for sending OTP
+      let formattedForOtp = phoneNumber.trim();
+      if (formattedForOtp.startsWith('07') || formattedForOtp.startsWith('01')) formattedForOtp = `+254${formattedForOtp.substring(1)}`;
+      else if (!formattedForOtp.startsWith('+254')) { 
+          setError("Invalid KE phone format (07.. or 01..)."); 
+          toast({ title: "Invalid Phone", description: "Use format 07.. or 01..", variant: "destructive" }); 
+          return; 
+      }
 
       setIsSendingOtp(true);
       try {
-          const confirmation = await signInWithPhoneNumber(auth, formattedPhoneNumber, window.recaptchaVerifier);
+          console.log("Sending OTP to:", formattedForOtp);
+          const confirmation = await signInWithPhoneNumber(auth, formattedForOtp, window.recaptchaVerifier);
           setConfirmationResult(confirmation);
           setShowOtpInput(true);
           toast({ title: "OTP Sent", description: "Check phone for code." });
       } catch (error: any) {
           console.error("OTP Send Error:", error);
           let message = error.message.includes('reCAPTCHA') ? "Captcha failed." : "Failed to send OTP.";
-          if (error.code === 'auth/invalid-phone-number') message = "Invalid phone number.";
+          if (error.code === 'auth/invalid-phone-number') message = "Invalid phone number (check format).";
           else if (error.code === 'auth/too-many-requests') message = "Too many requests.";
           setError(message); toast({ title: "OTP Send Failed", description: message, variant: "destructive" });
-           // Corrected: Check if grecaptcha exists before calling reset
            try { 
                if (window.recaptchaVerifier && window.grecaptcha && window.recaptchaWidgetId !== undefined) {
                    window.grecaptcha.reset(window.recaptchaWidgetId);
@@ -108,6 +132,14 @@ export default function RegisterPage() {
     if (!showOtpInput || !otp.trim()) { setError("Enter OTP."); return; }
     if (!confirmationResult) { setError("Request new OTP."); return; }
 
+    // Format phone number for backend JUST BEFORE sending
+    const formattedPhoneNumberForBackend = formatPhoneNumberForBackend(phoneNumber);
+    if (!formattedPhoneNumberForBackend) {
+        setError("Invalid phone number format. Use 07... or 01...");
+        toast({ title: "Invalid Phone", description: "Please check your phone number format (07... or 01...).", variant: "destructive" });
+        return; // Stop registration if format is invalid
+    }
+
     setIsVerifyingOtp(true); setIsLoading(true);
     try {
         console.log(`Verifying OTP: ${otp}`);
@@ -115,20 +147,37 @@ export default function RegisterPage() {
         console.log("OTP Verified!");
         setIsVerifyingOtp(false);
 
-        const registrationData = { email: email.trim(), password, phoneNumber: phoneNumber.trim(), username: username.trim() };
-        console.log("Calling backend register API...");
-        const response = await fetch('/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(registrationData) });
+        // Construct data with formatted phone and correct name key
+        const registrationData = {
+            name: username.trim(), // Use username state value for the 'name' field
+            email: email.trim(),
+            password, // No need to trim password
+            phoneNumber: formattedPhoneNumberForBackend // Use the correctly formatted number
+        };
+
+        console.log("Calling backend register API with:", registrationData);
+        const response = await fetch('/api/auth/register', { 
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' }, 
+            body: JSON.stringify(registrationData) 
+        });
         const result = await response.json();
-        if (!response.ok) { throw new Error(result.message || `Reg failed: ${response.statusText}`); }
+        if (!response.ok) {
+            // Use error message from backend if available
+            throw new Error(result.message || `Registration failed: ${response.statusText}`);
+        }
 
         toast({ title: "Registration Successful", description: "Log in now." });
-        router.push('/auth');
+        router.push('/auth'); // Redirect to login page after successful registration
 
     } catch (error: any) {
         console.error("OTP/Reg Error:", error);
         let message = error.message || "Registration failed.";
          if (error.code === 'auth/invalid-verification-code') message = "Invalid OTP code.";
          else if (error.code === 'auth/code-expired') { message = "OTP expired."; setShowOtpInput(false); setConfirmationResult(null); }
+         else if (message.startsWith("Registration failed:")) { /* Keep backend message */ }
+         // Add more specific error handling if needed
+
         setError(message); toast({ title: "Registration Failed", description: message, variant: "destructive" });
         setIsLoading(false); setIsVerifyingOtp(false); 
     } 
@@ -156,7 +205,7 @@ export default function RegisterPage() {
               <Input id="email" type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} required disabled={isLoading} />
             </div>
              <div className="grid gap-1.5">
-               <Label htmlFor="phone">Phone Number <span className="text-red-500">*</span></Label>
+               <Label htmlFor="phone">Phone Number (07.. or 01..)<span className="text-red-500">*</span></Label>
                <div className="flex gap-2">
                     <Input id="phone" type="tel" placeholder="e.g., 0712345678" value={phoneNumber} onChange={(e) => setPhoneNumber(e.target.value)} required disabled={isLoading || isSendingOtp || showOtpInput} />
                      <Button type="button" onClick={handleSendOtp} disabled={isLoading || isSendingOtp || showOtpInput || !phoneNumber.trim()} variant="outline"> {isSendingOtp ? <Icons.spinner className="h-4 w-4 animate-spin"/> : "Send OTP"} </Button>
