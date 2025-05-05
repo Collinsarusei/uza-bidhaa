@@ -107,7 +107,7 @@ export interface Message {
   timestamp: ApiTimestamp;
 }
 
-interface ParticipantData {
+export interface ParticipantData {
     name?: string | null;
     avatar?: string | null;
 }

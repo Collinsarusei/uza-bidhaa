@@ -1,15 +1,16 @@
 // src/app/api/messages/route.ts
 import { NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
-import { authOptions } from '../auth/[...nextauth]/route'; // Adjust path if needed
-import { adminDb } from '@/lib/firebase-admin'; // adminDb can be null!
+import { authOptions } from '../auth/[...nextauth]/route';
+import { adminDb } from '@/lib/firebase-admin'; 
 import { FieldValue } from 'firebase-admin/firestore';
-import { createNotification } from '@/lib/notifications'; // Import the helper
+import { createNotification } from '@/lib/notifications';
 
-// --- Add Null Check Early --- 
-const conversationsCollection = adminDb?.collection('conversations'); // Use optional chaining
+if (!adminDb) {
+     console.error("FATAL ERROR: Firebase Admin DB not initialized.");
+}
+const conversationsCollection = adminDb?.collection('conversations');
 
-// Helper function to generate a consistent conversation ID
 const generateConversationId = (userId1: string, userId2: string, itemId: string): string => {
     const sortedIds = [userId1, userId2].sort();
     return `${sortedIds[0]}_${sortedIds[1]}_item_${itemId}`;
@@ -18,14 +19,11 @@ const generateConversationId = (userId1: string, userId2: string, itemId: string
 export async function POST(req: Request) {
     console.log("API POST /api/messages: Received request");
 
-    // --- Add Null Check Here --- 
     if (!adminDb || !conversationsCollection) {
          console.error("API Messages POST Error: Firebase Admin DB is not initialized.");
          return NextResponse.json({ message: 'Server configuration error.' }, { status: 500 });
     }
-    // --- End Null Check ---
-
-    // --- Authentication ---
+    
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) {
         console.warn("API Messages: Unauthorized attempt to send message.");
@@ -36,9 +34,8 @@ export async function POST(req: Request) {
     const senderAvatar = session.user.image || null;
 
     try {
-        // --- Body Parsing & Validation ---
         const body = await req.json();
-        const { recipientId, itemId, text, itemTitle, itemImageUrl } = body; // Expect item info now
+        const { recipientId, itemId, text, itemTitle, itemImageUrl } = body; 
 
         if (!recipientId || !itemId || !text || typeof text !== 'string' || text.trim() === '' || !itemTitle) {
             console.error("API Messages: Missing required fields (recipientId, itemId, text, itemTitle).");
@@ -49,7 +46,6 @@ export async function POST(req: Request) {
             return NextResponse.json({ message: 'Cannot send message to yourself' }, { status: 400 });
         }
 
-        // --- Prepare Data --- 
         const conversationId = generateConversationId(senderId, recipientId, itemId);
         const conversationRef = conversationsCollection.doc(conversationId);
         const currentTimestamp = FieldValue.serverTimestamp();
@@ -59,11 +55,31 @@ export async function POST(req: Request) {
             text: text.trim(),
             timestamp: currentTimestamp,
         };
+        
+        // --- Fetch recipient data if creating conversation --- 
+        let recipientName = 'User';
+        let recipientAvatar = null;
+        const convDocSnapshot = await conversationRef.get(); // Check existence before transaction
+        if (!convDocSnapshot.exists) {
+            try {
+                const recipientUserDoc = await adminDb.collection('users').doc(recipientId).get();
+                if (recipientUserDoc.exists) {
+                    const recipientData = recipientUserDoc.data();
+                    recipientName = recipientData?.name || recipientData?.username || 'User';
+                    recipientAvatar = recipientData?.profilePictureUrl || null;
+                }
+                 console.log(`API Messages: Fetched recipient (${recipientId}) data for new conversation.`);
+            } catch (fetchError) {
+                 console.error(`API Messages: Failed to fetch recipient (${recipientId}) data:`, fetchError);
+                 // Proceed without recipient data if fetch fails
+            }
+        }
+        // -------------------------------------------------
 
         const initialConversationData = {
             participantIds: [senderId, recipientId],
             itemId: itemId,
-            itemTitle: itemTitle, 
+            itemTitle: itemTitle,
             itemImageUrl: itemImageUrl || null,
             createdAt: currentTimestamp,
             approved: false,
@@ -72,6 +88,8 @@ export async function POST(req: Request) {
             lastMessageSnippet: text.trim().substring(0, 100),
             participantsData: {
                  [senderId]: { name: senderName, avatar: senderAvatar },
+                 // Add recipient data if fetched
+                 [recipientId]: { name: recipientName, avatar: recipientAvatar }, 
              },
         };
 
@@ -80,27 +98,30 @@ export async function POST(req: Request) {
              lastMessageSnippet: text.trim().substring(0, 100),
              [`participantsData.${senderId}.name`]: senderName,
              [`participantsData.${senderId}.avatar`]: senderAvatar,
+             // Potentially update recipient data here too if it might change
+             // [`participantsData.${recipientId}.name`]: recipientName, 
+             // [`participantsData.${recipientId}.avatar`]: recipientAvatar,
         };
 
-
-        // --- Firestore Transaction --- 
         await adminDb.runTransaction(async (transaction) => {
+             // Re-get inside transaction for consistency
              const convDoc = await transaction.get(conversationRef);
              const messagesCollectionRef = conversationRef.collection('messages');
              const newMessageRef = messagesCollectionRef.doc();
 
              if (!convDoc.exists) {
                   console.log(`API Messages: Creating new conversation ${conversationId} (approved: false)`);
+                  // Use initial data which includes fetched recipient info
                   transaction.set(conversationRef, initialConversationData);
              } else {
                  console.log(`API Messages: Updating existing conversation ${conversationId}`);
+                 // Use update data
                  transaction.update(conversationRef, updateConversationData);
              }
              transaction.set(newMessageRef, messageData);
              console.log(`API Messages: Message added to conversation ${conversationId}`);
         });
 
-        // --- Create Notification for the Recipient --- 
         try {
             const convSnapshot = await conversationRef.get();
             const currentConvData = convSnapshot.data();
@@ -118,7 +139,6 @@ export async function POST(req: Request) {
             }
 
             if (shouldNotify) {
-                // FIX: Removed isRead property as it's handled internally by createNotification
                 await createNotification({
                     userId: recipientId,
                     type: 'new_message',
@@ -126,16 +146,14 @@ export async function POST(req: Request) {
                     relatedItemId: itemId,
                     relatedMessageId: conversationId,
                     relatedUserId: senderId,
-                    // isRead: undefined // REMOVED THIS LINE
                 });
                  console.log(`API Messages: Notification created for recipient ${recipientId}`);
             } else {
-                 console.log(`API Messages: Notification skipped for recipient ${recipientId} (conversation likely exists or unapproved)`);
+                 console.log(`API Messages: Notification skipped for recipient ${recipientId}`);
             }
         } catch (notificationError) {
              console.error("Failed to create notification after sending message:", notificationError);
         }
-        // --- End Notification --- 
 
         console.log(`API Messages: Message successfully processed for conversation ${conversationId}`);
         return NextResponse.json({ message: 'Message sent successfully' }, { status: 201 });
@@ -146,18 +164,14 @@ export async function POST(req: Request) {
     }
 }
 
-// --- GET Handler (Fetches messages for ONE conversation) --- 
 export async function GET(req: Request) {
     console.log("API GET /api/messages: Received request");
 
-    // --- Add Null Check Here --- 
     if (!adminDb || !conversationsCollection) {
          console.error("API Messages GET Error: Firebase Admin DB is not initialized.");
          return NextResponse.json({ message: 'Server configuration error.' }, { status: 500 });
     }
-     // --- End Null Check ---
-
-    // --- Authentication & DB Check --- 
+     
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) {
         console.warn("API Messages GET: Unauthorized attempt.");
@@ -166,7 +180,6 @@ export async function GET(req: Request) {
     const currentUserId = session.user.id;
 
     try {
-        // --- Parameters --- 
         const { searchParams } = new URL(req.url);
         const conversationId = searchParams.get('conversationId');
 
@@ -177,7 +190,6 @@ export async function GET(req: Request) {
 
         console.log(`API Messages GET: Fetching messages for conversation ${conversationId}`);
 
-        // --- Authorization Check --- 
         const conversationRef = conversationsCollection.doc(conversationId);
         const convDoc = await conversationRef.get();
 
@@ -192,7 +204,6 @@ export async function GET(req: Request) {
             return NextResponse.json({ message: 'Forbidden' }, { status: 403 });
         }
 
-        // --- Fetch Messages --- 
         const messagesQuery = conversationRef.collection('messages')
                                              .orderBy('timestamp', 'asc'); 
 
@@ -208,7 +219,21 @@ export async function GET(req: Request) {
         });
 
         console.log(`API Messages GET: Found ${messages.length} messages for conversation ${conversationId}`);
-        return NextResponse.json({ messages: messages, conversation: conversationData }, { status: 200 }); 
+        // Return full conversation data along with messages
+        return NextResponse.json({ 
+            messages: messages, 
+            // Convert conversation timestamps before sending
+            conversation: {
+                ...conversationData,
+                createdAt: conversationData.createdAt?.toDate ? conversationData.createdAt.toDate().toISOString() : null,
+                lastMessageTimestamp: conversationData.lastMessageTimestamp?.toDate ? conversationData.lastMessageTimestamp.toDate().toISOString() : null,
+                approvedAt: conversationData.approvedAt?.toDate ? conversationData.approvedAt.toDate().toISOString() : null,
+                 readStatus: conversationData.readStatus ? Object.entries(conversationData.readStatus).reduce((acc, [userId, ts]: [string, any]) => {
+                    acc[userId] = ts?.toDate ? ts.toDate().toISOString() : null;
+                    return acc;
+                }, {} as { [userId: string]: string | null }) : undefined,
+            }
+        }, { status: 200 }); 
 
     } catch (error: any) {
         console.error("API Messages GET Error:", error);
