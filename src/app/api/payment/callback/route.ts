@@ -1,173 +1,167 @@
-import { NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import crypto from 'crypto';
-import { adminDb } from '@/lib/firebase-admin';
-import { FieldValue, UpdateData } from 'firebase-admin/firestore'; // Import UpdateData
+// src/app/api/payment/callback/route.ts
+import { NextResponse, NextRequest } from 'next/server';
+import { adminDb } from '@/lib/firebase-admin'; // adminDb can be null
+import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { createNotification } from '@/lib/notifications';
-import type { Payment } from '@/lib/types'; // Import the Payment type
+import crypto from 'crypto'; // For webhook signature verification
 
-// --- Firestore Collections ---
-const paymentsCollection = adminDb.collection('payments');
-const itemsCollection = adminDb.collection('items');
-const usersCollection = adminDb.collection('users');
+// --- Environment Variable Check --- 
+const INTASEND_WEBHOOK_SECRET = process.env.INTASEND_WEBHOOK_SECRET;
 
-// --- Intasend Secret Key ---
-const INTASEND_SECRET_KEY = process.env.INTASEND_SECRET_KEY;
+if (!INTASEND_WEBHOOK_SECRET) {
+    console.error("FATAL: Missing IntaSend Webhook Secret environment variable (INTASEND_WEBHOOK_SECRET).");
+}
 
-export async function POST(req: Request) {
-    console.log("Received Intasend callback request...");
+// --- POST Handler for IntaSend Webhook --- 
+export async function POST(req: NextRequest) {
+    console.log("--- API POST /api/payment/callback START ---");
 
-    if (!INTASEND_SECRET_KEY) {
-        console.error("Callback Error: INTASEND_SECRET_KEY is not configured.");
-        return NextResponse.json({ message: 'Server configuration error: Secret key missing.' }, { status: 500 });
+    // --- FIX: Add Null Check --- 
+    if (!adminDb) {
+        console.error("Payment Callback Error: Firebase Admin DB not initialized.");
+        return NextResponse.json({ message: 'Server configuration error' }, { status: 500 });
+    }
+    // --- End Fix ---
+    if (!INTASEND_WEBHOOK_SECRET) {
+         console.error("Payment Callback Error: IntaSend Webhook Secret missing.");
+        return NextResponse.json({ message: 'Webhook configuration error' }, { status: 500 });
     }
 
-    let rawBody;
     try {
-        const signature = (await headers()).get('X-Intasend-Signature');
+        // --- Verify Webhook Signature --- 
+        const signature = req.headers.get('x-intasend-signature');
+        const requestBody = await req.text(); // Read body as text for verification
+
         if (!signature) {
-            console.warn("Callback Warning: Missing X-Intasend-Signature header.");
-            return NextResponse.json({ message: 'Missing signature header' }, { status: 400 });
+            console.warn("Payment Callback: Missing webhook signature.");
+            return NextResponse.json({ message: 'Missing signature' }, { status: 400 });
         }
 
-        rawBody = await req.text();
-        const hmac = crypto.createHmac('sha256', INTASEND_SECRET_KEY);
-        const digest = Buffer.from(hmac.update(rawBody).digest('hex'), 'utf8');
+        const hmac = crypto.createHmac('sha256', INTASEND_WEBHOOK_SECRET);
+        const digest = Buffer.from(hmac.update(requestBody).digest('hex'), 'utf8');
         const checksum = Buffer.from(signature, 'utf8');
 
         if (checksum.length !== digest.length || !crypto.timingSafeEqual(digest, checksum)) {
-            console.error("Callback Error: Invalid signature.");
-            return NextResponse.json({ message: 'Invalid signature' }, { status: 401 });
+            console.warn("Payment Callback: Invalid webhook signature.");
+            return NextResponse.json({ message: 'Invalid signature' }, { status: 403 });
+        }
+        console.log("Payment Callback: Webhook signature verified.");
+
+        // --- Process Webhook Payload --- 
+        const payload = JSON.parse(requestBody); // Parse body after verification
+        console.log("Payment Callback: Received payload:", payload);
+
+        const eventType = payload.event_name || payload.type; 
+        const paymentStatus = payload.state || payload.status;
+        const invoiceId = payload.invoice_id;
+        const trackingId = payload.tracking_id;
+        const apiRef = payload.api_ref; 
+        const failureReason = payload.failure_reason || payload.error;
+
+        if (!apiRef) {
+             console.warn("Payment Callback: Missing api_ref (internal payment ID) in webhook payload.");
+             return NextResponse.json({ received: true, message: 'Missing api_ref' }, { status: 200 }); 
         }
 
-        console.log("Callback Signature Verified Successfully.");
-        const payload = JSON.parse(rawBody);
-        console.log("Intasend Callback Payload:", payload);
+        // --- Find and Update Payment Record --- 
+        // FIX: Use non-null assertion
+        const paymentRef = adminDb!.collection('payments').doc(apiRef);
+        // --- End Fix ---
+        const paymentDoc = await paymentRef.get();
 
-        const { invoice_id, status, tracking_id, state, metadata: metadataString } = payload;
-
-        if (!invoice_id) {
-             console.error("Callback Error: Missing invoice_id in payload.");
-             return NextResponse.json({ message: 'Missing invoice_id' }, { status: 400 });
+        if (!paymentDoc.exists) {
+             console.warn(`Payment Callback: Payment record not found for api_ref: ${apiRef}`);
+             return NextResponse.json({ received: true, message: 'Payment record not found' }, { status: 200 }); 
+        }
+        const paymentData = paymentDoc.data();
+        if (!paymentData) {
+            console.warn(`Payment Callback: Payment data empty for api_ref: ${apiRef}`);
+             return NextResponse.json({ received: true, message: 'Payment data empty' }, { status: 200 }); 
         }
 
-        const paymentQuery = paymentsCollection.where('intasendInvoiceId', '==', invoice_id).limit(1);
-        const paymentSnapshot = await paymentQuery.get();
-
-        if (paymentSnapshot.empty) {
-            console.error(`Callback Error: Payment record not found in Firestore for Intasend invoice_id: ${invoice_id}`);
-            return NextResponse.json({ received: true, message: 'Payment record not found internally' }, { status: 200 });
+        if (['paid_to_platform', 'released_to_seller_balance', 'failed', 'refunded'].includes(paymentData.status)) {
+             console.log(`Payment Callback: Payment ${apiRef} already in terminal state (${paymentData.status}). Ignoring webhook.`);
+             return NextResponse.json({ received: true, message: 'Already processed' }, { status: 200 }); 
         }
 
-        const paymentDocRef = paymentSnapshot.docs[0].ref;
-        const paymentData = paymentSnapshot.docs[0].data() as Payment; // Cast to Payment type
-        const internalPaymentId = paymentData?.id;
+        // --- Handle Successful Payment --- 
+        if ((eventType === 'checkout.complete' || eventType === 'invoice.payment_received') && (paymentStatus === 'COMPLETED' || paymentStatus === 'SUCCESSFUL')) {
+             console.log(`Payment Callback: Successful payment received for payment ${apiRef}.`);
+            
+            let itemTitle = 'Item';
+            if (paymentData.itemId) {
+                 // FIX: Use non-null assertion
+                const itemDoc = await adminDb!.collection('items').doc(paymentData.itemId).get();
+                // --- End Fix ---
+                if (itemDoc.exists) itemTitle = itemDoc.data()?.title || 'Item';
+            }
 
-         let metadata = null;
-         try {
-             if (metadataString) metadata = JSON.parse(metadataString);
-         } catch (parseError) {
-             console.warn(`Callback Warning: Could not parse metadata string: ${metadataString}`, parseError);
-         }
-         const itemId = metadata?.item_id;
-         const buyerId = metadata?.buyer_id;
-         const buyerName = metadata?.buyer_name || 'A buyer';
+            // Update Payment and Item status in a transaction
+             // FIX: Use non-null assertion
+            await adminDb!.runTransaction(async (transaction) => {
+                 // FIX: Use non-null assertion
+                 const itemRef = adminDb!.collection('items').doc(paymentData.itemId);
+                 // --- End Fix ---
+                 transaction.update(paymentRef, {
+                      status: 'paid_to_platform',
+                      intasendInvoiceId: invoiceId || paymentData.intasendInvoiceId,
+                      intasendTrackingId: trackingId,
+                      updatedAt: FieldValue.serverTimestamp(),
+                 });
+                 transaction.update(itemRef, { 
+                      status: 'paid_escrow',
+                      updatedAt: FieldValue.serverTimestamp() 
+                 }); 
+            });
+             // --- End Fix ---
+            console.log(`Payment Callback: Updated payment ${apiRef} to paid_to_platform and item ${paymentData.itemId} to paid_escrow.`);
 
-        const finalStatus = state || status;
-        // Use UpdateData<Payment> here
-        let dbUpdateData: UpdateData<Payment> = {
-             updatedAt: FieldValue.serverTimestamp(),
-             intasendTrackingId: tracking_id || null,
-             lastCallbackStatus: finalStatus
-        };
-         let itemStatusUpdatePromise: Promise<any> | null = null;
-         let notificationPromise: Promise<any> | null = null;
-         let statusChanged = false; // Flag to track if the core status needs updating
-
-        if (finalStatus === 'COMPLETE') {
-            console.log(`Payment ${invoice_id} completed successfully.`);
-             if (paymentData?.status === 'initiated') {
-                 dbUpdateData.status = 'escrow'; // Update status to 'escrow'
-                 statusChanged = true;
-                 if (itemId) {
-                      const itemRef = itemsCollection.doc(itemId);
-                      itemStatusUpdatePromise = itemRef.update({ status: 'paid_escrow', updatedAt: FieldValue.serverTimestamp() });
-                      console.log(`Callback: Queuing item ${itemId} status update to 'paid_escrow'.`);
-
-                      notificationPromise = itemRef.get().then(itemDoc => {
-                          if (itemDoc.exists) {
-                              const itemData = itemDoc.data();
-                              const sellerId = itemData?.sellerId;
-                              const itemTitle = itemData?.title || 'your item';
-                              if (sellerId) {
-                                  return createNotification({
-                                      userId: sellerId,
-                                      type: 'payment_received',
-                                      message: `${buyerName} has paid for "${itemTitle}". Funds are held in escrow.`,
-                                      relatedItemId: itemId,
-                                      relatedUserId: buyerId
-                                  });
-                              } else {
-                                  console.error(`Callback Error: Seller ID not found on item ${itemId}. Cannot notify seller.`);
-                              }
-                          } else {
-                              console.error(`Callback Error: Item ${itemId} not found after payment completion. Cannot notify seller.`);
-                          }
-                      }).catch(err => {
-                          console.error(`Callback Error: Failed to fetch item ${itemId} to notify seller:`, err);
-                      });
-                  } else {
-                       console.warn(`Callback Warning: Item ID missing in metadata for invoice ${invoice_id}. Cannot update item status or notify seller.`);
-                  }
-             } else {
-                  console.log(`Callback Info: Payment ${internalPaymentId} (Invoice ${invoice_id}) already processed (status: ${paymentData?.status}). Ignoring COMPLETE callback.`);
+            // Send Notifications
+             try {
+                 await createNotification({
+                     userId: paymentData.sellerId,
+                     type: 'payment_received',
+                     message: `Payment received for "${itemTitle}" and is held pending buyer confirmation.`,
+                     relatedItemId: paymentData.itemId,
+                     relatedPaymentId: apiRef,
+                 });
+                  await createNotification({
+                     userId: paymentData.buyerId,
+                     type: 'payment_received',
+                     message: `Your payment for "${itemTitle}" was successful.`,
+                     relatedItemId: paymentData.itemId,
+                     relatedPaymentId: apiRef,
+                 });
+                 console.log(`Payment Callback: Notifications sent for payment ${apiRef}.`);
+             } catch (notifyError) {
+                 console.error(`Payment Callback: Failed to send notifications for payment ${apiRef}:`, notifyError);
              }
 
-        } else if (finalStatus === 'FAILED' || finalStatus === 'CANCELLED') {
-             console.warn(`Payment ${invoice_id} failed or was cancelled. Status: ${finalStatus}`);
-             if (paymentData?.status === 'initiated') {
-                 // Ensure the status matches the Payment type enum
-                 dbUpdateData.status = finalStatus.toLowerCase() as Payment['status'];
-                 statusChanged = true;
-                 // Optionally notify seller/buyer of failure
-             } else {
-                 console.log(`Callback Info: Payment ${internalPaymentId} (Invoice ${invoice_id}) already processed (status: ${paymentData?.status}). Ignoring ${finalStatus} callback.`);
-             }
-
-        } else {
-            console.log(`Received Intasend callback with unhandled status/state: ${finalStatus}. Acknowledging receipt.`);
-        }
-
-        // --- Perform Database Updates & Notification ---
-         if (statusChanged) { // Only perform major update if status changed
-             console.log(`Callback: Updating payment ${internalPaymentId} with data:`, dbUpdateData);
-             const updatePromises = [paymentDocRef.update(dbUpdateData)];
-             if (itemStatusUpdatePromise) updatePromises.push(itemStatusUpdatePromise);
-             if (notificationPromise) updatePromises.push(notificationPromise);
-
-             await Promise.all(updatePromises);
-             console.log(`Callback: Payment ${internalPaymentId} and related updates processed successfully.`);
-         } else {
-             // Only update tracking/status fields if main status didn't change
-             await paymentDocRef.update({
-                 updatedAt: dbUpdateData.updatedAt,
-                 intasendTrackingId: dbUpdateData.intasendTrackingId,
-                 lastCallbackStatus: dbUpdateData.lastCallbackStatus
+        } 
+        // --- Handle Failed Payment --- 
+        else if (eventType === 'checkout.failed' || paymentStatus === 'FAILED') {
+            console.warn(`Payment Callback: Payment failed/failed event received for payment ${apiRef}. Reason: ${failureReason}`);
+             await paymentRef.update({
+                 status: 'failed',
+                 failureReason: failureReason || 'Unknown reason from IntaSend',
+                 intasendInvoiceId: invoiceId || paymentData.intasendInvoiceId,
+                 intasendTrackingId: trackingId,
+                 updatedAt: FieldValue.serverTimestamp(),
              });
-             console.log(`Callback: Updated tracking details for payment ${internalPaymentId}.`);
-         }
+        } 
+        // --- Handle Other Events (Optional) --- 
+        else {
+             console.log(`Payment Callback: Received unhandled event type '${eventType}' or status '${paymentStatus}' for payment ${apiRef}.`);
+             if (trackingId && trackingId !== paymentData.intasendTrackingId) {
+                 await paymentRef.update({ intasendTrackingId: trackingId, updatedAt: FieldValue.serverTimestamp() });
+             }
+        }
 
-        console.log(`Acknowledging receipt for Intasend callback (Invoice ID: ${invoice_id}, Status: ${finalStatus}).`);
+        console.log("--- API POST /api/payment/callback SUCCESS ---");
         return NextResponse.json({ received: true }, { status: 200 });
 
     } catch (error: any) {
-        console.error('Intasend Callback API Error:', error);
-        if (error instanceof SyntaxError && rawBody) {
-             console.error("Callback Error: Failed to parse request body as JSON. Body:", rawBody);
-             return NextResponse.json({ message: 'Invalid request body format' }, { status: 400 });
-        } else {
-             console.error(`Unexpected Error: ${error.message}`);
-        }
-        return NextResponse.json({ message: 'Internal Server Error processing callback' }, { status: 500 });
+        console.error("--- API POST /api/payment/callback FAILED --- Error:", error);
+        return NextResponse.json({ message: 'Failed to process webhook', error: error.message }, { status: 500 });
     }
 }

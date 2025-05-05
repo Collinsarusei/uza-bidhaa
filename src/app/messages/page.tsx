@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react'; // Added useMemo
 import { useSession } from 'next-auth/react';
 import { Button } from "@/components/ui/button";
 import {
@@ -16,35 +16,32 @@ import { Icons } from "@/components/icons";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Conversation, Message } from '@/lib/types';
-import { formatDistanceToNow, parseISO } from 'date-fns'; // Import parseISO
+import { formatDistanceToNow, parseISO } from 'date-fns';
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 
 // --- Types --- 
-interface CategorizedConversations {
-  incoming: Conversation[];
-  inbox: Conversation[];
-}
+// Removed CategorizedConversations - we'll categorize dynamically
 
 // --- Main Component --- 
 export default function MessagesPage() {
   const { data: session, status } = useSession();
-  const [conversations, setConversations] = useState<CategorizedConversations>({ incoming: [], inbox: [] });
+  const [allConversations, setAllConversations] = useState<Conversation[]>([]); // Store all conversations
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState("");
   const [isLoadingConversations, setIsLoadingConversations] = useState(true);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [isSending, setIsSending] = useState(false);
-  const [isApproving, setIsApproving] = useState(false);
+  const [isApproving, setIsApproving] = useState<string | null>(null); // Store ID being approved
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'inbox' | 'incoming'>('inbox');
   const { toast } = useToast();
 
   const currentUserId = session?.user?.id;
 
-  // --- Fetch Conversations List --- 
+  // --- Fetch All Conversations List --- 
   useEffect(() => {
     const fetchConversations = async () => {
       if (status === 'authenticated' && currentUserId) {
@@ -57,9 +54,10 @@ export default function MessagesPage() {
             const errData = await response.json().catch(() => ({}));
             throw new Error(errData.message || `HTTP error! ${response.status}`);
           }
-          const data: CategorizedConversations = await response.json();
-          console.log(`MessagesPage: Fetched conversations - Incoming: ${data.incoming.length}, Inbox: ${data.inbox.length}`);
-          setConversations(data);
+          // API now returns { conversations: [...] }
+          const data = await response.json(); 
+          console.log(`MessagesPage: Fetched ${data.conversations?.length ?? 0} total conversations.`);
+          setAllConversations(data.conversations || []);
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Failed to fetch conversations.';
           setError(message);
@@ -71,6 +69,40 @@ export default function MessagesPage() {
     };
     fetchConversations();
   }, [status, currentUserId]);
+
+  // --- Categorize Conversations Dynamically using useMemo --- 
+  const categorizedConversations = useMemo(() => {
+    const inbox: Conversation[] = [];
+    const incoming: Conversation[] = [];
+    if (!currentUserId) return { inbox, incoming };
+
+    allConversations.forEach(conv => {
+        if (conv.approved) {
+            inbox.push(conv);
+        } else if (conv.initiatorId !== currentUserId) {
+            // Only show unapproved if I am the recipient
+            incoming.push(conv);
+        } else if (conv.initiatorId === currentUserId) {
+            // If I started it and it's not approved, put it in inbox too
+            inbox.push(conv);
+        }
+    });
+    // Sort inbox maybe? (e.g., by lastMessageTimestamp desc)
+    inbox.sort((a, b) => {
+        const dateA = a.lastMessageTimestamp ? parseISO(a.lastMessageTimestamp).getTime() : 0;
+        const dateB = b.lastMessageTimestamp ? parseISO(b.lastMessageTimestamp).getTime() : 0;
+        return dateB - dateA; // Descending
+    });
+    // Sort incoming?
+    incoming.sort((a, b) => {
+        const dateA = a.createdAt ? parseISO(a.createdAt).getTime() : 0;
+        const dateB = b.createdAt ? parseISO(b.createdAt).getTime() : 0;
+        return dateB - dateA; // Descending
+    });
+
+    return { inbox, incoming };
+
+  }, [allConversations, currentUserId]);
 
   // --- Fetch Messages for Selected Conversation --- 
   useEffect(() => {
@@ -91,6 +123,7 @@ export default function MessagesPage() {
         const data = await response.json();
         console.log(`MessagesPage: Fetched ${data.messages.length} messages.`);
         setMessages(data.messages || []);
+        // TODO: Mark conversation as read here?
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to fetch messages.';
         setError(message);
@@ -145,6 +178,10 @@ export default function MessagesPage() {
         throw new Error(result.message || 'Failed to send message');
       }
       console.log("MessagesPage: Message sent successfully via API.");
+      // Refetch conversations to update last message snippet/timestamp
+      const convResponse = await fetch('/api/conversations');
+      const convData = await convResponse.json();
+      if (convResponse.ok) setAllConversations(convData.conversations || []);
       
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to send message.';
@@ -159,7 +196,7 @@ export default function MessagesPage() {
 
   // --- Handle Approving Conversation --- 
   const handleApprove = async (conversationId: string) => {
-    setIsApproving(true);
+    setIsApproving(conversationId); // Set which one is being approved
     setError(null);
     try {
       console.log(`MessagesPage: Approving conversation ${conversationId}...`);
@@ -171,18 +208,19 @@ export default function MessagesPage() {
         throw new Error(result.message || 'Failed to approve conversation');
       }
        console.log(`MessagesPage: Conversation ${conversationId} approved via API.`);
-      setConversations(prev => {
-          const approvedConv = prev.incoming.find(c => c.id === conversationId);
-          if (!approvedConv) return prev;
-          return {
-              incoming: prev.incoming.filter(c => c.id !== conversationId),
-              inbox: [ { ...approvedConv, approved: true }, ...prev.inbox]
-          };
-      });
-      toast({ title: "Conversation Approved", description: "You can now chat freely." });
-      const approvedConv = conversations.incoming.find(c => c.id === conversationId);
-      if(approvedConv) setSelectedConversation({ ...approvedConv, approved: true }); 
-      setActiveTab('inbox');
+      // Update UI: Find the conversation and mark it as approved locally
+      const approvedConv = allConversations.find(c => c.id === conversationId);
+      if (approvedConv) {
+           setAllConversations(prev => 
+               prev.map(c => c.id === conversationId ? { ...c, approved: true } : c)
+           );
+           setSelectedConversation({ ...approvedConv, approved: true }); // Select it
+           setActiveTab('inbox'); // Switch to inbox tab
+           toast({ title: "Conversation Approved", description: "Moved to Inbox." });
+      } else {
+          toast({ title: "Approval Completed", description: "Conversation approved, refresh may be needed." }); // Fallback
+          // Refetch maybe?
+      }
 
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to approve conversation.';
@@ -190,7 +228,7 @@ export default function MessagesPage() {
       console.error("Error approving conversation:", err);
       toast({ title: "Approval Error", description: message, variant: "destructive" });
     } finally {
-      setIsApproving(false);
+      setIsApproving(null); // Clear approving state
     }
   };
 
@@ -201,11 +239,9 @@ export default function MessagesPage() {
       return otherId ? conversation.participantsData[otherId] || { name: 'User', avatar: null } : { name: 'Unknown', avatar: null };
   };
   
-  // --- Helper to format timestamp strings ---
   const formatTimestamp = (timestamp: string | null): string => {
      if (!timestamp) return '';
      try {
-         // Parse the ISO string and then format
          return formatDistanceToNow(parseISO(timestamp), { addSuffix: true });
      } catch (e) {
          console.error("Error formatting timestamp:", e);
@@ -213,7 +249,6 @@ export default function MessagesPage() {
      }
   }
 
-  // --- Render Skeletons --- 
   const renderConversationSkeleton = () => (
       <div className="flex items-center space-x-3 p-3 border-b">
           <Skeleton className="h-10 w-10 rounded-full" />
@@ -234,55 +269,57 @@ export default function MessagesPage() {
   );
 
   // --- Render Conversation List Item --- 
-  const renderConversationItem = (conv: Conversation, isIncoming: boolean) => {
+  const renderConversationItem = (conv: Conversation, isIncomingView: boolean) => {
       const otherParticipant = getOtherParticipant(conv);
       const isSelected = selectedConversation?.id === conv.id;
-      const hasUnread = false; // Placeholder
+      // TODO: Add unread indicator logic
+      const hasUnread = false; 
 
       return (
           <div
               key={conv.id}
-              onClick={() => { if(!isIncoming) setSelectedConversation(conv); }}
+              // Allow selecting conversations even if unapproved (from buyer's inbox)
+              onClick={() => { setSelectedConversation(conv); }}
               className={cn(
                   "flex items-start space-x-3 p-3 border-b cursor-pointer transition-colors",
-                  isSelected && !isIncoming ? "bg-muted" : "hover:bg-muted/50",
-                  isIncoming && "opacity-80 hover:opacity-100"
+                  isSelected ? "bg-muted" : "hover:bg-muted/50",
+                  isIncomingView && "opacity-80 hover:opacity-100" // Style incoming slightly
               )}
           >
               <Avatar className="h-10 w-10 border">
-                  {/* FIX: Provide default string for alt prop */}
                   <AvatarImage src={otherParticipant.avatar ?? undefined} alt={otherParticipant.name ?? 'User avatar'} /> 
                   <AvatarFallback>{otherParticipant.name?.charAt(0)?.toUpperCase() || 'U'}</AvatarFallback>
               </Avatar>
               <div className="flex-1 overflow-hidden">
                   <div className="flex justify-between items-center">
-                       <p className={cn("text-sm font-medium truncate", hasUnread && !isIncoming && "font-bold")}>
+                       <p className={cn("text-sm font-medium truncate", hasUnread && "font-bold")}>
                            {otherParticipant.name}
                        </p>
-                       {/* FIX: Format timestamp correctly */}
                        <p className="text-xs text-muted-foreground whitespace-nowrap ml-2">
                             {formatTimestamp(conv.lastMessageTimestamp)}
                        </p>
                   </div>
-                   <p className={cn("text-xs text-muted-foreground truncate", hasUnread && !isIncoming && "text-foreground")}>
+                   <p className={cn("text-xs text-muted-foreground truncate", hasUnread && "text-foreground")}>
                        {conv.lastMessageSnippet || 'No messages yet'}
                    </p>
                    <p className="text-xs text-muted-foreground truncate italic">
                        Item: {conv.itemTitle || 'Unknown Item'}
                    </p>
               </div>
-              {isIncoming && (
+              {/* Show Approve button only in Incoming tab */} 
+              {isIncomingView && (
                   <Button 
                       size="sm" 
                       variant="outline" 
                       onClick={(e) => { e.stopPropagation(); handleApprove(conv.id); }}
-                      disabled={isApproving}
+                      // Disable button if this specific one is being approved
+                      disabled={isApproving === conv.id} 
                       className="ml-auto self-center"
                   >
-                     {isApproving ? <Icons.spinner className="h-4 w-4 animate-spin" /> : "Approve"}
+                     {isApproving === conv.id ? <Icons.spinner className="h-4 w-4 animate-spin" /> : "Approve"}
                   </Button>
               )}
-               {hasUnread && !isIncoming && (
+               {hasUnread && !isIncomingView && (
                     <Badge variant="destructive" className="flex-shrink-0 h-2 w-2 p-0 rounded-full self-center ml-2"></Badge>
                )}
           </div>
@@ -294,10 +331,13 @@ export default function MessagesPage() {
       if (!selectedConversation) {
            return (
                <div className="flex-1 flex items-center justify-center text-muted-foreground">
-                   <p>Select a conversation from the inbox to start chatting.</p>
+                   <p>Select a conversation to start chatting.</p>
                </div>
            );
       }
+      // Check if the selected conversation is approved OR if the current user initiated it
+      const canChat = selectedConversation.approved || selectedConversation.initiatorId === currentUserId;
+
       if (isLoadingMessages) {
           return (
               <div className="flex-1 flex flex-col justify-between p-4">
@@ -315,7 +355,6 @@ export default function MessagesPage() {
           <div className="flex-1 flex flex-col border-l">
               <div className="p-3 border-b flex items-center space-x-3">
                   <Avatar className="h-9 w-9 border">
-                       {/* FIX: Provide default string for alt prop */}
                       <AvatarImage src={otherParticipant.avatar ?? undefined} alt={otherParticipant.name ?? 'User avatar'} />
                       <AvatarFallback>{otherParticipant.name?.charAt(0)?.toUpperCase() || 'U'}</AvatarFallback>
                   </Avatar>
@@ -333,7 +372,6 @@ export default function MessagesPage() {
                                    isSender ? "bg-primary text-primary-foreground" : "bg-muted"
                                )}>
                                    <p>{msg.text}</p>
-                                   {/* FIX: Format timestamp correctly */}
                                    <p className={cn("text-xs mt-1", isSender ? "text-primary-foreground/70" : "text-muted-foreground/70", "text-right")}>
                                        {formatTimestamp(msg.timestamp)}
                                    </p>
@@ -342,23 +380,30 @@ export default function MessagesPage() {
                       );
                   })}
               </div>
-               <div className="border-t p-3 bg-background">
-                   <form onSubmit={handleSendMessage} className="flex items-center space-x-2">
-                       <Textarea
-                           placeholder="Type your message..."
-                           value={newMessage}
-                           onChange={(e) => setNewMessage(e.target.value)}
-                           rows={1}
-                           className="flex-1 resize-none max-h-24 overflow-y-auto p-2 text-sm"
-                           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) handleSendMessage(e); }}
-                           disabled={isSending}
-                       />
-                       <Button type="submit" size="icon" disabled={!newMessage.trim() || isSending}>
-                          {isSending ? <Icons.spinner className="h-4 w-4 animate-spin" /> : <Icons.send className="h-4 w-4" />}
-                           <span className="sr-only">Send</span>
-                       </Button>
-                   </form>
-               </div>
+              {/* Conditionally render input based on approval status */} 
+               {canChat ? (
+                   <div className="border-t p-3 bg-background">
+                       <form onSubmit={handleSendMessage} className="flex items-center space-x-2">
+                           <Textarea
+                               placeholder="Type your message..."
+                               value={newMessage}
+                               onChange={(e) => setNewMessage(e.target.value)}
+                               rows={1}
+                               className="flex-1 resize-none max-h-24 overflow-y-auto p-2 text-sm"
+                               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) handleSendMessage(e); }}
+                               disabled={isSending}
+                           />
+                           <Button type="submit" size="icon" disabled={!newMessage.trim() || isSending}>
+                              {isSending ? <Icons.spinner className="h-4 w-4 animate-spin" /> : <Icons.send className="h-4 w-4" />}
+                               <span className="sr-only">Send</span>
+                           </Button>
+                       </form>
+                   </div>
+               ) : (
+                  <div className="border-t p-4 bg-muted text-center text-sm text-muted-foreground">
+                      Waiting for seller to approve the message request.
+                  </div>
+               )}
           </div>
       );
   };
@@ -377,7 +422,7 @@ export default function MessagesPage() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-theme(spacing.16))] border-t"> 
+    <div className="flex h-[calc(100vh-theme(spacing.16))] border-t">
       <div className="w-full md:w-1/3 lg:w-1/4 border-r flex flex-col">
           <div className="flex border-b">
               <Button 
@@ -385,14 +430,14 @@ export default function MessagesPage() {
                   className={cn("flex-1 justify-center rounded-none", activeTab === 'inbox' && "bg-muted font-semibold")}
                   onClick={() => setActiveTab('inbox')}
               >
-                  Inbox ({conversations.inbox.length})
+                  Inbox ({categorizedConversations.inbox.length}) 
               </Button>
               <Button 
                   variant="ghost" 
                   className={cn("flex-1 justify-center rounded-none border-l", activeTab === 'incoming' && "bg-muted font-semibold")}
                   onClick={() => setActiveTab('incoming')}
               >
-                 Incoming ({conversations.incoming.length})
+                 Incoming ({categorizedConversations.incoming.length})
               </Button>
           </div>
           <div className="flex-1 overflow-y-auto">
@@ -401,17 +446,17 @@ export default function MessagesPage() {
                       {Array.from({ length: 5 }).map((_, i) => renderConversationSkeleton())}
                    </div>
                )}
-                {!isLoadingConversations && activeTab === 'inbox' && conversations.inbox.length === 0 && (
+                {!isLoadingConversations && activeTab === 'inbox' && categorizedConversations.inbox.length === 0 && (
                     <p className="p-4 text-center text-sm text-muted-foreground">Your inbox is empty.</p>
                 )}
-                {!isLoadingConversations && activeTab === 'incoming' && conversations.incoming.length === 0 && (
+                {!isLoadingConversations && activeTab === 'incoming' && categorizedConversations.incoming.length === 0 && (
                     <p className="p-4 text-center text-sm text-muted-foreground">No incoming message requests.</p>
                 )}
                 {!isLoadingConversations && activeTab === 'inbox' && (
-                    conversations.inbox.map(conv => renderConversationItem(conv, false))
+                    categorizedConversations.inbox.map(conv => renderConversationItem(conv, false))
                 )}
                 {!isLoadingConversations && activeTab === 'incoming' && (
-                    conversations.incoming.map(conv => renderConversationItem(conv, true))
+                    categorizedConversations.incoming.map(conv => renderConversationItem(conv, true))
                 )}
           </div>
       </div>

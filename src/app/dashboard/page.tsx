@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef } from "react"; // Added useRef
+import { useEffect, useState, useRef, useMemo } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,17 +24,18 @@ import {
     SheetHeader,
     SheetTitle,
     SheetTrigger,
-    SheetFooter, // Import SheetFooter
-    SheetClose // Import SheetClose
+    SheetFooter,
+    SheetClose
 } from "@/components/ui/sheet";
-import { Textarea } from "@/components/ui/textarea"; // Import Textarea
-import { Label } from "@/components/ui/label"; // Import Label
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { ProfileContent } from "@/components/profile-content";
 import { NotificationsContent } from "@/components/notifications-content";
 import { useRouter } from 'next/navigation';
 import { useNotifications } from "@/components/providers/notification-provider"; 
-import { useToast } from "@/hooks/use-toast"; // Import useToast
+import { useToast } from "@/hooks/use-toast";
 
 // --- Main Content Component --- 
 function DashboardContent() {
@@ -47,11 +48,12 @@ function DashboardContent() {
   const isMobile = useIsMobile();
   const [isProfileSheetOpen, setIsProfileSheetOpen] = useState(false);
   const [isNotificationsSheetOpen, setIsNotificationsSheetOpen] = useState(false);
-  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false); // State for mobile nav drawer
-  const [isMessageSheetOpen, setIsMessageSheetOpen] = useState(false); // State for message drawer
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+  const [isMessageSheetOpen, setIsMessageSheetOpen] = useState(false);
   const [messageRecipient, setMessageRecipient] = useState<{ sellerId: string; itemId: string; itemTitle: string; itemImageUrl: string | null } | null>(null);
   const [messageText, setMessageText] = useState("");
   const [isSendingMessage, setIsSendingMessage] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
 
   const { unreadCount, markAllAsRead } = useNotifications();
 
@@ -65,7 +67,6 @@ function DashboardContent() {
       setIsLoadingItems(true);
       setError(null);
       const currentUserId = session?.user?.id;
-      // Fetch items *excluding* the user's own
       const apiUrl = currentUserId ? `/api/items?userId=${currentUserId}` : '/api/items'; 
       console.log(`Fetching items from: ${apiUrl}`);
       try {
@@ -74,7 +75,7 @@ function DashboardContent() {
           throw new Error(`HTTP error! status: ${response.status}`);
         }
         const data = await response.json();
-        setItems(data); 
+        setItems(data || []);
       } catch (err) {
          let message = "Failed to fetch items.";
           if (err instanceof Error) { message = err.message; }
@@ -93,27 +94,30 @@ function DashboardContent() {
     }
   }, [session?.user?.id, status]); 
 
+  const filteredItems = useMemo(() => {
+      if (!searchTerm) {
+          return items;
+      }
+      return items.filter(item => 
+          item.title.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+  }, [items, searchTerm]);
+
   const handleOpenNotifications = () => {
       if (unreadCount > 0) {
           markAllAsRead(); 
       }
-      if (isMobile) {
-          router.push('/notifications');
-      } else {
-          setIsNotificationsSheetOpen(true);
-      }
+      setIsNotificationsSheetOpen(true);
   };
 
-  // --- Message Seller Handlers ---
   const handleOpenMessageSheet = (sellerId: string, itemId: string, itemTitle: string, itemImageUrl: string | null) => {
       setMessageRecipient({ sellerId, itemId, itemTitle, itemImageUrl });
-      setMessageText(""); // Clear previous message
+      setMessageText(""); 
       setIsMessageSheetOpen(true);
   };
 
   const handleSendMessage = async () => {
       if (!messageRecipient || !messageText.trim() || !session?.user?.id) return;
-
       setIsSendingMessage(true);
       try {
           const response = await fetch('/api/messages', {
@@ -132,7 +136,7 @@ function DashboardContent() {
               throw new Error(result.message || 'Failed to send message');
           }
           toast({ title: "Message Sent", description: "Your message has been sent to the seller." });
-          setIsMessageSheetOpen(false); // Close sheet on success
+          setIsMessageSheetOpen(false); 
           setMessageText("");
           setMessageRecipient(null);
       } catch (err) {
@@ -144,92 +148,120 @@ function DashboardContent() {
       }
   };
 
-  // --- Render Header --- 
   const renderHeader = () => (
-     <div className="flex justify-between items-center mb-6 border-b pb-4">
-        <Link href="/dashboard" className="text-2xl md:text-3xl font-bold">Marketplace</Link>
+     <div className="flex justify-between items-center mb-6 border-b pb-4 h-16 px-4 md:px-6 sticky top-0 bg-background z-10">
+        <Link href="/dashboard" className="text-xl md:text-2xl font-bold">Marketplace</Link>
         
-        {/* --- Desktop Icons --- */} 
-        <div className="hidden md:flex items-center gap-1"> 
+        <div className="flex items-center gap-1 md:gap-2">
             {session?.user && (
-                 <TooltipProvider><Tooltip><TooltipTrigger asChild>
-                     <Link href="/dashboard/my-listings" passHref><Button variant="outline" size="default">My Listings</Button></Link>
-                 </TooltipTrigger><TooltipContent><p>View My Listings</p></TooltipContent></Tooltip></TooltipProvider>
-            )}
-             <TooltipProvider><Tooltip><TooltipTrigger asChild>
-                 <Link href="/sell" passHref><Button size="default"><Icons.plus className="mr-1 h-4 w-4" /> Sell</Button></Link>
-             </TooltipTrigger><TooltipContent><p>Sell an Item</p></TooltipContent></Tooltip></TooltipProvider>
-
-             {session?.user && (
-                 <TooltipProvider><Tooltip><TooltipTrigger asChild>
-                     <Sheet open={isProfileSheetOpen} onOpenChange={setIsProfileSheetOpen}>
-                         <SheetTrigger asChild><Button variant="ghost" size="icon"><Icons.user className="h-5 w-5" /></Button></SheetTrigger>
-                         <SheetContent className="w-[400px] sm:w-[540px] p-0"><SheetHeader className="p-6 border-b"><SheetTitle>My Profile</SheetTitle><SheetDescription>View profile.</SheetDescription></SheetHeader><div className="overflow-y-auto p-6"><ProfileContent /></div></SheetContent>
-                     </Sheet>
-                 </TooltipTrigger><TooltipContent><p>Profile</p></TooltipContent></Tooltip></TooltipProvider>
-             )}
-             {session?.user && (
-                 <TooltipProvider><Tooltip><TooltipTrigger asChild>
-                     <Link href="/messages" passHref><Button variant="ghost" size="icon"><Icons.mail className="h-5 w-5" /></Button></Link>
-                 </TooltipTrigger><TooltipContent><p>Messages</p></TooltipContent></Tooltip></TooltipProvider>
-             )}
-            {session?.user && (
-                <TooltipProvider><Tooltip><TooltipTrigger asChild>
-                    <Button variant="ghost" size="icon" className="relative" onClick={handleOpenNotifications}>
-                        <Icons.bell className="h-5 w-5" />
-                        {unreadCount > 0 && <Badge variant="destructive" className="absolute -top-1 -right-1 h-4 w-4 justify-center rounded-full p-0.5 text-xs">{unreadCount > 9 ? '9+' : unreadCount}</Badge>}
-                    </Button>
-                 </TooltipTrigger><TooltipContent><p>Notifications</p></TooltipContent></Tooltip></TooltipProvider>
-            )}
-             {session?.user && (
-                 <TooltipProvider><Tooltip><TooltipTrigger asChild>
-                    <Button variant="ghost" size="icon" onClick={handleLogout}><Icons.logOut className="h-5 w-5" /><span className="sr-only">Logout</span></Button>
-                 </TooltipTrigger><TooltipContent><p>Logout</p></TooltipContent></Tooltip></TooltipProvider>
-             )}
-             {!session?.user && status !== 'loading' && (
-                 <div className="space-x-2">
-                     <Link href="/auth" passHref><Button variant="outline">Login</Button></Link>
-                     <Link href="/auth/register" passHref><Button>Register</Button></Link>
-                 </div>
-             )}
-        </div>
-        
-        {/* --- Mobile Nav Trigger (Hamburger Menu) --- */} 
-        <div className="md:hidden">
-            <Sheet open={isMobileNavOpen} onOpenChange={setIsMobileNavOpen}>
-                 <SheetTrigger asChild>
-                     <Button variant="ghost" size="icon">
-                        <Icons.menu className="h-6 w-6" /> 
-                        <span className="sr-only">Open Menu</span>
+                <div className="flex items-center gap-1 md:hidden"> 
+                    <Link href="/messages" passHref>
+                       <Button variant="ghost" size="icon"><Icons.mail className="h-5 w-5" /></Button>
+                    </Link>
+                    <Button variant="ghost" size="icon" className="relative" onClick={() => router.push('/notifications')}>
+                         <Icons.bell className="h-5 w-5" />
+                         {unreadCount > 0 && <Badge variant="destructive" className="absolute -top-1 -right-1 h-4 w-4 justify-center rounded-full p-0.5 text-xs">{unreadCount > 9 ? '9+' : unreadCount}</Badge>}
                      </Button>
-                </SheetTrigger>
-                <SheetContent side="right" className="w-[250px]">
-                     <SheetHeader className="border-b pb-4 mb-4">
-                         <SheetTitle>Menu</SheetTitle>
-                     </SheetHeader>
-                     <div className="flex flex-col gap-3">
-                         {session?.user ? (
-                             <>
-                                 <Link href="/dashboard" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">Dashboard</Button></Link>
-                                 <Link href="/sell" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">Sell Item</Button></Link>
-                                 <Link href="/dashboard/my-listings" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">My Listings</Button></Link>
-                                 <Link href="/messages" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">Messages</Button></Link>
-                                 <Link href="/notifications" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">Notifications {unreadCount > 0 && <Badge variant="destructive" className="ml-auto">{unreadCount}</Badge>}</Button></Link>
-                                 <Link href="/profile" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">Profile</Button></Link>
-                                 <Button variant="ghost" onClick={handleLogout} className="w-full justify-start text-red-600 hover:text-red-700">Logout</Button>
-                             </>
-                         ) : (
-                             <>
-                                 <Link href="/auth" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">Login</Button></Link>
-                                 <Link href="/auth/register" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">Register</Button></Link>
-                             </>
-                         )}
+                </div>
+             )}
+
+            <div className="hidden md:flex items-center gap-1"> 
+                {/* ADDED My Orders and My Earnings */} 
+                 {session?.user && (
+                     <TooltipProvider><Tooltip><TooltipTrigger asChild>
+                         <Link href="/dashboard/my-orders" passHref><Button variant="link" size="sm">My Orders</Button></Link>
+                     </TooltipTrigger><TooltipContent><p>View your purchases</p></TooltipContent></Tooltip></TooltipProvider>
+                 )}
+                 {session?.user && (
+                     <TooltipProvider><Tooltip><TooltipTrigger asChild>
+                         <Link href="/dashboard/my-earnings" passHref><Button variant="link" size="sm">My Earnings</Button></Link>
+                     </TooltipTrigger><TooltipContent><p>View your seller earnings</p></TooltipContent></Tooltip></TooltipProvider>
+                 )}
+                 {/* Separator */} 
+                 {session?.user && <div className="h-6 w-px bg-border mx-2"></div>}
+                
+                 {session?.user && (
+                    <TooltipProvider><Tooltip><TooltipTrigger asChild>
+                        <Link href="/dashboard/my-listings" passHref><Button variant="outline" size="default">My Listings</Button></Link>
+                    </TooltipTrigger><TooltipContent><p>View My Listings</p></TooltipContent></Tooltip></TooltipProvider>
+                 )}
+                 <TooltipProvider><Tooltip><TooltipTrigger asChild>
+                    <Link href="/sell" passHref><Button size="default"><Icons.plus className="mr-1 h-4 w-4" /> Sell</Button></Link>
+                 </TooltipTrigger><TooltipContent><p>Sell an Item</p></TooltipContent></Tooltip></TooltipProvider>
+
+                 {session?.user && (
+                     <TooltipProvider><Tooltip><TooltipTrigger asChild>
+                         <Sheet open={isProfileSheetOpen} onOpenChange={setIsProfileSheetOpen}>
+                             <SheetTrigger asChild><Button variant="ghost" size="icon"><Icons.user className="h-5 w-5" /></Button></SheetTrigger>
+                             <SheetContent className="w-[400px] sm:w-[540px] p-0 flex flex-col">
+                                <SheetHeader className="p-6 border-b sticky top-0 bg-background z-10"><SheetTitle>My Profile</SheetTitle><SheetDescription>View profile.</SheetDescription></SheetHeader>
+                                <div className="flex-1 overflow-y-auto p-6"><ProfileContent /></div>
+                             </SheetContent>
+                         </Sheet>
+                     </TooltipTrigger><TooltipContent><p>Profile</p></TooltipContent></Tooltip></TooltipProvider>
+                 )}
+                 {session?.user && (
+                     <TooltipProvider><Tooltip><TooltipTrigger asChild>
+                         <Link href="/messages" passHref><Button variant="ghost" size="icon"><Icons.mail className="h-5 w-5" /></Button></Link>
+                     </TooltipTrigger><TooltipContent><p>Messages</p></TooltipContent></Tooltip></TooltipProvider>
+                 )}
+                 {session?.user && (
+                    <TooltipProvider><Tooltip><TooltipTrigger asChild>
+                        <Button variant="ghost" size="icon" className="relative" onClick={handleOpenNotifications}>
+                            <Icons.bell className="h-5 w-5" />
+                            {unreadCount > 0 && <Badge variant="destructive" className="absolute -top-1 -right-1 h-4 w-4 justify-center rounded-full p-0.5 text-xs">{unreadCount > 9 ? '9+' : unreadCount}</Badge>}
+                        </Button>
+                     </TooltipTrigger><TooltipContent><p>Notifications</p></TooltipContent></Tooltip></TooltipProvider>
+                 )}
+                 {session?.user && (
+                     <TooltipProvider><Tooltip><TooltipTrigger asChild>
+                        <Button variant="ghost" size="icon" onClick={handleLogout}><Icons.logOut className="h-5 w-5" /><span className="sr-only">Logout</span></Button>
+                     </TooltipTrigger><TooltipContent><p>Logout</p></TooltipContent></Tooltip></TooltipProvider>
+                 )}
+                 {!session?.user && status !== 'loading' && (
+                     <div className="space-x-2">
+                         <Link href="/auth" passHref><Button variant="outline">Login</Button></Link>
+                         <Link href="/auth/register" passHref><Button>Register</Button></Link>
                      </div>
-                </SheetContent>
-             </Sheet>
+                 )}
+            </div>
+            
+            <div className="md:hidden">
+                <Sheet open={isMobileNavOpen} onOpenChange={setIsMobileNavOpen}>
+                    <SheetTrigger asChild>
+                         <Button variant="ghost" size="icon">
+                            <Icons.menu className="h-6 w-6" /> 
+                            <span className="sr-only">Open Menu</span>
+                         </Button>
+                    </SheetTrigger>
+                    <SheetContent side="right" className="w-[250px]">
+                         <SheetHeader className="border-b pb-4 mb-4">
+                             <SheetTitle>Menu</SheetTitle>
+                         </SheetHeader>
+                         <div className="flex flex-col gap-3">
+                             {session?.user ? (
+                                 <>
+                                     <Link href="/dashboard" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">Dashboard</Button></Link>
+                                     <Link href="/sell" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">Sell Item</Button></Link>
+                                     <Link href="/dashboard/my-listings" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">My Listings</Button></Link>
+                                     {/* ADDED My Orders/Earnings */} 
+                                     <Link href="/dashboard/my-orders" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">My Orders</Button></Link>
+                                     <Link href="/dashboard/my-earnings" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">My Earnings</Button></Link>
+                                     <Link href="/profile" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">Profile</Button></Link>
+                                     <Button variant="ghost" onClick={handleLogout} className="w-full justify-start text-red-600 hover:text-red-700">Logout</Button>
+                                 </>
+                             ) : (
+                                 <>
+                                     <Link href="/auth" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">Login</Button></Link>
+                                     <Link href="/auth/register" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">Sign Up</Button></Link>
+                                 </>
+                             )}
+                         </div>
+                    </SheetContent>
+                 </Sheet>
+            </div>
         </div>
 
-        {/* Desktop Sheet for Notifications (Hidden but controlled by state) */} 
         {!isMobile && (
             <Sheet open={isNotificationsSheetOpen} onOpenChange={setIsNotificationsSheetOpen}>
                  <SheetContent className="w-[400px] sm:w-[500px] flex flex-col p-0">
@@ -239,7 +271,6 @@ function DashboardContent() {
             </Sheet>
         )}
 
-        {/* Message Seller Sheet (used by item cards) */} 
          <Sheet open={isMessageSheetOpen} onOpenChange={setIsMessageSheetOpen}>
              <SheetContent>
                  <SheetHeader>
@@ -274,9 +305,8 @@ function DashboardContent() {
   );
 
   const renderItemCard = (item: Item) => (
-    <Card key={item.id} className="flex flex-col overflow-hidden"> {/* Added overflow-hidden */} 
-      <CardHeader className="p-0"> {/* Remove padding */} 
-        {/* Link wrapping the image and title */} 
+    <Card key={item.id} className="flex flex-col overflow-hidden">
+      <CardHeader className="p-0">
         <Link href={`/item/${item.id}`} passHref className="block">
              {item.mediaUrls && item.mediaUrls.length > 0 ? (
                <img src={item.mediaUrls[0]} alt={item.title} className="aspect-video w-full object-cover" />
@@ -285,26 +315,24 @@ function DashboardContent() {
              )}
          </Link>
       </CardHeader>
-      <CardContent className="flex-grow p-4 space-y-1"> {/* Add padding back */} 
+      <CardContent className="flex-grow p-4 space-y-1">
          <Link href={`/item/${item.id}`} passHref><CardTitle className="text-lg hover:underline">{item.title}</CardTitle></Link>
          <CardDescription className="text-sm text-muted-foreground">{item.location}</CardDescription>
          <p className="pt-1 text-lg font-semibold">KES {item.price.toLocaleString()}</p>
           <Badge
-            variant={item.status === 'sold' ? 'destructive' : item.status === 'available' ? 'default' : 'secondary'} // Adjusted variants
+            variant={item.status === 'sold' ? 'destructive' : item.status === 'available' ? 'default' : 'secondary'}
             className="mt-1"
           >
             {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
           </Badge>
       </CardContent>
-      <CardFooter className="p-4 flex flex-col gap-2"> {/* Add padding back */} 
-        {/* FIX: Link View Details button */} 
+      <CardFooter className="p-4 flex flex-col gap-2">
          <Link href={`/item/${item.id}`} passHref className="w-full">
              <Button variant="outline" className="w-full">View Details</Button>
          </Link>
         {session?.user && session.user.id !== item.sellerId ? (
-             // FIX: Use onClick to open message sheet
              <Button 
-                 className="w-full" 
+                 className="w-full focus-visible:outline-none focus-visible:ring-0" 
                  onClick={() => handleOpenMessageSheet(item.sellerId, item.id, item.title, item.mediaUrls?.[0] ?? null)}
              >
                  <Icons.mail className="mr-2 h-4 w-4" /> Message Seller
@@ -349,7 +377,14 @@ function DashboardContent() {
     return (
         <div className="container mx-auto p-4 md:p-6">
             {renderHeader()} 
-            {/* FIX: Adjust grid columns for mobile/tablet */}
+            <div className="mb-4">
+                <Input 
+                    placeholder="Search items by name..." 
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="max-w-sm"
+                />
+            </div>
              <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                 {renderLoadingSkeletons()}
             </div>
@@ -360,12 +395,25 @@ function DashboardContent() {
   return (
     <div className="container mx-auto p-4 md:p-6">
       {renderHeader()}
+       <div className="mb-4">
+            <Input 
+                placeholder="Search items by name..." 
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="max-w-sm"
+            />
+        </div>
       {error && (
         <div className="text-center text-red-600 my-6">
           <p>Error loading items: {error}</p>
         </div>
       )}
-      {!error && items.length === 0 && status !== 'loading' && (
+      {!error && !isLoadingItems && searchTerm && filteredItems.length === 0 && (
+           <div className="text-center text-muted-foreground mt-10">
+                <p>No items found matching "{searchTerm}".</p>
+           </div>
+      )}
+      {!error && !isLoadingItems && !searchTerm && items.length === 0 && status !== 'loading' && (
         <div className="text-center text-muted-foreground mt-10">
            {session?.user ? (
               <p>No items from other sellers available yet.</p>
@@ -385,10 +433,9 @@ function DashboardContent() {
           )}
         </div>
        )}
-        {!error && items.length > 0 && (
-             // FIX: Adjust grid columns for mobile/tablet
+        {!error && filteredItems.length > 0 && (
             <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                {items.map(renderItemCard)}
+                {filteredItems.map(renderItemCard)}
             </div>
         )}
     </div>
@@ -396,6 +443,5 @@ function DashboardContent() {
 }
 
 export default function DashboardPage() {
-    // Provider is now in RootLayout, just render the content
     return <DashboardContent />;
 }

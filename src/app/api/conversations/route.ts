@@ -4,11 +4,27 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from '../auth/[...nextauth]/route'; // Adjust path as needed
 import { adminDb } from '@/lib/firebase-admin';
 import { Conversation } from '@/lib/types'; // Assuming Conversation type exists
+import { Timestamp } from 'firebase-admin/firestore'; // Import Timestamp for conversion
+
+// Helper to convert timestamps before sending
+const safeTimestampToString = (timestamp: any): string | null => {
+    if (timestamp instanceof Timestamp) {
+        try { return timestamp.toDate().toISOString(); } catch { return null; }
+    }
+    if (timestamp instanceof Date) {
+         try { return timestamp.toISOString(); } catch { return null; }
+    }
+    if (typeof timestamp === 'string') {
+         try {
+             if (new Date(timestamp).toISOString() === timestamp) return timestamp;
+         } catch { /* ignore */ }
+    }
+    return null;
+};
 
 export async function GET(req: Request) {
     console.log("--- API GET /api/conversations START ---");
 
-    // --- Authentication & DB Check --- 
     if (!adminDb) {
         console.error("API Conversations GET Error: Firebase Admin DB is not initialized.");
         return NextResponse.json({ message: 'Server configuration error.' }, { status: 500 });
@@ -22,53 +38,41 @@ export async function GET(req: Request) {
     console.log(`API Conversations GET: Authenticated as user ${currentUserId}`);
 
     try {
-        // --- Query Conversations --- 
         const conversationsRef = adminDb.collection('conversations');
-        // Query where the current user is a participant
         const conversationsQuery = conversationsRef
                                     .where('participantIds', 'array-contains', currentUserId)
-                                    .orderBy('lastMessageTimestamp', 'desc'); // Order by most recent activity
+                                    .orderBy('lastMessageTimestamp', 'desc'); 
 
         const snapshot = await conversationsQuery.get();
         console.log(`API Conversations GET: Found ${snapshot.size} total conversations involving user ${currentUserId}`);
 
-        // --- Process and Categorize --- 
-        const incoming: Conversation[] = [];
-        const inbox: Conversation[] = [];
-
+        // --- Process ALL conversations, don't categorize here --- 
+        const allConversations: Conversation[] = [];
         snapshot.forEach(doc => {
-            const data = doc.data() as Omit<Conversation, 'id'>; // Type cast
-            const conversation: Conversation = { ...data, id: doc.id }; // Add the document ID
-
-            // Convert Firestore Timestamps before sending response
-            const safeTimestampToString = (timestamp: any): string | null => {
-                if (timestamp && typeof timestamp.toDate === 'function') {
-                    return timestamp.toDate().toISOString();
-                }
-                return null;
+            const data = doc.data() as Omit<Conversation, 'id'>;
+            
+            // Convert timestamps before sending
+            const conversation: Conversation = {
+                ...data,
+                id: doc.id,
+                createdAt: safeTimestampToString(data.createdAt),
+                lastMessageTimestamp: safeTimestampToString(data.lastMessageTimestamp),
+                approvedAt: safeTimestampToString(data.approvedAt),
+                // Convert readStatus timestamps if they exist
+                readStatus: data.readStatus ? Object.entries(data.readStatus).reduce((acc, [userId, ts]) => {
+                    acc[userId] = safeTimestampToString(ts);
+                    return acc;
+                }, {} as { [userId: string]: string | null }) : undefined,
+                 // Ensure participantsData is included if present
+                 participantsData: data.participantsData, 
             };
-            conversation.createdAt = safeTimestampToString(conversation.createdAt) as any; // Adjust types as needed
-            conversation.lastMessageTimestamp = safeTimestampToString(conversation.lastMessageTimestamp) as any;
-
-            // Categorize based on 'approved' status and initiator
-            if (conversation.approved) {
-                inbox.push(conversation);
-            } else if (conversation.initiatorId !== currentUserId) {
-                // It's an incoming request if not approved AND user didn't initiate it
-                incoming.push(conversation);
-            }
-            // Ignore conversations initiated by the user that are not yet approved
+            allConversations.push(conversation);
         });
 
-        console.log(`API Conversations GET: Categorized into ${incoming.length} incoming, ${inbox.length} inbox.`);
-
-        // --- TODO: Add Unread Count Logic --- 
-        // For inbox items, we need to check the `readStatus` for the `currentUserId` 
-        // against the `lastMessageTimestamp` to determine if there are unread messages.
-        // This requires the `readStatus` field to be implemented first.
-
+        // --- Let Frontend handle categorization --- 
+        console.log(`API Conversations GET: Returning ${allConversations.length} conversations.`);
         console.log("--- API GET /api/conversations SUCCESS ---");
-        return NextResponse.json({ incoming, inbox }, { status: 200 });
+        return NextResponse.json({ conversations: allConversations }, { status: 200 });
 
     } catch (error: any) {
         console.error("--- API GET /api/conversations FAILED --- Error:", error);

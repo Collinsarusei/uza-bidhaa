@@ -9,17 +9,34 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Icons } from '@/components/icons';
-import { Link } from 'lucide-react';
+import {
+    Sheet,
+    SheetContent,
+    SheetDescription,
+    SheetHeader,
+    SheetTitle,
+    SheetTrigger,
+    SheetFooter, 
+    SheetClose 
+} from "@/components/ui/sheet";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { useToast } from "@/hooks/use-toast";
 
 export default function ItemDetailPage() {
   const params = useParams();
   const router = useRouter();
   const { data: session } = useSession();
+  const { toast } = useToast();
   const itemId = params?.itemId as string;
 
   const [item, setItem] = useState<Item | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isMessageSheetOpen, setIsMessageSheetOpen] = useState(false);
+  const [messageText, setMessageText] = useState("");
+  const [isSendingMessage, setIsSendingMessage] = useState(false);
+  const [isInitiatingPayment, setIsInitiatingPayment] = useState(false); // State for payment button
 
   useEffect(() => {
     const fetchItemDetails = async () => {
@@ -38,7 +55,7 @@ export default function ItemDetailPage() {
              throw new Error(errData.message || `HTTP error! status: ${response.status}`);
         }
         const data = await response.json();
-        if (!data || data.length === 0) {
+        if (!data || data.length === 0) { 
            throw new Error('Item not found.');
         }
         console.log("Item data received:", data[0]);
@@ -55,10 +72,93 @@ export default function ItemDetailPage() {
     fetchItemDetails();
   }, [itemId]);
 
+  const handleSendMessage = async () => {
+      if (!item || !messageText.trim() || !session?.user?.id) return;
+      if (session.user.id === item.sellerId) {
+           toast({ title: "Action Denied", description: "You cannot message yourself.", variant: "destructive" });
+           return;
+      }
+      setIsSendingMessage(true);
+      try {
+          // ... send message API call ...
+           const response = await fetch('/api/messages', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                  recipientId: item.sellerId,
+                  itemId: item.id,
+                  itemTitle: item.title,
+                  itemImageUrl: item.mediaUrls?.[0] ?? null,
+                  text: messageText.trim(),
+              }),
+          });
+          const result = await response.json();
+          if (!response.ok) {
+              throw new Error(result.message || 'Failed to send message');
+          }
+          toast({ title: "Message Sent", description: "Your message has been sent." });
+          setIsMessageSheetOpen(false); 
+          setMessageText("");
+      } catch (err) {
+           const message = err instanceof Error ? err.message : 'Failed to send message.';
+           console.error("Error sending message from item detail:", err);
+           toast({ title: "Send Error", description: message, variant: "destructive" });
+      } finally {
+          setIsSendingMessage(false);
+      }
+  };
+
+  // --- Handle Initiate Payment --- 
+  const handleInitiatePayment = async () => {
+      if (!item || !session?.user?.id) {
+           toast({ title: "Login Required", description: "Please log in to purchase items.", variant: "destructive" });
+            // Optional: Redirect to login
+            // router.push('/auth');
+           return;
+      }
+      if (item.status !== 'available') {
+            toast({ title: "Not Available", description: "This item is no longer available for purchase.", variant: "destructive" });
+            return;
+      }
+      if (session.user.id === item.sellerId) {
+           toast({ title: "Action Denied", description: "You cannot purchase your own item.", variant: "destructive" });
+           return;
+      }
+
+      setIsInitiatingPayment(true);
+      try {
+            console.log(`Initiating payment for item: ${item.id}`);
+            const response = await fetch('/api/payment/initiate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ itemId: item.id })
+            });
+            const result = await response.json();
+            if (!response.ok || !result.checkoutUrl) {
+                throw new Error(result.message || 'Failed to prepare payment checkout.');
+            }
+            console.log(`Redirecting to IntaSend checkout: ${result.checkoutUrl}`);
+            // Redirect the user to the IntaSend payment page
+            window.location.href = result.checkoutUrl;
+            // No need to set loading to false if redirecting
+
+      } catch (err) {
+            const message = err instanceof Error ? err.message : 'Failed to initiate payment.';
+            console.error("Initiate Payment Error:", err);
+            toast({ title: "Payment Error", description: message, variant: "destructive" });
+            setIsInitiatingPayment(false); // Set loading to false only on error
+      }
+      // No finally block setting to false needed due to redirect
+  };
+  // -------------------------
+
+  // --- RENDER LOGIC --- 
+
   if (isLoading) {
-    return (
+    // ... Skeleton remains the same ...
+     return (
       <div className="container mx-auto p-4 md:p-6 max-w-4xl">
-        <Skeleton className="h-10 w-1/4 mb-4" />
+        <Skeleton className="h-10 w-1/4 mb-4" /> 
         <div className="grid md:grid-cols-2 gap-6 lg:gap-8">
            <Skeleton className="aspect-square w-full rounded-lg" />
            <div className="space-y-4">
@@ -71,7 +171,9 @@ export default function ItemDetailPage() {
                 <Skeleton className="h-4 w-full" />
                 <Skeleton className="h-4 w-5/6" />
              </div>
-             <Skeleton className="h-10 w-full mt-4" />
+             {/* Skeletons for Action Buttons */} 
+             <Skeleton className="h-10 w-full mt-4" /> 
+             <Skeleton className="h-10 w-full mt-2" /> 
            </div>
         </div>
       </div>
@@ -79,7 +181,8 @@ export default function ItemDetailPage() {
   }
 
   if (error) {
-    return (
+    // ... Error remains the same ...
+     return (
       <div className="container mx-auto p-4 md:p-6 max-w-4xl text-center text-red-600">
           <Button variant="outline" onClick={() => router.back()} className="mb-4">
              <Icons.arrowLeft className="mr-2 h-4 w-4" /> Back
@@ -90,7 +193,8 @@ export default function ItemDetailPage() {
   }
 
   if (!item) {
-    return (
+     // ... Not Found remains the same ...
+     return (
       <div className="container mx-auto p-4 md:p-6 max-w-4xl text-center text-muted-foreground">
          <Button variant="outline" onClick={() => router.back()} className="mb-4">
              <Icons.arrowLeft className="mr-2 h-4 w-4" /> Back
@@ -101,6 +205,8 @@ export default function ItemDetailPage() {
   }
 
   const canMessageSeller = session?.user && session.user.id !== item.sellerId;
+  const isMyListing = session?.user?.id === item.sellerId;
+  const isAvailable = item.status === 'available';
 
   return (
     <div className="container mx-auto p-4 md:p-6 max-w-4xl">
@@ -152,18 +258,61 @@ export default function ItemDetailPage() {
                 </ul>
             </div>
 
-           {/* Action Button */} 
-            <div className="pt-4">
-               {session?.user?.id === item.sellerId ? (
-                  <Button className="w-full" disabled>This is Your Listing</Button>
-               ) : (
-                  // FIX: Removed passHref from Button
-                  <Link href={`/messages?sellerId=${item.sellerId}&itemId=${item.id}`} >
-                     <Button className="w-full" disabled={!canMessageSeller}> 
-                       <Icons.mail className="mr-2 h-4 w-4" /> 
-                       {canMessageSeller ? 'Message Seller' : (session?.user ? 'Cannot message yourself' : 'Login to Message')}
+           {/* Action Buttons Container */} 
+            <div className="pt-4 space-y-3"> 
+                {/* Buy/Payment Button */} 
+                {!isMyListing && (
+                     <Button 
+                         className="w-full" 
+                         onClick={handleInitiatePayment} 
+                         disabled={!isAvailable || isInitiatingPayment || !session?.user}
+                     >
+                         {isInitiatingPayment && <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />}
+                         {isAvailable ? (isInitiatingPayment ? 'Processing...' : 'Buy Now / Make Payment') : `Item ${item.status}`}
                      </Button>
-                  </Link>
+                 )}
+                {isMyListing && (
+                  <Button className="w-full" disabled>This is Your Listing</Button>
+                )}
+                
+                {/* Message Seller Button / Sheet */} 
+                {!isMyListing && (
+                  <Sheet open={isMessageSheetOpen} onOpenChange={setIsMessageSheetOpen}>
+                      <SheetTrigger asChild>
+                          <Button variant="outline" className="w-full" disabled={!session?.user}>
+                             <Icons.mail className="mr-2 h-4 w-4" /> 
+                             {session?.user ? 'Message Seller' : 'Login to Message'}
+                          </Button>
+                      </SheetTrigger>
+                      <SheetContent>
+                         <SheetHeader>
+                             <SheetTitle>Send Message to Seller</SheetTitle>
+                             <SheetDescription>Regarding item: {item.title}</SheetDescription>
+                         </SheetHeader>
+                         <div className="grid gap-4 py-4">
+                             <div className="grid gap-2">
+                                 <Label htmlFor="message-detail-text">Message</Label>
+                                 <Textarea 
+                                    id="message-detail-text"
+                                    placeholder="Type your message here..."
+                                    value={messageText}
+                                    onChange={(e) => setMessageText(e.target.value)}
+                                    rows={4}
+                                    disabled={isSendingMessage}
+                                 />
+                             </div>
+                         </div>
+                         <SheetFooter>
+                             <SheetClose asChild>
+                                 <Button type="button" variant="outline" disabled={isSendingMessage}>Cancel</Button>
+                             </SheetClose>
+                             <Button type="button" onClick={handleSendMessage} disabled={!messageText.trim() || isSendingMessage}>
+                                 {isSendingMessage && <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />} 
+                                 Send Message
+                             </Button>
+                         </SheetFooter>
+                      </SheetContent>
+                  </Sheet>
                )}
             </div>
         </div>
