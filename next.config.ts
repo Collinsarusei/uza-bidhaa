@@ -1,4 +1,4 @@
-import type {NextConfig} from 'next';
+import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
   /* config options here */
@@ -14,13 +14,13 @@ const nextConfig: NextConfig = {
               protocol: 'https',
               hostname: 'storage.googleapis.com',
               port: '',
-              // You can be more specific with the pathname if needed,
-              // but often allowing the whole hostname is sufficient for Firebase Storage.
-              pathname: '/**', 
+              pathname: '/**',
           },
-          // Add other allowed hostnames here if needed
-          // e.g., for user profile pictures from other sources
       ],
+  },
+  // Correct placement for allowedDevOrigins
+  experimental: {
+      allowedDevOrigins: ["https://9003-idx-studio-1745049831961.cluster-3gc7bglotjgwuxlqpiut7yyqt4.cloudworkstations.dev"]
   },
 };
 
