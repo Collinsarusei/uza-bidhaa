@@ -76,11 +76,7 @@ export default function RegisterPage() {
     if (trimmedNum.startsWith('+254') && trimmedNum.length >= 13) { 
       return trimmedNum;
     }
-    // Add more robust validation/formatting if needed
     console.warn("Phone number might not be in expected Kenyan format for backend conversion:", trimmedNum);
-    // Decide whether to return potentially invalid format or null
-    // Returning null might be safer to force correction
-    // return trimmedNum; // Or return null if strict formatting is required
     return null; // Returning null to indicate formatting failed
   };
   // ----------------------------------
@@ -91,7 +87,6 @@ export default function RegisterPage() {
       if (!phoneNumber.trim()) { setError("Phone number needed."); return; }
       if (!window.recaptchaVerifier) { setError("reCAPTCHA not ready."); return; }
       
-      // Use the same formatting logic here for sending OTP
       let formattedForOtp = phoneNumber.trim();
       if (formattedForOtp.startsWith('07') || formattedForOtp.startsWith('01')) formattedForOtp = `+254${formattedForOtp.substring(1)}`;
       else if (!formattedForOtp.startsWith('+254')) { 
@@ -109,9 +104,18 @@ export default function RegisterPage() {
           toast({ title: "OTP Sent", description: "Check phone for code." });
       } catch (error: any) {
           console.error("OTP Send Error:", error);
-          let message = error.message.includes('reCAPTCHA') ? "Captcha failed." : "Failed to send OTP.";
-          if (error.code === 'auth/invalid-phone-number') message = "Invalid phone number (check format).";
-          else if (error.code === 'auth/too-many-requests') message = "Too many requests.";
+          let message = error.message || "Failed to send OTP."; // Default message
+          // --- Improved error messages --- 
+          if (error.message.includes('reCAPTCHA')) {
+                message = "Captcha verification failed. Please try again.";
+          } else if (error.code === 'auth/invalid-phone-number') {
+               message = "The phone number format is invalid. Please use 07.. or 01...";
+          } else if (error.code === 'auth/too-many-requests') {
+                message = "Too many OTP requests sent to this number. Please wait a while before trying again."; // More user-friendly message
+          } else {
+                 message = "An unexpected error occurred while sending OTP. Please try again."; // Generic fallback
+          }
+          // ---------------------------------
           setError(message); toast({ title: "OTP Send Failed", description: message, variant: "destructive" });
            try { 
                if (window.recaptchaVerifier && window.grecaptcha && window.recaptchaWidgetId !== undefined) {
@@ -132,12 +136,11 @@ export default function RegisterPage() {
     if (!showOtpInput || !otp.trim()) { setError("Enter OTP."); return; }
     if (!confirmationResult) { setError("Request new OTP."); return; }
 
-    // Format phone number for backend JUST BEFORE sending
     const formattedPhoneNumberForBackend = formatPhoneNumberForBackend(phoneNumber);
     if (!formattedPhoneNumberForBackend) {
         setError("Invalid phone number format. Use 07... or 01...");
         toast({ title: "Invalid Phone", description: "Please check your phone number format (07... or 01...).", variant: "destructive" });
-        return; // Stop registration if format is invalid
+        return; 
     }
 
     setIsVerifyingOtp(true); setIsLoading(true);
@@ -147,12 +150,11 @@ export default function RegisterPage() {
         console.log("OTP Verified!");
         setIsVerifyingOtp(false);
 
-        // Construct data with formatted phone and correct name key
         const registrationData = {
-            name: username.trim(), // Use username state value for the 'name' field
+            name: username.trim(), 
             email: email.trim(),
-            password, // No need to trim password
-            phoneNumber: formattedPhoneNumberForBackend // Use the correctly formatted number
+            password, 
+            phoneNumber: formattedPhoneNumberForBackend
         };
 
         console.log("Calling backend register API with:", registrationData);
@@ -163,12 +165,11 @@ export default function RegisterPage() {
         });
         const result = await response.json();
         if (!response.ok) {
-            // Use error message from backend if available
             throw new Error(result.message || `Registration failed: ${response.statusText}`);
         }
 
         toast({ title: "Registration Successful", description: "Log in now." });
-        router.push('/auth'); // Redirect to login page after successful registration
+        router.push('/auth');
 
     } catch (error: any) {
         console.error("OTP/Reg Error:", error);
@@ -176,7 +177,7 @@ export default function RegisterPage() {
          if (error.code === 'auth/invalid-verification-code') message = "Invalid OTP code.";
          else if (error.code === 'auth/code-expired') { message = "OTP expired."; setShowOtpInput(false); setConfirmationResult(null); }
          else if (message.startsWith("Registration failed:")) { /* Keep backend message */ }
-         // Add more specific error handling if needed
+         else if (message.startsWith("Invalid input data")) { message = "Registration failed. Please check your input."; } // Catch Zod errors from backend
 
         setError(message); toast({ title: "Registration Failed", description: message, variant: "destructive" });
         setIsLoading(false); setIsVerifyingOtp(false); 
