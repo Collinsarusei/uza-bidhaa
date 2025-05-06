@@ -33,6 +33,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
+
 // --- Main Component --- 
 export default function MessagesPage() {
   const { data: session, status } = useSession();
@@ -43,7 +44,7 @@ export default function MessagesPage() {
   const [isLoadingConversations, setIsLoadingConversations] = useState(true);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [isSending, setIsSending] = useState(false);
-  const [isApproving, setIsApproving] = useState<string | null>(null);
+  const [isApproving, setIsApproving] = useState<string | null>(null); 
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'inbox' | 'incoming'>('inbox');
   const { toast } = useToast();
@@ -87,29 +88,23 @@ export default function MessagesPage() {
     if (!currentUserId) return { inbox, incoming };
 
     allConversations.forEach(conv => {
-        // FIX: Handle older conversations without 'approved' or 'initiatorId'
         const isApproved = conv.approved === true;
         const isLegacy = conv.approved === undefined || conv.initiatorId === undefined;
 
         if (isApproved || isLegacy) {
-            // Approved conversations OR older conversations go to Inbox
             inbox.push(conv);
         } else if (!isApproved && conv.initiatorId !== currentUserId) {
-            // Only show unapproved if I am the recipient
             incoming.push(conv);
         } else if (!isApproved && conv.initiatorId === currentUserId) {
-            // Buyer sees their initiated (but unapproved) convo in inbox
              inbox.push(conv);
         }
     });
     
-    // Sort inbox by last message timestamp desc
     inbox.sort((a, b) => {
         const timeA = a.lastMessageTimestamp ? parseISO(a.lastMessageTimestamp).getTime() : (a.createdAt ? parseISO(a.createdAt).getTime() : 0);
         const timeB = b.lastMessageTimestamp ? parseISO(b.lastMessageTimestamp).getTime() : (b.createdAt ? parseISO(b.createdAt).getTime() : 0);
         return timeB - timeA; 
     });
-    // Sort incoming by creation time desc
     incoming.sort((a, b) => {
         const timeA = a.createdAt ? parseISO(a.createdAt).getTime() : 0;
         const timeB = b.createdAt ? parseISO(b.createdAt).getTime() : 0;
@@ -136,6 +131,7 @@ export default function MessagesPage() {
           throw new Error(errData.message || `HTTP error! status: ${response.status}`);
         }
         const data = await response.json();
+        // Update selected conversation data if returned by API
         if(data.conversation) setSelectedConversation(data.conversation); 
         setMessages(data.messages || []);
       } catch (err) {
@@ -170,17 +166,22 @@ export default function MessagesPage() {
         toast({ title: "Error", description: "Cannot determine recipient.", variant: "destructive" });
         return;
     }
-    // Ensure item details are present
-    if (!selectedConversation.itemId || !selectedConversation.itemTitle) {
-         toast({ title: "Error", description: "Missing item details for this conversation.", variant: "destructive" });
-         console.error("Missing item details in selectedConversation:", selectedConversation);
+    // FIX: Ensure itemId and itemTitle are present, provide fallback if needed
+    const itemIdToSend = selectedConversation.itemId;
+    const itemTitleToSend = selectedConversation.itemTitle || "this item"; // Fallback title
+
+    if (!itemIdToSend) {
+         toast({ title: "Error", description: "Cannot send message: Item ID missing for this conversation.", variant: "destructive" });
+         console.error("Missing itemId in selectedConversation for sending message:", selectedConversation);
          return;
     }
+    // --- End FIX ---
 
     setIsSending(true);
     const tempMessageId = `temp_${Date.now()}`;
     const messageText = newMessage.trim();
 
+    // Optimistic UI update
     setMessages(prev => [...prev, {
         id: tempMessageId,
         senderId: currentUserId,
@@ -195,16 +196,15 @@ export default function MessagesPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           recipientId: recipientId,
-          itemId: selectedConversation.itemId, // Now guaranteed to exist
-          itemTitle: selectedConversation.itemTitle, // Now guaranteed to exist
+          itemId: itemIdToSend, // Use variable
+          itemTitle: itemTitleToSend, // Use variable
           itemImageUrl: selectedConversation.itemImageUrl,
           text: messageText,
         }),
       });
       
-      const result = await response.json(); // Always parse response
+      const result = await response.json(); 
       if (!response.ok) {
-        // Use message from API response if available
         throw new Error(result.message || `Failed to send message (${response.status})`); 
       }
       
@@ -215,10 +215,9 @@ export default function MessagesPage() {
       
     } catch (err) {
       const message = err instanceof Error ? err.message : 'An unknown error occurred.';
-      setError(message); // Show error in UI if needed
+      setError(message);
       console.error("handleSendMessage Error:", err);
       toast({ title: "Send Error", description: message, variant: "destructive" });
-      // Revert optimistic update
       setMessages(prev => prev.filter(msg => msg.id !== tempMessageId)); 
     } finally {
       setIsSending(false);
@@ -260,7 +259,10 @@ export default function MessagesPage() {
   // --- Helpers & Renders --- 
   const getParticipantData = (conversation: Conversation | null, userId: string): ParticipantData => {
        if (!conversation?.participantsData?.[userId]) {
-            return { name: userId === currentUserId ? session?.user?.name : 'User', avatar: userId === currentUserId ? session?.user?.image : null };
+            // Provide better fallback based on session user
+            const name = userId === currentUserId ? session?.user?.name : 'User';
+            const avatar = userId === currentUserId ? session?.user?.image : null;
+            return { name: name || (userId ? userId.substring(0,6) : 'User'), avatar }; // Use part of ID if name missing
        }
        return conversation.participantsData[userId];
    };
@@ -316,7 +318,7 @@ export default function MessagesPage() {
               <div className="flex-1 overflow-hidden">
                   <div className="flex justify-between items-center">
                        <p className={cn("text-sm font-medium truncate", hasUnread && "font-bold")}>
-                           {otherParticipant.name}
+                           {otherParticipant.name ?? 'User'} {/* Fallback name */}
                        </p>
                        <p className="text-xs text-muted-foreground whitespace-nowrap ml-2">
                             {formatTimestamp(conv.lastMessageTimestamp)}
@@ -326,7 +328,7 @@ export default function MessagesPage() {
                        {conv.lastMessageSnippet || 'No messages yet'}
                    </p>
                    <p className="text-xs text-muted-foreground truncate italic">
-                       Item: {conv.itemTitle || 'Unknown Item'}
+                       Item: {conv.itemTitle || 'Item details missing'} {/* Indicate if title missing */}
                    </p>
               </div>
               {isIncomingView && (
@@ -356,10 +358,10 @@ export default function MessagesPage() {
            );
       }
       
-      const canChat = conversation.approved || conversation.initiatorId === currentUserId;
+      const canChat = conversation.approved || conversation.initiatorId === currentUserId || (conversation.approved === undefined && conversation.initiatorId === undefined); // Allow chat in legacy convos
       const otherUserId = conversation.participantIds.find(id => id !== currentUserId) || 'unknown';
       const otherParticipant = getParticipantData(conversation, otherUserId);
-      const paymentButtonLink = `/item/${conversation.itemId}`; 
+      const paymentButtonLink = conversation.itemId ? `/item/${conversation.itemId}` : '#'; // Fallback link if no itemId
 
         return (
              <div className="flex-1 flex flex-col h-full"> 
@@ -369,18 +371,18 @@ export default function MessagesPage() {
                         <AvatarFallback>{otherParticipant.name?.charAt(0)?.toUpperCase() || 'U'}</AvatarFallback>
                      </Avatar>
                      <div className="flex-1 overflow-hidden">
-                        <p className="font-medium text-sm truncate">{otherParticipant.name}</p>
-                        <p className="text-xs text-muted-foreground italic truncate">Item: {conversation.itemTitle || 'Unknown Item'}</p>
+                        <p className="font-medium text-sm truncate">{otherParticipant.name ?? 'User'}</p>
+                        <p className="text-xs text-muted-foreground italic truncate">Item: {conversation.itemTitle || 'Item details missing'}</p>
                      </div>
                      {conversation.itemId && (
                            <Link href={paymentButtonLink} passHref>
-                              <Button size="sm" variant="outline" title={`View item or pay for ${conversation.itemTitle}`}>
+                              <Button size="sm" variant="outline" title={`View or pay for ${conversation.itemTitle}`}>
                                    <Icons.circleDollarSign className="h-4 w-4 mr-1" /> Pay
                                </Button>
                             </Link>
                        )}
                 </div>
-                 <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                 <div className="flex-1 overflow-y-auto p-4 space-y-4" style={{ scrollBehavior: 'smooth' }}> {/* Added smooth scroll */} 
                       {isLoadingMessages && (
                          <div className="space-y-3">
                              {Array.from({ length: 5 }).map((_, i) => renderMessageSkeleton())}
@@ -400,7 +402,7 @@ export default function MessagesPage() {
                                 <div className={cn("rounded-lg px-3 py-2 max-w-[70%] break-words text-sm", 
                                    isSender ? "bg-primary text-primary-foreground" : "bg-muted"
                                 )}>
-                                   <p>{msg.text}</p>
+                                   <p className="whitespace-pre-wrap">{msg.text}</p> {/* Allow wrapping */} 
                                    <p className={cn("text-xs mt-1 opacity-70", isSender ? "text-right" : "text-left")}>
                                        {formatTimestamp(msg.timestamp)}
                                    </p>
@@ -458,10 +460,8 @@ export default function MessagesPage() {
 
   return (
     <div className={cn("flex h-[calc(100vh-theme(spacing.16))] border-t", isMobile && "h-screen border-none")} > 
-      {/* Conversation List */} 
       <div className={cn("w-full md:w-1/3 lg:w-1/4 border-r flex flex-col", 
-                      isMobile && selectedConversation && !isChatSheetOpen && "hidden", // Hide list on mobile only if convo selected AND sheet closed (edge case)
-                      isMobile && isChatSheetOpen && "hidden" // Hide list on mobile when chat sheet is open
+                      isMobile && isChatSheetOpen && "hidden" 
                       )}
         >
           <div className="flex border-b">
@@ -512,7 +512,7 @@ export default function MessagesPage() {
                  setIsChatSheetOpen(open);
                  if (!open) setSelectedConversation(null); 
              }}>
-                 <SheetContent className="p-0 w-full flex flex-col h-screen"> {/* Ensure sheet uses full height */} 
+                 <SheetContent className="p-0 w-full flex flex-col h-screen"> 
                       {renderChatAreaContent(selectedConversation)} 
                   </SheetContent>
              </Sheet>
