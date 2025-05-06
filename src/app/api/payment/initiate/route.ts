@@ -8,21 +8,20 @@ import { v4 as uuidv4 } from 'uuid';
 import * as z from 'zod';
 import { Item, Payment } from '@/lib/types';
 
-// --- Environment Variables --- 
-const INTASEND_SECRET_KEY = process.env.INTASEND_SECRET_KEY;
-const INTASEND_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_INTASEND_PUBLISHABLE_KEY; 
-const INTASEND_WALLET_ID = process.env.INTASEND_WALLET_ID; 
-const CALLBACK_BASE_URL = process.env.CALLBACK_BASE_URL || process.env.VERCEL_URL || 'http://localhost:3000';
+// --- Environment Variables ---
+const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
+// PAYSTACK_PUBLIC_KEY is often used on the client-side for Paystack Inline, not strictly needed here for backend init.
+const CALLBACK_BASE_URL = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL || 'http://localhost:3000'; // Use your app's public URL
 
-if (!INTASEND_SECRET_KEY) {
-    console.error("FATAL: Missing IntaSend Secret Key environment variable.");
+if (!PAYSTACK_SECRET_KEY) {
+    console.error("FATAL: Missing Paystack Secret Key environment variable (PAYSTACK_SECRET_KEY).");
 }
 
 const initiateSchema = z.object({
     itemId: z.string().min(1, "Item ID is required"),
 });
 
-// Helper function to mask secrets in logs
+// Helper function to mask secrets in logs (can be reused)
 const maskSecret = (secret: string | undefined): string => {
     if (!secret) return "UNDEFINED";
     if (secret.length < 8) return "******";
@@ -30,14 +29,14 @@ const maskSecret = (secret: string | undefined): string => {
 }
 
 export async function POST(req: Request) {
-    console.log("--- API POST /api/payment/initiate START ---");
+    console.log("--- API POST /api/payment/initiate (Paystack) START ---");
 
     if (!adminDb) {
         console.error("Initiate Payment Error: Firebase Admin DB not initialized.");
         return NextResponse.json({ message: 'Server configuration error.' }, { status: 500 });
     }
-    if (!INTASEND_SECRET_KEY) {
-         console.error("Initiate Payment Error: IntaSend Secret Key environment variable missing.");
+    if (!PAYSTACK_SECRET_KEY) {
+         console.error("Initiate Payment Error: Paystack Secret Key environment variable missing.");
         return NextResponse.json({ message: 'Payment gateway configuration error.' }, { status: 500 });
     }
 
@@ -48,13 +47,14 @@ export async function POST(req: Request) {
     }
     const buyerId = session.user.id;
     const buyerEmail = session.user.email;
-    const buyerName = session.user.name || 'Customer';
+    // Paystack doesn't strictly need name for init, but email and amount are key
+    // const buyerName = session.user.name || 'Customer';
     console.log(`Initiate Payment: Authenticated as buyer ${buyerId}`);
 
     try {
         let body;
         try { body = await req.json(); } catch { return NextResponse.json({ message: 'Invalid request body.' }, { status: 400 }); }
-        
+
         const validation = initiateSchema.safeParse(body);
         if (!validation.success) {
              return NextResponse.json({ message: 'Invalid input.', errors: validation.error.flatten().fieldErrors }, { status: 400 });
@@ -79,81 +79,86 @@ export async function POST(req: Request) {
             return NextResponse.json({ message: 'You cannot buy your own item' }, { status: 400 });
         }
 
-        const paymentId = uuidv4();
+        const paymentId = uuidv4(); // This will be our Paystack reference
         const paymentRef = adminDb.collection('payments').doc(paymentId);
-        const paymentData: Omit<Payment, 'id' | 'createdAt' | 'updatedAt' | 'intasendInvoiceId' | 'intasendTrackingId' | 'failureReason'> = {
+
+        // Amount should be in Kobo for Paystack (multiply by 100 if your price is in KES)
+        const amountInKobo = Math.round(itemData.price * 100);
+
+        const paymentDataToStore: Omit<Payment, 'id' | 'createdAt' | 'updatedAt' | 'gatewayTransactionId' | 'gatewayReference' | 'failureReason'> = {
             itemId: itemId,
             buyerId: buyerId,
             sellerId: itemData.sellerId,
-            amount: itemData.price,
-            currency: 'KES',
+            amount: itemData.price, // Store original amount in KES
+            currency: 'KES', // Paystack also uses standard currency codes
             status: 'initiated',
+            paymentGateway: 'paystack', // Add a field to denote the gateway
         };
         await paymentRef.set({
-             ...paymentData,
+             ...paymentDataToStore,
              createdAt: FieldValue.serverTimestamp(),
              updatedAt: FieldValue.serverTimestamp(),
         });
         console.log(`Initiate Payment: Internal payment record ${paymentId} created.`);
 
-        const intasendApiUrl = 'https://api.intasend.com/api/v1/checkout/';
-        const callbackUrl = CALLBACK_BASE_URL.startsWith('http') ? `${CALLBACK_BASE_URL}/api/webhooks/intasend` : `https://${CALLBACK_BASE_URL}/api/webhooks/intasend`; // Point to unified webhook
+        const paystackApiUrl = 'https://api.paystack.com/transaction/initialize';
+        // Paystack webhook URL, ensure this is configured in your Paystack dashboard
+        const callbackUrlForPaystack = `${CALLBACK_BASE_URL}/api/webhooks/paystack`;
 
-        const checkoutPayload: any = {
-            public_key: INTASEND_PUBLISHABLE_KEY, 
-            first_name: buyerName.split(' ')[0] || 'Buyer',
-            last_name: buyerName.split(' ').slice(1).join(' ') || 'User',
+        const paystackPayload = {
             email: buyerEmail,
-            host: callbackUrl, 
-            amount: itemData.price,
-            currency: 'KES', 
-            api_ref: paymentId, 
+            amount: amountInKobo, // Amount in Kobo
+            currency: 'KES',
+            reference: paymentId, // Your unique reference for this transaction
+            callback_url: `${CALLBACK_BASE_URL}/order-confirmation/${paymentId}`, // Page user lands on after payment
+            // channels: ['card', 'bank', 'ussd', 'qr', 'mobile_money', 'bank_transfer'], // Optional: specify channels
+            metadata: { // Optional: send custom data
+                internal_payment_id: paymentId,
+                item_id: itemId,
+                buyer_id: buyerId,
+                description: `Payment for ${itemData.title}`
+            }
         };
 
-        if (INTASEND_WALLET_ID) {
-            checkoutPayload.wallet_id = INTASEND_WALLET_ID;
-            console.log(`Initiate Payment: Using Wallet ID: ${INTASEND_WALLET_ID}`);
-        } else {
-             console.log("Initiate Payment: INTASEND_WALLET_ID not set, proceeding without it (likely Sandbox).");
-        }
+        console.log("Initiate Payment (Paystack): Sending request to Paystack with Authorization:", maskSecret(PAYSTACK_SECRET_KEY));
+        console.log("Initiate Payment (Paystack): Payload:", paystackPayload);
 
-        const authHeader = `Bearer ${INTASEND_SECRET_KEY}`;
-        // --- ADD LOGGING --- 
-        console.log("Initiate Payment: Sending request to IntaSend with Authorization:", maskSecret(INTASEND_SECRET_KEY));
-        console.log("Initiate Payment: Payload:", checkoutPayload);
-        // ---------------------
-
-        const response = await fetch(intasendApiUrl, {
+        const response = await fetch(paystackApiUrl, {
             method: 'POST',
             headers: {
-                'Accept': 'application/json',
+                'Authorization': `Bearer ${PAYSTACK_SECRET_KEY}`,
                 'Content-Type': 'application/json',
-                'Authorization': authHeader 
             },
-            body: JSON.stringify(checkoutPayload)
+            body: JSON.stringify(paystackPayload)
         });
 
-        const intasendResult = await response.json();
+        const paystackResult = await response.json();
 
-        if (!response.ok || !intasendResult.url) {
-            console.error(`IntaSend Create Checkout Error (${response.status}):`, intasendResult);
-            await paymentRef.update({ status: 'failed', failureReason: `IntaSend API Error (${response.status}): ${intasendResult.detail || JSON.stringify(intasendResult)}`, updatedAt: FieldValue.serverTimestamp() });
-            throw new Error(intasendResult.detail || `IntaSend API request failed with status ${response.status}`);
+        if (!response.ok || !paystackResult.status || !paystackResult.data?.authorization_url) {
+            console.error(`Paystack Initialize Transaction Error (${response.status}):`, paystackResult);
+            await paymentRef.update({ 
+                status: 'failed', 
+                failureReason: `Paystack API Error (${response.status}): ${paystackResult.message || JSON.stringify(paystackResult)}`, 
+                updatedAt: FieldValue.serverTimestamp() 
+            });
+            throw new Error(paystackResult.message || `Paystack API request failed with status ${response.status}`);
         }
 
          await paymentRef.update({
-            intasendInvoiceId: intasendResult.invoice_id,
-             updatedAt: FieldValue.serverTimestamp(),
+            // Store Paystack's reference if different, or just use our paymentId as the primary ref.
+            // Paystack's main transaction ID is usually available in the webhook.
+            gatewayReference: paystackResult.data.reference, // This should match your paymentId
+            updatedAt: FieldValue.serverTimestamp(),
          });
 
-        console.log(`Initiate Payment: IntaSend checkout URL generated: ${intasendResult.url}`);
-        console.log("--- API POST /api/payment/initiate SUCCESS ---");
+        console.log(`Initiate Payment (Paystack): Paystack authorization URL generated: ${paystackResult.data.authorization_url}`);
+        console.log("--- API POST /api/payment/initiate (Paystack) SUCCESS ---");
 
-        return NextResponse.json({ checkoutUrl: intasendResult.url }, { status: 200 });
+        // Return Paystack's authorization_url for redirection
+        return NextResponse.json({ checkoutUrl: paystackResult.data.authorization_url }, { status: 200 });
 
     } catch (error: any) {
-        console.error("API Initiate Payment Error:", error);
-        // Log the error message which should contain the 401 status
+        console.error("API Initiate Payment Error (Paystack):", error);
         return NextResponse.json({ message: 'Failed to initiate payment', error: error.message }, { status: 500 });
     }
 }

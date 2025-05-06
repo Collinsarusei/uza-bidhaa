@@ -3,40 +3,33 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from '../../auth/[...nextauth]/route';
 import { adminDb } from '@/lib/firebase-admin';
-import { FieldValue, Timestamp } from 'firebase-admin/firestore';
+import { FieldValue } from 'firebase-admin/firestore';
 import * as z from 'zod';
 import { createNotification } from '@/lib/notifications';
-import { Earning, Withdrawal } from '@/lib/types';
+import { Earning, Withdrawal, UserProfile } from '@/lib/types'; // Ensure UserProfile is imported
 import { v4 as uuidv4 } from 'uuid';
 
-// --- Environment Variables --- 
-const INTASEND_SECRET_KEY = process.env.INTASEND_SECRET_KEY;
-// Publishable Key likely needed for Send Money API Token
-const INTASEND_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_INTASEND_PUBLISHABLE_KEY; 
-// You might need a specific Wallet ID to PAY FROM, or it defaults to your primary balance
-const INTASEND_PAYOUT_WALLET_ID = process.env.INTASEND_PAYOUT_WALLET_ID; // Optional: Wallet to send from
+// --- Environment Variables ---
+const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 
-if (!INTASEND_SECRET_KEY || !INTASEND_PUBLISHABLE_KEY) {
-    console.error("FATAL: Missing IntaSend Secret or Publishable Key environment variables for Payouts.");
+if (!PAYSTACK_SECRET_KEY) {
+    console.error("FATAL: Missing Paystack Secret Key environment variable (PAYSTACK_SECRET_KEY).");
 }
 
-// Minimum withdrawal amount (example)
 const MINIMUM_WITHDRAWAL_AMOUNT = 100; // KES 100
 
-// --- POST Handler --- 
 export async function POST(req: Request) {
-    console.log("--- API POST /api/payouts/initiate START ---");
+    console.log("--- API POST /api/payouts/initiate (Paystack) START ---");
 
     if (!adminDb) {
         console.error("Payout Initiate Error: Firebase Admin DB not initialized.");
         return NextResponse.json({ message: 'Server configuration error.' }, { status: 500 });
     }
-    if (!INTASEND_SECRET_KEY || !INTASEND_PUBLISHABLE_KEY) {
-         console.error("Payout Initiate Error: IntaSend environment variables missing.");
+    if (!PAYSTACK_SECRET_KEY) {
+         console.error("Payout Initiate Error: Paystack Secret Key missing.");
         return NextResponse.json({ message: 'Payment gateway configuration error.' }, { status: 500 });
     }
 
-    // --- Authentication --- 
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) {
         console.warn("Payout Initiate: Unauthorized attempt.");
@@ -46,167 +39,191 @@ export async function POST(req: Request) {
     console.log(`Payout Initiate: Authenticated as user ${userId}`);
 
     try {
-        // --- Get User Data (Balance and Mpesa Number) --- 
         const userRef = adminDb.collection('users').doc(userId);
         const userDoc = await userRef.get();
         if (!userDoc.exists) {
              console.error(`Payout Initiate: User profile not found for ${userId}.`);
              return NextResponse.json({ message: 'User profile not found.' }, { status: 404 });
         }
-        const userData = userDoc.data();
+        const userData = userDoc.data() as UserProfile; // Cast to UserProfile
         const availableBalance = userData?.availableBalance ?? 0;
-        const mpesaPhoneNumber = userData?.mpesaPhoneNumber;
+        const mpesaPhoneNumber = userData?.mpesaPhoneNumber; // Assuming this is still used for Paystack MM
+        const bankAccountNumber = userData?.bankAccountNumber; // For bank transfers
+        const bankCode = userData?.bankCode; // For bank transfers (Paystack bank code)
+        const accountName = userData?.name || session.user.name || 'User Payout'; // Account name
 
-        console.log(`Payout Initiate: User ${userId}, Balance=${availableBalance}, Mpesa=${mpesaPhoneNumber}`);
+        console.log(`Payout Initiate: User ${userId}, Balance=${availableBalance}, Mpesa=${mpesaPhoneNumber}, BankAcc=${bankAccountNumber}, BankCode=${bankCode}`);
 
-        // --- Validation --- 
-        if (!mpesaPhoneNumber) {
-             console.warn(`Payout Initiate: User ${userId} missing M-Pesa number.`);
-             return NextResponse.json({ message: 'M-Pesa payout number not set in your profile.' }, { status: 400 });
+        // Determine payout method and details
+        let payoutType = '';
+        let payoutAccountDetails = '';
+
+        if (mpesaPhoneNumber) { // Prioritize M-Pesa if available
+            if (!/^\+?254\d{9}$/.test(mpesaPhoneNumber.replace(/\s+/g, '')) && !/^0[17]\d{8}$/.test(mpesaPhoneNumber.replace(/\s+/g, ''))) {
+                return NextResponse.json({ message: 'Invalid M-Pesa number format in profile.' }, { status: 400 });
+            }
+            payoutType = 'mobile_money'; // Paystack uses this type for M-Pesa Kenya
+            payoutAccountDetails = mpesaPhoneNumber.replace(/\s+/g, '');
+        } else if (bankAccountNumber && bankCode) {
+            payoutType = 'nuban'; // Or 'bank_account' depending on Paystack's exact requirement for the region
+            payoutAccountDetails = bankAccountNumber;
+        } else {
+            console.warn(`Payout Initiate: User ${userId} missing M-Pesa number or bank details.`);
+            return NextResponse.json({ message: 'Payout details (M-Pesa or Bank Account) not set in your profile.' }, { status: 400 });
         }
-        // Basic phone number format check (adapt as needed for Kenya)
-        if (!/^\+?254\d{9}$/.test(mpesaPhoneNumber.replace(/\s+/g, '')) && !/^0[17]\d{8}$/.test(mpesaPhoneNumber.replace(/\s+/g, ''))) {
-            console.warn(`Payout Initiate: Invalid M-Pesa number format for user ${userId}: ${mpesaPhoneNumber}`);
-            return NextResponse.json({ message: 'Invalid M-Pesa number format in profile.' }, { status: 400 });
-        }
-        
-        // For now, withdraw full balance if > minimum
+
         if (availableBalance < MINIMUM_WITHDRAWAL_AMOUNT) {
-            console.warn(`Payout Initiate: Insufficient balance for user ${userId}. Balance=${availableBalance}, Min=${MINIMUM_WITHDRAWAL_AMOUNT}`);
             return NextResponse.json({ message: `Minimum withdrawal amount is KES ${MINIMUM_WITHDRAWAL_AMOUNT}.` }, { status: 400 });
         }
         const withdrawalAmount = availableBalance; // Withdraw full available balance
-        console.log(`Payout Initiate: Attempting to withdraw KES ${withdrawalAmount} for user ${userId}.`);
+        const amountInKobo = Math.round(withdrawalAmount * 100);
+        console.log(`Payout Initiate: Attempting to withdraw KES ${withdrawalAmount} (Kobo ${amountInKobo}) for user ${userId} via ${payoutType}.`);
 
-        // --- Prepare IntaSend Send Money Request --- 
-        const intasendTokenUrl = 'https://api.intasend.com/api/v1/token/';
-        const intasendPayoutUrl = 'https://api.intasend.com/api/v1/send-money/initiate/';
+        // --- Step 1: Create Transfer Recipient with Paystack ---
+        // This is usually done once per seller, or if their details change.
+        // For simplicity, we might do it here, or you could have a separate "update payout details" flow.
+        // Let's assume we fetch or create the recipient_code.
 
-        // 1. Get IntaSend API Token
-        console.log("Payout Initiate: Requesting IntaSend API token...");
-        const tokenResponse = await fetch(intasendTokenUrl, {
-            method: 'POST',
-            headers: {
-                'Accept': 'application/json',
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ public_key: INTASEND_PUBLISHABLE_KEY })
-        });
-        if (!tokenResponse.ok) {
-            const errorData = await tokenResponse.json().catch(() => ({ detail: 'Failed to fetch IntaSend token' }));
-            console.error("IntaSend Token Error:", errorData);
-            throw new Error(errorData.detail || `IntaSend token request failed: ${tokenResponse.status}`);
+        let recipientCode = userData?.paystackRecipientCode;
+        const recipientNeedsUpdate = !recipientCode || 
+                                     (payoutType === 'mobile_money' && userData?.lastVerifiedMpesa !== mpesaPhoneNumber) ||
+                                     (payoutType === 'nuban' && (userData?.lastVerifiedBankAcc !== bankAccountNumber || userData?.lastVerifiedBankCode !== bankCode));
+
+
+        if (recipientNeedsUpdate) {
+            console.log(`Payout Initiate: Creating/updating Paystack Transfer Recipient for ${userId}...`);
+            const recipientPayload: any = {
+                type: payoutType, // 'mobile_money' for M-Pesa Kenya, or 'nuban' for Nigerian banks
+                name: accountName,
+                currency: 'KES', // Or NGN for Nigeria etc.
+                metadata: { internal_user_id: userId }
+            };
+            if (payoutType === 'mobile_money') {
+                recipientPayload.account_number = payoutAccountDetails; // M-Pesa number
+                recipientPayload.bank_code = 'MTN'; // Paystack uses specific codes for mobile money providers, e.g., 'MTN' for Safaricom M-Pesa in KE usually, or check Paystack docs
+            } else if (payoutType === 'nuban') { // Assuming Bank Transfer
+                recipientPayload.account_number = bankAccountNumber;
+                recipientPayload.bank_code = bankCode; // e.g., '058' for GTBank Nigeria
+            }
+
+            const recipientResponse = await fetch('https://api.paystack.co/transferrecipient', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${PAYSTACK_SECRET_KEY}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(recipientPayload)
+            });
+            const recipientResult = await recipientResponse.json();
+            if (!recipientResponse.ok || !recipientResult.status || !recipientResult.data?.recipient_code) {
+                console.error("Paystack Create Recipient Error:", recipientResult);
+                throw new Error(recipientResult.message || 'Failed to create Paystack transfer recipient.');
+            }
+            recipientCode = recipientResult.data.recipient_code;
+            // Store/update recipient_code and verified details on user profile
+            await userRef.update({
+                paystackRecipientCode: recipientCode,
+                lastVerifiedMpesa: payoutType === 'mobile_money' ? mpesaPhoneNumber : FieldValue.delete(),
+                lastVerifiedBankAcc: payoutType === 'nuban' ? bankAccountNumber : FieldValue.delete(),
+                lastVerifiedBankCode: payoutType === 'nuban' ? bankCode : FieldValue.delete(),
+                updatedAt: FieldValue.serverTimestamp()
+            });
+            console.log(`Payout Initiate: Paystack Transfer Recipient ${recipientCode} created/updated for ${userId}.`);
+        } else {
+            console.log(`Payout Initiate: Using existing Paystack Recipient Code ${recipientCode} for ${userId}.`);
         }
-        const tokenData = await tokenResponse.json();
-        const accessToken = tokenData.token;
-        if (!accessToken) {
-             console.error("IntaSend Token Error: Token not found in response.", tokenData);
-             throw new Error('Failed to retrieve IntaSend API token.');
-        }
-        console.log("Payout Initiate: IntaSend API token obtained.");
 
-        // 2. Prepare Send Money Payload
-        const payoutPayload = {
-            wallet_id: INTASEND_PAYOUT_WALLET_ID || undefined, // Specify source wallet if needed, otherwise uses default
-            currency: 'KES',
-            transactions: [
-                {
-                    account: mpesaPhoneNumber.replace(/\s+/g, ''), // Ensure no spaces
-                    name: userData?.name || 'User Payout',
-                    amount: withdrawalAmount,
-                    narrative: `Payout from Uza Bidhaa Marketplace` // Customize narration
-                }
-                // Add more transactions here if sending to multiple recipients in one batch
-            ]
-        };
 
-        // --- Firestore Transaction & IntaSend Call --- 
+        // --- Step 2: Initiate Transfer ---
         const withdrawalId = uuidv4();
         const withdrawalRef = adminDb.collection('users').doc(userId).collection('withdrawals').doc(withdrawalId);
+        // This reference will be sent to Paystack and received back in webhook
+        const paystackTransferReference = `wdrl_${withdrawalId}`;
 
-        console.log(`Payout Initiate: Starting Firestore transaction for withdrawal ${withdrawalId}...`);
-        // Use transaction to ensure balance is updated ONLY if IntaSend call is initiated (or seems likely to succeed)
-        // Note: IntaSend call is outside the transaction, so there's a small risk.
-        // A more robust system might use Cloud Tasks to handle the IntaSend call after the transaction commits.
-        
+
         await adminDb.runTransaction(async (transaction) => {
-             // Decrement user balance
              transaction.update(userRef, {
                  availableBalance: FieldValue.increment(-withdrawalAmount)
              });
-             // Create Withdrawal Record
              transaction.set(withdrawalRef, {
                  id: withdrawalId,
                  userId: userId,
-                 amount: withdrawalAmount,
-                 status: 'pending', // Pending confirmation from IntaSend webhook
-                 mpesaPhoneNumber: mpesaPhoneNumber,
+                 amount: withdrawalAmount, // KES
+                 status: 'pending_gateway', // Status before Paystack initiation
+                 payoutMethod: payoutType,
+                 payoutDetailsMasked: payoutType === 'mobile_money'
+                     ? `${payoutAccountDetails.substring(0, 3)}****${payoutAccountDetails.substring(payoutAccountDetails.length - 2)}`
+                     : `${bankCode}-****${bankAccountNumber?.substring(bankAccountNumber.length - 4)}`,
+                 paystackRecipientCode: recipientCode,
+                 paystackTransferReference: paystackTransferReference, // Our ref for Paystack
                  requestedAt: FieldValue.serverTimestamp(),
-             });
-             // TODO: Update related Earning documents status to 'withdrawal_pending' if using that method
+             } as unknown as Withdrawal); // Cast to ensure all fields are set
+             // TODO: Update related Earning documents status to 'withdrawal_pending'
         });
         console.log(`Payout Initiate: Firestore transaction committed for withdrawal ${withdrawalId}. Balance updated.`);
 
-        // 3. Initiate IntaSend Send Money
-        console.log("Payout Initiate: Calling IntaSend Send Money API...");
-        const payoutResponse = await fetch(intasendPayoutUrl, {
+        const transferPayload = {
+            source: "balance", // Payout from your Paystack balance
+            amount: amountInKobo,
+            recipient: recipientCode,
+            currency: 'KES',
+            reason: `Marketplace Payout - ${userId}`,
+            reference: paystackTransferReference // Crucial for matching webhook
+        };
+
+        console.log("Payout Initiate: Calling Paystack Initiate Transfer API...");
+        const transferResponse = await fetch('https://api.paystack.co/transfer', {
             method: 'POST',
             headers: {
-                'Accept': 'application/json',
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${accessToken}`
+                'Authorization': `Bearer ${PAYSTACK_SECRET_KEY}`,
+                'Content-Type': 'application/json'
             },
-            body: JSON.stringify(payoutPayload)
+            body: JSON.stringify(transferPayload)
         });
 
-        const payoutResult = await payoutResponse.json();
+        const transferResult = await transferResponse.json();
 
-        if (!payoutResponse.ok || payoutResult.status === 'Failed') {
-            console.error("IntaSend Send Money Error:", payoutResult);
-            // --- IMPORTANT: Revert Firestore Transaction --- 
-            // Since the IntaSend call failed AFTER the Firestore transaction committed,
-            // we need to attempt to revert the balance update.
-            console.warn(`Payout Initiate: IntaSend call failed for ${withdrawalId}. Attempting to revert balance...`);
+        if (!transferResponse.ok || !transferResult.status || transferResult.data?.status === 'failed') { // Paystack might return 200 OK but with internal failure
+            console.error("Paystack Initiate Transfer Error:", transferResult);
+            const failureMsg = transferResult.message || (transferResult.data ? transferResult.data.message : 'Unknown Paystack transfer initiation error.');
+            console.warn(`Payout Initiate: Paystack transfer initiation failed for ${withdrawalId}. Attempting to revert balance...`);
             await adminDb.runTransaction(async (revertTransaction) => {
                  revertTransaction.update(userRef, {
-                     availableBalance: FieldValue.increment(withdrawalAmount) // Add back
+                     availableBalance: FieldValue.increment(withdrawalAmount)
                  });
                  revertTransaction.update(withdrawalRef, {
                      status: 'failed',
-                     failureReason: `IntaSend API Error: ${payoutResult.error || payoutResult.message || 'Unknown'}`
+                     failureReason: `Paystack API Error: ${failureMsg}`
                  });
-                 // TODO: Revert Earning statuses if applicable
+                 // TODO: Revert Earning statuses
             });
-             console.warn(`Payout Initiate: Firestore balance reverted for failed withdrawal ${withdrawalId}.`);
-            // ---------------------------------------------
-            throw new Error(payoutResult.error || payoutResult.message || `IntaSend Send Money request failed with status ${payoutResponse.status}`);
+            console.warn(`Payout Initiate: Firestore balance reverted for failed withdrawal ${withdrawalId}.`);
+            throw new Error(failureMsg);
         }
-        
-        // If IntaSend initiation is successful, store the tracking ID
-        console.log(`Payout Initiate: IntaSend Send Money initiated successfully for ${withdrawalId}. Tracking ID: ${payoutResult.tracking_id}`);
+
+        console.log(`Payout Initiate: Paystack Transfer initiated successfully for ${withdrawalId}. Paystack Status: ${transferResult.data.status}, Transfer Code: ${transferResult.data.transfer_code}`);
          await withdrawalRef.update({
-             status: 'processing', // Update status to processing
-             intasendTransferId: payoutResult.tracking_id || null // Store IntaSend tracking ID
+             status: 'processing', // Update status based on Paystack's initial response (e.g., 'pending' or 'otp' if OTP is required)
+             paystackTransferCode: transferResult.data.transfer_code,
+             updatedAt: FieldValue.serverTimestamp()
          });
 
-        // --- Send Notification --- 
         try {
              await createNotification({
                  userId: userId,
                  type: 'withdrawal_initiated',
-                 message: `Your withdrawal request of KES ${withdrawalAmount.toLocaleString()} is being processed.`,
+                 message: `Your withdrawal request of KES ${withdrawalAmount.toLocaleString()} is being processed by Paystack.`,
                  relatedWithdrawalId: withdrawalId
              });
         } catch (notifyError) {
             console.error(`Payout Initiate: Failed to send notification for ${withdrawalId}:`, notifyError);
         }
 
-        console.log("--- API POST /api/payouts/initiate SUCCESS ---");
-        return NextResponse.json({ message: 'Withdrawal initiated successfully.', withdrawalId: withdrawalId }, { status: 200 });
+        console.log("--- API POST /api/payouts/initiate (Paystack) SUCCESS ---");
+        return NextResponse.json({ message: 'Withdrawal initiated successfully with Paystack.', withdrawalId: withdrawalId, paystackStatus: transferResult.data.status }, { status: 200 });
 
     } catch (error: any) {
-        console.error("--- API POST /api/payouts/initiate FAILED --- Error:", error);
-        // Ensure balance wasn't left in incorrect state if error happened before revert logic
+        console.error("--- API POST /api/payouts/initiate (Paystack) FAILED --- Error:", error);
         return NextResponse.json({ message: error.message || 'Failed to initiate withdrawal.' }, { status: 500 });
     }
 }
