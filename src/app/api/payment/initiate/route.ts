@@ -100,7 +100,7 @@ export async function POST(req: Request) {
         });
         console.log(`Initiate Payment: Internal payment record ${paymentId} created.`);
 
-        const paystackApiUrl = 'https://api.paystack.com/transaction/initialize';
+        const paystackApiUrl = 'https://api.paystack.co/transaction/initialize';
         const userFacingCallbackUrl = `${CALLBACK_BASE_URL}/order-confirmation/${paymentId}`;
 
         const paystackPayload = {
