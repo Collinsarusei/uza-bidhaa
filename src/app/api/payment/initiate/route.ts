@@ -11,10 +11,9 @@ import { Item, Payment } from '@/lib/types';
 // --- Environment Variables --- 
 const INTASEND_SECRET_KEY = process.env.INTASEND_SECRET_KEY;
 const INTASEND_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_INTASEND_PUBLISHABLE_KEY; 
-const INTASEND_WALLET_ID = process.env.INTASEND_WALLET_ID; // This might be unset in Sandbox
+const INTASEND_WALLET_ID = process.env.INTASEND_WALLET_ID; 
 const CALLBACK_BASE_URL = process.env.CALLBACK_BASE_URL || process.env.VERCEL_URL || 'http://localhost:3000';
 
-// Only check for SECRET key as critical, wallet ID might be optional in Sandbox
 if (!INTASEND_SECRET_KEY) {
     console.error("FATAL: Missing IntaSend Secret Key environment variable.");
 }
@@ -23,6 +22,13 @@ const initiateSchema = z.object({
     itemId: z.string().min(1, "Item ID is required"),
 });
 
+// Helper function to mask secrets in logs
+const maskSecret = (secret: string | undefined): string => {
+    if (!secret) return "UNDEFINED";
+    if (secret.length < 8) return "******";
+    return `${secret.substring(0, 4)}******${secret.substring(secret.length - 4)}`;
+}
+
 export async function POST(req: Request) {
     console.log("--- API POST /api/payment/initiate START ---");
 
@@ -30,7 +36,6 @@ export async function POST(req: Request) {
         console.error("Initiate Payment Error: Firebase Admin DB not initialized.");
         return NextResponse.json({ message: 'Server configuration error.' }, { status: 500 });
     }
-    // Check only for secret key here
     if (!INTASEND_SECRET_KEY) {
          console.error("Initiate Payment Error: IntaSend Secret Key environment variable missing.");
         return NextResponse.json({ message: 'Payment gateway configuration error.' }, { status: 500 });
@@ -92,7 +97,7 @@ export async function POST(req: Request) {
         console.log(`Initiate Payment: Internal payment record ${paymentId} created.`);
 
         const intasendApiUrl = 'https://api.intasend.com/api/v1/checkout/';
-        const callbackUrl = CALLBACK_BASE_URL.startsWith('http') ? `${CALLBACK_BASE_URL}/api/payment/callback` : `https://${CALLBACK_BASE_URL}/api/payment/callback`;
+        const callbackUrl = CALLBACK_BASE_URL.startsWith('http') ? `${CALLBACK_BASE_URL}/api/webhooks/intasend` : `https://${CALLBACK_BASE_URL}/api/webhooks/intasend`; // Point to unified webhook
 
         const checkoutPayload: any = {
             public_key: INTASEND_PUBLISHABLE_KEY, 
@@ -105,23 +110,25 @@ export async function POST(req: Request) {
             api_ref: paymentId, 
         };
 
-        // --- Conditionally add wallet_id --- 
         if (INTASEND_WALLET_ID) {
             checkoutPayload.wallet_id = INTASEND_WALLET_ID;
             console.log(`Initiate Payment: Using Wallet ID: ${INTASEND_WALLET_ID}`);
         } else {
              console.log("Initiate Payment: INTASEND_WALLET_ID not set, proceeding without it (likely Sandbox).");
         }
-        // ------------------------------------
 
-        console.log("Initiate Payment: Calling IntaSend Create Checkout with payload:", checkoutPayload);
+        const authHeader = `Bearer ${INTASEND_SECRET_KEY}`;
+        // --- ADD LOGGING --- 
+        console.log("Initiate Payment: Sending request to IntaSend with Authorization:", maskSecret(INTASEND_SECRET_KEY));
+        console.log("Initiate Payment: Payload:", checkoutPayload);
+        // ---------------------
 
         const response = await fetch(intasendApiUrl, {
             method: 'POST',
             headers: {
                 'Accept': 'application/json',
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${INTASEND_SECRET_KEY}`
+                'Authorization': authHeader 
             },
             body: JSON.stringify(checkoutPayload)
         });
@@ -129,8 +136,8 @@ export async function POST(req: Request) {
         const intasendResult = await response.json();
 
         if (!response.ok || !intasendResult.url) {
-            console.error("IntaSend Create Checkout Error:", intasendResult);
-            await paymentRef.update({ status: 'failed', failureReason: `IntaSend API Error: ${intasendResult.detail || response.statusText}`, updatedAt: FieldValue.serverTimestamp() });
+            console.error(`IntaSend Create Checkout Error (${response.status}):`, intasendResult);
+            await paymentRef.update({ status: 'failed', failureReason: `IntaSend API Error (${response.status}): ${intasendResult.detail || JSON.stringify(intasendResult)}`, updatedAt: FieldValue.serverTimestamp() });
             throw new Error(intasendResult.detail || `IntaSend API request failed with status ${response.status}`);
         }
 
@@ -146,6 +153,7 @@ export async function POST(req: Request) {
 
     } catch (error: any) {
         console.error("API Initiate Payment Error:", error);
+        // Log the error message which should contain the 401 status
         return NextResponse.json({ message: 'Failed to initiate payment', error: error.message }, { status: 500 });
     }
 }

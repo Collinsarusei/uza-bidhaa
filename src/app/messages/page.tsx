@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'; // Added useRef
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSession } from 'next-auth/react';
 import { Button } from "@/components/ui/button";
 import {
@@ -15,7 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Icons } from "@/components/icons";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Conversation, Message, ParticipantData } from '@/lib/types'; // Import ParticipantData
+import { Conversation, Message, ParticipantData } from '@/lib/types';
 import { formatDistanceToNow, parseISO } from 'date-fns';
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
@@ -28,11 +28,10 @@ import {
     SheetDescription, 
     SheetFooter, 
     SheetClose
-} from "@/components/ui/sheet"; // Import Sheet components
-import { useIsMobile } from "@/hooks/use-mobile"; // Import useIsMobile
+} from "@/components/ui/sheet";
+import { useIsMobile } from "@/hooks/use-mobile";
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-
 
 // --- Main Component --- 
 export default function MessagesPage() {
@@ -44,14 +43,14 @@ export default function MessagesPage() {
   const [isLoadingConversations, setIsLoadingConversations] = useState(true);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [isSending, setIsSending] = useState(false);
-  const [isApproving, setIsApproving] = useState<string | null>(null); 
+  const [isApproving, setIsApproving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'inbox' | 'incoming'>('inbox');
   const { toast } = useToast();
-  const isMobile = useIsMobile(); // Check if mobile
+  const isMobile = useIsMobile();
   const router = useRouter();
-  const messagesEndRef = useRef<HTMLDivElement>(null); // Ref for scrolling
-  const [isChatSheetOpen, setIsChatSheetOpen] = useState(false); // State for mobile chat sheet
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [isChatSheetOpen, setIsChatSheetOpen] = useState(false);
 
   const currentUserId = session?.user?.id;
 
@@ -81,32 +80,44 @@ export default function MessagesPage() {
     fetchConversations();
   }, [status, currentUserId]);
 
-  // --- Categorize Conversations --- 
+  // --- Categorize Conversations Dynamically using useMemo --- 
   const categorizedConversations = useMemo(() => {
     const inbox: Conversation[] = [];
     const incoming: Conversation[] = [];
     if (!currentUserId) return { inbox, incoming };
 
     allConversations.forEach(conv => {
-        if (conv.approved) {
+        // FIX: Handle older conversations without 'approved' or 'initiatorId'
+        const isApproved = conv.approved === true;
+        const isLegacy = conv.approved === undefined || conv.initiatorId === undefined;
+
+        if (isApproved || isLegacy) {
+            // Approved conversations OR older conversations go to Inbox
             inbox.push(conv);
-        } else if (conv.initiatorId !== currentUserId) {
+        } else if (!isApproved && conv.initiatorId !== currentUserId) {
+            // Only show unapproved if I am the recipient
             incoming.push(conv);
-        } else if (conv.initiatorId === currentUserId) {
-             inbox.push(conv); // Buyer sees their initiated (but unapproved) convo in inbox
+        } else if (!isApproved && conv.initiatorId === currentUserId) {
+            // Buyer sees their initiated (but unapproved) convo in inbox
+             inbox.push(conv);
         }
     });
+    
+    // Sort inbox by last message timestamp desc
     inbox.sort((a, b) => {
-        const dateA = a.lastMessageTimestamp ? parseISO(a.lastMessageTimestamp).getTime() : 0;
-        const dateB = b.lastMessageTimestamp ? parseISO(b.lastMessageTimestamp).getTime() : 0;
-        return dateB - dateA;
+        const timeA = a.lastMessageTimestamp ? parseISO(a.lastMessageTimestamp).getTime() : (a.createdAt ? parseISO(a.createdAt).getTime() : 0);
+        const timeB = b.lastMessageTimestamp ? parseISO(b.lastMessageTimestamp).getTime() : (b.createdAt ? parseISO(b.createdAt).getTime() : 0);
+        return timeB - timeA; 
     });
+    // Sort incoming by creation time desc
     incoming.sort((a, b) => {
-        const dateA = a.createdAt ? parseISO(a.createdAt).getTime() : 0;
-        const dateB = b.createdAt ? parseISO(b.createdAt).getTime() : 0;
-        return dateB - dateA;
+        const timeA = a.createdAt ? parseISO(a.createdAt).getTime() : 0;
+        const timeB = b.createdAt ? parseISO(b.createdAt).getTime() : 0;
+        return timeB - timeA; 
     });
+
     return { inbox, incoming };
+
   }, [allConversations, currentUserId]);
 
   // --- Fetch Messages --- 
@@ -125,7 +136,6 @@ export default function MessagesPage() {
           throw new Error(errData.message || `HTTP error! status: ${response.status}`);
         }
         const data = await response.json();
-        // Store full conversation data received with messages, including participant data
         if(data.conversation) setSelectedConversation(data.conversation); 
         setMessages(data.messages || []);
       } catch (err) {
@@ -137,18 +147,16 @@ export default function MessagesPage() {
       }
     };
     fetchMessages();
-  }, [selectedConversation?.id]); // Rerun only when ID changes
+  }, [selectedConversation?.id]);
 
-   // --- Scroll to bottom --- 
-   useEffect(() => {
+  useEffect(() => {
      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-   }, [messages]); // Scroll when messages change
+   }, [messages]);
 
-  // --- Handle Selecting Conversation --- 
   const handleSelectConversation = (conv: Conversation) => {
        setSelectedConversation(conv);
        if (isMobile) {
-           setIsChatSheetOpen(true); // Open sheet on mobile
+           setIsChatSheetOpen(true);
        }
    };
 
@@ -158,7 +166,16 @@ export default function MessagesPage() {
     if (!newMessage.trim() || !selectedConversation?.id || !currentUserId) return;
     
     const recipientId = selectedConversation.participantIds.find(id => id !== currentUserId);
-    if (!recipientId) return;
+    if (!recipientId) {
+        toast({ title: "Error", description: "Cannot determine recipient.", variant: "destructive" });
+        return;
+    }
+    // Ensure item details are present
+    if (!selectedConversation.itemId || !selectedConversation.itemTitle) {
+         toast({ title: "Error", description: "Missing item details for this conversation.", variant: "destructive" });
+         console.error("Missing item details in selectedConversation:", selectedConversation);
+         return;
+    }
 
     setIsSending(true);
     const tempMessageId = `temp_${Date.now()}`;
@@ -178,26 +195,31 @@ export default function MessagesPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           recipientId: recipientId,
-          itemId: selectedConversation.itemId,
-          itemTitle: selectedConversation.itemTitle || 'Item',
+          itemId: selectedConversation.itemId, // Now guaranteed to exist
+          itemTitle: selectedConversation.itemTitle, // Now guaranteed to exist
           itemImageUrl: selectedConversation.itemImageUrl,
           text: messageText,
         }),
       });
+      
+      const result = await response.json(); // Always parse response
       if (!response.ok) {
-        const result = await response.json().catch(() => ({}));
-        throw new Error(result.message || 'Failed to send message');
+        // Use message from API response if available
+        throw new Error(result.message || `Failed to send message (${response.status})`); 
       }
-      // Refetch conversations after sending to update list view
+      
+      // Refetch conversations to update last message snippet/timestamp
       const convResponse = await fetch('/api/conversations');
       const convData = await convResponse.json();
       if (convResponse.ok) setAllConversations(convData.conversations || []);
       
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to send message.';
-      setError(message);
+      const message = err instanceof Error ? err.message : 'An unknown error occurred.';
+      setError(message); // Show error in UI if needed
+      console.error("handleSendMessage Error:", err);
       toast({ title: "Send Error", description: message, variant: "destructive" });
-      setMessages(prev => prev.filter(msg => msg.id !== tempMessageId));
+      // Revert optimistic update
+      setMessages(prev => prev.filter(msg => msg.id !== tempMessageId)); 
     } finally {
       setIsSending(false);
     }
@@ -220,7 +242,6 @@ export default function MessagesPage() {
            setAllConversations(prev => 
                prev.map(c => c.id === conversationId ? { ...c, approved: true } : c)
            );
-           // Select conversation after approving
            handleSelectConversation({ ...approvedConv, approved: true });
            setActiveTab('inbox');
            toast({ title: "Conversation Approved", description: "Moved to Inbox." });
@@ -236,14 +257,14 @@ export default function MessagesPage() {
     }
   };
 
+  // --- Helpers & Renders --- 
   const getParticipantData = (conversation: Conversation | null, userId: string): ParticipantData => {
        if (!conversation?.participantsData?.[userId]) {
-            // Fallback if data isn't present (e.g., before first message was processed fully)
             return { name: userId === currentUserId ? session?.user?.name : 'User', avatar: userId === currentUserId ? session?.user?.image : null };
        }
        return conversation.participantsData[userId];
    };
-
+  
   const formatTimestamp = (timestamp: string | null): string => {
      if (!timestamp) return '';
      try {
@@ -272,7 +293,6 @@ export default function MessagesPage() {
       </div>
   );
 
-  // --- Render Conversation List Item --- 
   const renderConversationItem = (conv: Conversation, isIncomingView: boolean) => {
       const otherUserId = conv.participantIds.find(id => id !== currentUserId) || 'unknown';
       const otherParticipant = getParticipantData(conv, otherUserId);
@@ -282,10 +302,10 @@ export default function MessagesPage() {
       return (
           <div
               key={conv.id}
-              onClick={() => handleSelectConversation(conv)} // Unified select handler
+              onClick={() => handleSelectConversation(conv)}
               className={cn(
                   "flex items-start space-x-3 p-3 border-b cursor-pointer transition-colors",
-                  isSelected && !isMobile ? "bg-muted" : "hover:bg-muted/50", // Don't show selection on mobile list
+                  isSelected && !isMobile ? "bg-muted" : "hover:bg-muted/50",
                   isIncomingView && "opacity-80 hover:opacity-100"
               )}
           >
@@ -327,7 +347,6 @@ export default function MessagesPage() {
       );
   };
 
-  // --- Render Chat Area (Common for Desktop and Mobile Sheet) --- 
   const renderChatAreaContent = (conversation: Conversation | null) => {
         if (!conversation) {
            return (
@@ -337,15 +356,13 @@ export default function MessagesPage() {
            );
       }
       
-      // Check if the selected conversation is approved OR if the current user initiated it
       const canChat = conversation.approved || conversation.initiatorId === currentUserId;
       const otherUserId = conversation.participantIds.find(id => id !== currentUserId) || 'unknown';
       const otherParticipant = getParticipantData(conversation, otherUserId);
-      const paymentButtonLink = `/item/${conversation.itemId}`; // Link for payment button
+      const paymentButtonLink = `/item/${conversation.itemId}`; 
 
         return (
-             <div className="flex-1 flex flex-col h-full"> {/* Ensure full height */} 
-                 {/* Chat Header */}
+             <div className="flex-1 flex flex-col h-full"> 
                 <div className="p-3 border-b flex items-center space-x-3 sticky top-0 bg-background z-10">
                      <Avatar className="h-9 w-9 border">
                         <AvatarImage src={otherParticipant.avatar ?? undefined} alt={otherParticipant.name ?? 'User avatar'} />
@@ -355,7 +372,6 @@ export default function MessagesPage() {
                         <p className="font-medium text-sm truncate">{otherParticipant.name}</p>
                         <p className="text-xs text-muted-foreground italic truncate">Item: {conversation.itemTitle || 'Unknown Item'}</p>
                      </div>
-                      {/* Payment Button */} 
                      {conversation.itemId && (
                            <Link href={paymentButtonLink} passHref>
                               <Button size="sm" variant="outline" title={`View item or pay for ${conversation.itemTitle}`}>
@@ -364,7 +380,6 @@ export default function MessagesPage() {
                             </Link>
                        )}
                 </div>
-                {/* Message List */}
                  <div className="flex-1 overflow-y-auto p-4 space-y-4">
                       {isLoadingMessages && (
                          <div className="space-y-3">
@@ -373,11 +388,9 @@ export default function MessagesPage() {
                      )}
                      {!isLoadingMessages && messages.map((msg) => {
                          const isSender = msg.senderId === currentUserId;
-                         // Get sender info for avatar
                          const senderInfo = getParticipantData(conversation, msg.senderId);
                          return (
                             <div key={msg.id} className={cn("flex items-end gap-2", isSender ? "justify-end" : "justify-start")}>
-                                {/* Avatar (show for received messages) */} 
                                 {!isSender && (
                                      <Avatar className="h-6 w-6 border flex-shrink-0">
                                          <AvatarImage src={senderInfo.avatar ?? undefined} alt={senderInfo.name ?? 'Sender'} />
@@ -392,7 +405,6 @@ export default function MessagesPage() {
                                        {formatTimestamp(msg.timestamp)}
                                    </p>
                                </div>
-                                {/* Avatar (show for sent messages) */} 
                                {isSender && (
                                     <Avatar className="h-6 w-6 border flex-shrink-0">
                                         <AvatarImage src={senderInfo.avatar ?? undefined} alt={senderInfo.name ?? 'You'} />
@@ -402,9 +414,8 @@ export default function MessagesPage() {
                             </div>
                          );
                      })}
-                      <div ref={messagesEndRef} /> {/* For scrolling to bottom */} 
+                      <div ref={messagesEndRef} /> 
                  </div>
-                {/* Message Input Area */}
                  {canChat ? (
                      <div className="border-t p-3 bg-background mt-auto sticky bottom-0">
                          <form onSubmit={handleSendMessage} className="flex items-center space-x-2">
@@ -446,11 +457,13 @@ export default function MessagesPage() {
   }
 
   return (
-    // Adjust height based on your actual surrounding layout/header
     <div className={cn("flex h-[calc(100vh-theme(spacing.16))] border-t", isMobile && "h-screen border-none")} > 
-      {/* Sidebar / Conversation List */} 
-      {/* Hide list on mobile if chat sheet is open? Or keep it as background? Keeping for now. */} 
-      <div className={cn("w-full md:w-1/3 lg:w-1/4 border-r flex flex-col", isMobile && !selectedConversation && "block", isMobile && selectedConversation && "hidden")}> {/* Hide list on mobile when convo selected */} 
+      {/* Conversation List */} 
+      <div className={cn("w-full md:w-1/3 lg:w-1/4 border-r flex flex-col", 
+                      isMobile && selectedConversation && !isChatSheetOpen && "hidden", // Hide list on mobile only if convo selected AND sheet closed (edge case)
+                      isMobile && isChatSheetOpen && "hidden" // Hide list on mobile when chat sheet is open
+                      )}
+        >
           <div className="flex border-b">
               <Button 
                   variant="ghost" 
@@ -497,9 +510,9 @@ export default function MessagesPage() {
        {isMobile && (
             <Sheet open={isChatSheetOpen} onOpenChange={(open) => {
                  setIsChatSheetOpen(open);
-                 if (!open) setSelectedConversation(null); // Deselect conversation when closing sheet
+                 if (!open) setSelectedConversation(null); 
              }}>
-                 <SheetContent className="p-0 w-full flex flex-col"> {/* Full width, remove padding */} 
+                 <SheetContent className="p-0 w-full flex flex-col h-screen"> {/* Ensure sheet uses full height */} 
                       {renderChatAreaContent(selectedConversation)} 
                   </SheetContent>
              </Sheet>

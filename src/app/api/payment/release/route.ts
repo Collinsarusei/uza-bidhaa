@@ -1,220 +1,165 @@
+// src/app/api/payment/release/route.ts
 import { NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from '../../auth/[...nextauth]/route';
-import { adminDb } from '@/lib/firebase-admin';
-import { FieldValue, UpdateData } from 'firebase-admin/firestore';
+import { adminDb } from '@/lib/firebase-admin'; // Can be null
+import { FieldValue } from 'firebase-admin/firestore';
+import * as z from 'zod';
+import { Payment, Earning } from '@/lib/types';
+import { v4 as uuidv4 } from 'uuid';
 import { createNotification } from '@/lib/notifications';
-import type { Payment } from '@/lib/types'; // Import Payment type
 
-// --- Firestore Collections ---
-const paymentsCollection = adminDb.collection('payments');
-const itemsCollection = adminDb.collection('items');
-const usersCollection = adminDb.collection('users');
+// --- Zod Schema --- 
+// Rename confirmSchema to releaseSchema for clarity
+const releaseSchema = z.object({
+    paymentId: z.string().min(1, "Payment ID is required"),
+});
 
-// --- Intasend API Configuration ---
-const INTASEND_PAYOUT_URL = process.env.INTASEND_PAYOUT_API_URL || 'https://sandbox.intasend.com/api/v1/payouts/mpesa/';
-const INTASEND_SECRET_KEY = process.env.INTASEND_SECRET_KEY;
-const INTASEND_PUBLISHABLE_KEY = process.env.INTASEND_PUBLISHABLE_KEY;
-const PAYOUT_CALLBACK_URL = `${process.env.NEXTAUTH_URL}/api/payment/payout-callback`;
+// --- Platform Fee Calculation --- 
+const PLATFORM_FEE_PERCENTAGE = 0.10; // Example: 10% fee
 
+const calculateFee = (amount: number): { fee: number, netAmount: number } => {
+    const fee = Math.round(amount * PLATFORM_FEE_PERCENTAGE * 100) / 100;
+    const netAmount = Math.round((amount - fee) * 100) / 100;
+    return { fee, netAmount };
+};
+
+// --- POST Handler (Buyer confirms receipt, release funds to seller balance) --- 
 export async function POST(req: Request) {
+    console.log("--- API POST /api/payment/release START (Confirm Receipt) ---");
 
-    if (!INTASEND_SECRET_KEY || !INTASEND_PUBLISHABLE_KEY) {
-        console.error("Payment Release API Error: Intasend API keys are not configured.");
-        return NextResponse.json({ message: 'Server configuration error: Payment gateway keys missing.' }, { status: 500 });
+    // --- FIX: Add Null Check --- 
+    if (!adminDb) {
+        console.error("Payment Release Error: Firebase Admin DB not initialized.");
+        return NextResponse.json({ message: 'Server configuration error.' }, { status: 500 });
     }
+    // --- End Fix ---
 
-    let paymentDocRef: FirebaseFirestore.DocumentReference | null = null;
-    let itemId: string | null = null;
-    let sellerId: string | null = null;
-    let buyerId: string | null = null;
+    // --- Authentication (Buyer) --- 
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+        console.warn("Payment Release: Unauthorized attempt.");
+        return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+    }
+    const buyerId = session.user.id;
+    console.log(`Payment Release: Authenticated as buyer ${buyerId}`);
 
     try {
-        const body = await req.json();
-        console.log("Payment Release API: Received body:", body);
-        itemId = body.itemId;
-
-        if (!itemId) {
-            console.error("Payment Release API: Missing itemId");
-            return NextResponse.json({ message: 'Missing item identifier' }, { status: 400 });
+        // --- Validation --- 
+        let body;
+        try { body = await req.json(); } catch { return NextResponse.json({ message: 'Invalid request body.' }, { status: 400 }); }
+        
+        const validation = releaseSchema.safeParse(body);
+        if (!validation.success) {
+             return NextResponse.json({ message: 'Invalid input.', errors: validation.error.flatten().fieldErrors }, { status: 400 });
         }
+        const { paymentId } = validation.data;
+        console.log(`Payment Release: Request for paymentId: ${paymentId}`);
 
-        const session = await getServerSession(authOptions);
-        if (!session || !session.user?.id) {
-            console.warn("Payment Release API: Unauthorized access attempt.");
-            return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
-        }
-        buyerId = session.user.id;
+        // --- Firestore Transaction --- 
+        // FIX: Use non-null assertion
+        const paymentRef = adminDb!.collection('payments').doc(paymentId);
+        // --- End Fix ---
 
-        console.log(`Payment Release API: Finding payment for Item ID: ${itemId}, Buyer ID: ${buyerId}`);
-        const paymentQuery = paymentsCollection
-            .where('itemId', '==', itemId)
-            .where('buyerId', '==', buyerId)
-            .limit(1);
-        const paymentSnapshot = await paymentQuery.get();
+        // FIX: Use non-null assertion
+        const result = await adminDb!.runTransaction(async (transaction) => {
+        // --- End Fix ---
+            const paymentDoc = await transaction.get(paymentRef);
+            if (!paymentDoc.exists) {
+                 console.warn(`Payment Release: Payment ${paymentId} not found.`);
+                 throw new Error('Payment record not found.');
+            }
+            const paymentData = paymentDoc.data() as Payment;
 
-        if (paymentSnapshot.empty) {
-            console.error(`Payment Release API: Payment record not found in Firestore for Item ID: ${itemId}, Buyer ID: ${buyerId}`);
-            return NextResponse.json({ message: 'Payment record not found' }, { status: 404 });
-        }
-        paymentDocRef = paymentSnapshot.docs[0].ref;
-        const paymentRecord = paymentSnapshot.docs[0].data() as Payment;
+            // --- Authorization & Status Checks --- 
+            if (paymentData.buyerId !== buyerId) {
+                 console.warn(`Payment Release: User ${buyerId} is not the buyer for payment ${paymentId}.`);
+                throw new Error('Forbidden: You are not the buyer for this order.');
+            }
+            // --- FIX: Check for correct status --- 
+            if (paymentData.status !== 'paid_to_platform') {
+            // --- End Fix ---
+                console.log(`Payment Release: Payment ${paymentId} has status ${paymentData.status}, cannot release funds.`);
+                 throw new Error(`Cannot release funds for order with status: ${paymentData.status}.`);
+            }
 
-        if (paymentRecord?.status !== 'escrow') {
-            console.warn(`Payment Release API: Payment ${paymentDocRef.id} for item ${itemId} is not in escrow state. Current status: ${paymentRecord?.status}`);
-            return NextResponse.json({ message: `Payment is not in a state to be released (${paymentRecord?.status})` }, { status: 400 });
-        }
+            // --- Calculate Earnings & Fees --- 
+            const { fee, netAmount } = calculateFee(paymentData.amount);
+            console.log(`Payment Release: Calculated fee=${fee}, netAmount=${netAmount} for payment ${paymentId}`);
 
-        sellerId = paymentRecord.sellerId; // Assign to outer scope
-        const paymentAmount = paymentRecord.amount;
-        const paymentCurrency = paymentRecord.currency || 'KES';
+            // --- Prepare Updates --- 
+            const sellerId = paymentData.sellerId;
+            if (!sellerId) { // Added check for sellerId validity
+                console.error(`Payment Release: Seller ID missing on payment record ${paymentId}`);
+                throw new Error('Internal error: Seller information missing.');
+            }
+            // FIX: Use non-null assertion
+            const sellerRef = adminDb!.collection('users').doc(sellerId);
+            // --- End Fix ---
+            const earningId = uuidv4();
+            const earningRef = sellerRef.collection('earnings').doc(earningId);
 
-        // Check if sellerId is valid before proceeding
-        if (!sellerId) {
-             console.error(`Payment Release API: Seller ID is missing in the payment record ${paymentDocRef.id}. Cannot proceed.`);
-             return NextResponse.json({ message: 'Internal error: Seller information missing in payment record.' }, { status: 500 });
-        }
+            const earningData: Omit<Earning, 'id' | 'createdAt'> = {
+                 userId: sellerId,
+                 amount: netAmount,
+                 relatedPaymentId: paymentId,
+                 relatedItemId: paymentData.itemId,
+                 status: 'available', 
+            };
+            
+            // 1. Update Payment Status
+            transaction.update(paymentRef, {
+                 status: 'released_to_seller_balance',
+                 updatedAt: FieldValue.serverTimestamp(),
+             });
+            
+            // 2. Create Earning Record for Seller
+             transaction.set(earningRef, {
+                 ...earningData,
+                 createdAt: FieldValue.serverTimestamp(),
+             });
 
-        console.log(`Initiating release for payment ${paymentDocRef.id} for item ${itemId} by buyer ${buyerId} to seller ${sellerId}`);
-
-        console.log(`Payment Release API: Fetching seller details for ID ${sellerId}`);
-         // Corrected: Use the non-null sellerId
-         const sellerDoc = await usersCollection.doc(sellerId).get();
-         if (!sellerDoc.exists) {
-              console.error(`Payment Release API: Seller user document not found for ID: ${sellerId}`);
-              return NextResponse.json({ message: 'Seller account details not found. Cannot process release.' }, { status: 500 });
-         }
-         const sellerDetails = sellerDoc.data();
-         const payoutAccount = sellerDetails?.mpesaPhoneNumber;
-         const sellerName = sellerDetails?.name || 'Seller';
-
-         if (!payoutAccount) {
-            console.error(`Payment Release API: Seller (${sellerId}) payout details (M-Pesa number) not found or incomplete in user document.`);
-            return NextResponse.json({ message: 'Seller payout information is missing. Cannot process release.' }, { status: 500 });
-         }
-         const formattedPhoneNumber = payoutAccount.startsWith('254') ? payoutAccount : `254${payoutAccount.slice(-9)}`;
-
-        console.log(`Payment Release API: Updating payment ${paymentDocRef.id} status to 'releasing'`);
-        await paymentDocRef.update({
-             status: 'releasing',
-             updatedAt: FieldValue.serverTimestamp()
+            // 3. Increment Seller's Available Balance
+             transaction.update(sellerRef, {
+                 availableBalance: FieldValue.increment(netAmount)
+             });
+            
+            console.log(`Payment Release: Prepared updates for payment ${paymentId}, created earning ${earningId} for seller ${sellerId}.`);
+            return { success: true, sellerId, netAmount, itemId: paymentData.itemId };
         });
 
-         let itemTitle = 'Item';
-         try {
-             const itemDoc = await itemsCollection.doc(itemId).get();
-             if (itemDoc.exists) itemTitle = itemDoc.data()?.title || 'Item';
-         } catch (itemFetchError) { console.error("Error fetching item title for narrative:", itemFetchError); }
-
-
-        const payoutPayload = {
-            currency: paymentCurrency,
-            transactions: [
-                {
-                    name: sellerName,
-                    account: formattedPhoneNumber,
-                    amount: paymentAmount,
-                    narrative: `Payout for ${itemTitle} (ID: ${itemId})`,
+        // --- Send Notification (Outside Transaction) --- 
+        if (result?.success) {
+            console.log(`Payment Release: Transaction successful for payment ${paymentId}.`);
+            try {
+                let itemTitle = 'Item';
+                if (result.itemId) {
+                    // FIX: Use non-null assertion
+                    const itemDoc = await adminDb!.collection('items').doc(result.itemId).get();
+                     // --- End Fix ---
+                    if (itemDoc.exists) itemTitle = itemDoc.data()?.title || 'Item';
                 }
-            ],
-             callback_url: PAYOUT_CALLBACK_URL,
-        };
-
-         const intasendHeaders = {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${INTASEND_SECRET_KEY}`,
-            'INTASEND_API_KEY': INTASEND_PUBLISHABLE_KEY
-        };
-
-        console.log("Calling Intasend Payout API...");
-        const response = await fetch(INTASEND_PAYOUT_URL, {
-            method: 'POST',
-            headers: intasendHeaders,
-            body: JSON.stringify(payoutPayload),
-        });
-
-         const intasendPayoutResponse = await response.json();
-
-         if (!response.ok) {
-             console.error(`Intasend Payout API Error (${response.status}):`, intasendPayoutResponse);
-             await paymentDocRef.update({
-                  status: 'release_failed',
-                  payoutFailureReason: intasendPayoutResponse?.error || intasendPayoutResponse?.detail || `API Error: ${response.statusText}`,
-                  updatedAt: FieldValue.serverTimestamp()
-              });
-             const errorMessage = intasendPayoutResponse?.error || intasendPayoutResponse?.detail || `Payout gateway error: ${response.statusText}`;
-             throw new Error(errorMessage);
-         }
-
-         console.log("Intasend Payout Initiation Response:", intasendPayoutResponse);
-         const payoutTransactionId = intasendPayoutResponse?.transactions?.[0]?.transaction_id || intasendPayoutResponse?.reference;
-
-         const itemUpdatePromise = itemsCollection.doc(itemId).update({
-              status: 'sold',
-              updatedAt: FieldValue.serverTimestamp()
-         });
-
-         const paymentUpdatePromise = paymentDocRef.update({
-              status: 'payout_initiated',
-              intasendPayoutId: payoutTransactionId || null,
-              updatedAt: FieldValue.serverTimestamp()
-         });
-
-         // Create notification for the BUYER confirming release
-         // Corrected: Use sellerId || undefined for relatedUserId
-         const buyerNotificationPromise = createNotification({
-              userId: buyerId, // Notify the BUYER
-              type: 'payment_released',
-              message: `You have successfully released the payment for "${itemTitle}".`,
-              relatedItemId: itemId,
-              relatedUserId: sellerId || undefined // Convert null to undefined
-         });
-
-         await Promise.all([itemUpdatePromise, paymentUpdatePromise, buyerNotificationPromise]);
-
-         console.log(`Payment Release API: Item ${itemId} status updated to 'sold'.`);
-         console.log(`Payment Release API: Payment ${paymentDocRef.id} status updated to 'payout_initiated'. Payout ID: ${payoutTransactionId}`);
-
-         return NextResponse.json({ message: 'Payment release initiated successfully', payoutDetails: intasendPayoutResponse }, { status: 200 });
+                 await createNotification({
+                     userId: result.sellerId,
+                     type: 'funds_available',
+                     message: `Funds (KES ${result.netAmount}) for "${itemTitle}" are now available in your earnings balance.`,
+                     relatedItemId: result.itemId,
+                     relatedPaymentId: paymentId,
+                 });
+                 console.log(`Payment Release: Notification sent to seller ${result.sellerId}.`);
+            } catch (notifyError) {
+                 console.error(`Payment Release: Failed to send notification for payment ${paymentId}:`, notifyError);
+            }
+            console.log("--- API POST /api/payment/release SUCCESS ---");
+             return NextResponse.json({ message: 'Receipt confirmed and funds released to seller balance.' }, { status: 200 });
+        } else {
+             console.warn(`Payment Release: Transaction completed but didn't return expected success object for ${paymentId}. Result:`, result);
+             return NextResponse.json({ message: 'Confirmation processed but with unexpected result.' }, { status: 200 });
+        }
 
     } catch (error: any) {
-        console.error('Payment Release API Error:', error);
-         if (paymentDocRef) {
-             try {
-                  const currentPaymentData = await paymentDocRef.get();
-                  // Corrected: Use currentPaymentData.exists property
-                  if(currentPaymentData.exists && currentPaymentData.data()?.status === 'releasing') {
-                       await paymentDocRef.update({
-                         status: 'release_failed',
-                         payoutFailureReason: error.message || 'Unknown error during release process',
-                         updatedAt: FieldValue.serverTimestamp()
-                      });
-                      console.log("Rolled back payment status to 'release_failed' due to error.");
-
-                      if (buyerId && sellerId && itemId) {
-                          const itemTitle = 'the item';
-                          await Promise.allSettled([
-                               createNotification({
-                                   userId: buyerId,
-                                   type: 'unusual_activity',
-                                   message: `Failed to release payment for "${itemTitle}". Please try again or contact support. Reason: ${error.message}`,
-                                   relatedItemId: itemId,
-                                   relatedUserId: sellerId || undefined // Convert null to undefined
-                               }),
-                               createNotification({
-                                    userId: sellerId,
-                                    type: 'unusual_activity',
-                                    message: `The buyer attempted to release payment for "${itemTitle}", but it failed. Reason: ${error.message}`,
-                                    relatedItemId: itemId,
-                                    relatedUserId: buyerId || undefined // Convert null to undefined
-                                })
-                          ]);
-                      }
-                  }
-             } catch (rollbackError) {
-                  console.error("Error attempting to rollback payment status:", rollbackError);
-             }
-         }
-        return NextResponse.json({ message: error.message || 'Failed to initiate payment release' }, { status: 500 });
+        console.error("--- API POST /api/payment/release FAILED --- Error:", error);
+        const status = error.message.startsWith('Forbidden') ? 403 : 500;
+        return NextResponse.json({ message: error.message || 'Failed to confirm receipt.' }, { status });
     }
 }
