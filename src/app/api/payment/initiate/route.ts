@@ -10,18 +10,18 @@ import { Item, Payment } from '@/lib/types';
 
 // --- Environment Variables ---
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
-// PAYSTACK_PUBLIC_KEY is often used on the client-side for Paystack Inline, not strictly needed here for backend init.
-const CALLBACK_BASE_URL = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL || 'http://localhost:3000'; // Use your app's public URL
+const CALLBACK_BASE_URL = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL || 'http://localhost:3000';
 
 if (!PAYSTACK_SECRET_KEY) {
     console.error("FATAL: Missing Paystack Secret Key environment variable (PAYSTACK_SECRET_KEY).");
+    // Consider throwing an error here or handling it more gracefully if needed for build/startup
 }
 
 const initiateSchema = z.object({
     itemId: z.string().min(1, "Item ID is required"),
 });
 
-// Helper function to mask secrets in logs (can be reused)
+// Helper function to mask secrets in logs
 const maskSecret = (secret: string | undefined): string => {
     if (!secret) return "UNDEFINED";
     if (secret.length < 8) return "******";
@@ -47,9 +47,11 @@ export async function POST(req: Request) {
     }
     const buyerId = session.user.id;
     const buyerEmail = session.user.email;
-    // Paystack doesn't strictly need name for init, but email and amount are key
-    // const buyerName = session.user.name || 'Customer';
     console.log(`Initiate Payment: Authenticated as buyer ${buyerId}`);
+
+    // Initialize paymentId and paymentRef here for broader scope, especially for the final catch block
+    const paymentId = uuidv4();
+    const paymentRef = adminDb.collection('payments').doc(paymentId);
 
     try {
         let body;
@@ -79,44 +81,39 @@ export async function POST(req: Request) {
             return NextResponse.json({ message: 'You cannot buy your own item' }, { status: 400 });
         }
 
-        const paymentId = uuidv4(); // This will be our Paystack reference
-        const paymentRef = adminDb.collection('payments').doc(paymentId);
-
-        // Amount should be in Kobo for Paystack (multiply by 100 if your price is in KES)
         const amountInKobo = Math.round(itemData.price * 100);
 
         const paymentDataToStore: Omit<Payment, 'id' | 'createdAt' | 'updatedAt' | 'gatewayTransactionId' | 'gatewayReference' | 'failureReason'> = {
             itemId: itemId,
             buyerId: buyerId,
             sellerId: itemData.sellerId,
-            amount: itemData.price, // Store original amount in KES
-            currency: 'KES', // Paystack also uses standard currency codes
+            amount: itemData.price,
+            currency: 'KES',
             status: 'initiated',
-            paymentGateway: 'paystack', // Add a field to denote the gateway
+            paymentGateway: 'paystack',
         };
         await paymentRef.set({
              ...paymentDataToStore,
+             id: paymentId, // Ensure 'id' field is explicitly set in the document
              createdAt: FieldValue.serverTimestamp(),
              updatedAt: FieldValue.serverTimestamp(),
         });
         console.log(`Initiate Payment: Internal payment record ${paymentId} created.`);
 
         const paystackApiUrl = 'https://api.paystack.com/transaction/initialize';
-        // Paystack webhook URL, ensure this is configured in your Paystack dashboard
-        const callbackUrlForPaystack = `${CALLBACK_BASE_URL}/api/webhooks/paystack`;
+        const userFacingCallbackUrl = `${CALLBACK_BASE_URL}/order-confirmation/${paymentId}`;
 
         const paystackPayload = {
             email: buyerEmail,
-            amount: amountInKobo, // Amount in Kobo
+            amount: amountInKobo,
             currency: 'KES',
-            reference: paymentId, // Your unique reference for this transaction
-            callback_url: `${CALLBACK_BASE_URL}/order-confirmation/${paymentId}`, // Page user lands on after payment
-            // channels: ['card', 'bank', 'ussd', 'qr', 'mobile_money', 'bank_transfer'], // Optional: specify channels
-            metadata: { // Optional: send custom data
+            reference: paymentId,
+            callback_url: userFacingCallbackUrl,
+            metadata: {
                 internal_payment_id: paymentId,
                 item_id: itemId,
                 buyer_id: buyerId,
-                description: `Payment for ${itemData.title}`
+                description: `Payment for ${itemData.title || 'Item'}`.substring(0, 100)
             }
         };
 
@@ -132,33 +129,66 @@ export async function POST(req: Request) {
             body: JSON.stringify(paystackPayload)
         });
 
-        const paystackResult = await response.json();
+        // --- START OF THE CRUCIAL DEBUGGING BLOCK ---
+        const responseText = await response.text(); // Get response as text first
+        console.log("Paystack API Response Status:", response.status);
+        // console.log("Paystack API Response Headers:", JSON.stringify(Object.fromEntries(response.headers.entries()))); // Optional: can be verbose
+        console.log("Paystack API Response Body (Text):", responseText); // <<< --- THIS IS THE LOG YOU NEED TO CHECK --- >>>
+
+        let paystackResult;
+        try {
+            paystackResult = JSON.parse(responseText); // Now try to parse the text
+        } catch (parseError) {
+            console.error("Paystack API Error: Failed to parse Paystack response as JSON.", parseError);
+            console.error("Paystack response was HTML or malformed. Body (first 500 chars):", responseText.substring(0, 500));
+            // Update Firestore record to failed
+            await paymentRef.update({
+                status: 'failed',
+                failureReason: `Paystack API response not JSON. Status: ${response.status}. Body: ${responseText.substring(0, 200)}`, // Log part of body
+                updatedAt: FieldValue.serverTimestamp()
+            });
+            // Return a proper JSON error from YOUR API
+            return NextResponse.json({ message: 'Error communicating with payment gateway: Invalid response format.', details: responseText.substring(0,200) }, { status: 502 }); // 502 Bad Gateway
+        }
+        // --- END OF THE CRUCIAL DEBUGGING BLOCK ---
 
         if (!response.ok || !paystackResult.status || !paystackResult.data?.authorization_url) {
             console.error(`Paystack Initialize Transaction Error (${response.status}):`, paystackResult);
-            await paymentRef.update({ 
-                status: 'failed', 
-                failureReason: `Paystack API Error (${response.status}): ${paystackResult.message || JSON.stringify(paystackResult)}`, 
-                updatedAt: FieldValue.serverTimestamp() 
+            await paymentRef.update({
+                status: 'failed',
+                failureReason: `Paystack API Error (${response.status}): ${paystackResult.message || JSON.stringify(paystackResult)}`,
+                updatedAt: FieldValue.serverTimestamp()
             });
-            throw new Error(paystackResult.message || `Paystack API request failed with status ${response.status}`);
+            const errorMessage = paystackResult.message || `Paystack API request failed with status ${response.status}`;
+            // Propagate Paystack's status code if it's a client error (4xx)
+            const errorStatus = response.status >= 400 && response.status < 500 ? response.status : 502;
+            return NextResponse.json({ message: 'Failed to initiate payment with gateway.', error: errorMessage, paystack_response: paystackResult }, { status: errorStatus });
         }
 
          await paymentRef.update({
-            // Store Paystack's reference if different, or just use our paymentId as the primary ref.
-            // Paystack's main transaction ID is usually available in the webhook.
-            gatewayReference: paystackResult.data.reference, // This should match your paymentId
+            gatewayReference: paystackResult.data.reference, // This should match paymentId
             updatedAt: FieldValue.serverTimestamp(),
          });
 
         console.log(`Initiate Payment (Paystack): Paystack authorization URL generated: ${paystackResult.data.authorization_url}`);
         console.log("--- API POST /api/payment/initiate (Paystack) SUCCESS ---");
 
-        // Return Paystack's authorization_url for redirection
         return NextResponse.json({ checkoutUrl: paystackResult.data.authorization_url }, { status: 200 });
 
     } catch (error: any) {
-        console.error("API Initiate Payment Error (Paystack):", error);
+        console.error("API Initiate Payment Error (Paystack) in CATCH block:", error);
+        // Attempt to update the payment record to 'failed' if an unexpected error occurs
+        // after the record has been created but before/during the Paystack call.
+        try {
+            await paymentRef.update({ // paymentRef is defined in the outer scope
+                status: 'failed',
+                failureReason: `Internal server error: ${error.message || 'Unknown error'}`,
+                updatedAt: FieldValue.serverTimestamp()
+            });
+        } catch (dbError) {
+            console.error("Failed to update payment record to 'failed' in main catch block:", dbError);
+            // Log this but proceed to return the original error to the client
+        }
         return NextResponse.json({ message: 'Failed to initiate payment', error: error.message }, { status: 500 });
     }
 }
