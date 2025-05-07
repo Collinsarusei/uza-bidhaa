@@ -69,6 +69,7 @@ export interface Notification {
 }
 
 export interface Payment {
+  itemTitle: string;
   id: string;
   itemId: string;
   buyerId: string;

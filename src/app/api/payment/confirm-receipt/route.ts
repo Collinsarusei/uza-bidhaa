@@ -24,7 +24,7 @@ async function getPlatformFeePercentage(): Promise<number> {
         return DEFAULT_PLATFORM_FEE_PERCENTAGE;
     }
     try {
-        const feeDocRef = adminDb.collection('settings').doc('platformFee');
+        const feeDocRef = adminDb!.collection('settings').doc('platformFee'); // Added !
         const docSnap = await feeDocRef.get();
         if (docSnap.exists) {
             const feeSettings = docSnap.data() as PlatformSettings;
@@ -78,10 +78,11 @@ export async function POST(req: Request) {
         console.log(`Confirm Receipt: Request for paymentId: ${paymentId}`);
 
         // --- Firestore Transaction --- 
-        const paymentRef = adminDb.collection('payments').doc(paymentId);
-        const platformFeeSettingsRef = adminDb.collection('settings').doc('platformFee'); // Reference to platform settings
+        // Added ! for adminDb assertions
+        const paymentRef = adminDb!.collection('payments').doc(paymentId);
+        const platformFeeSettingsRef = adminDb!.collection('settings').doc('platformFee'); // Reference to platform settings
 
-        const result = await adminDb.runTransaction(async (transaction) => {
+        const result = await adminDb!.runTransaction(async (transaction) => {
             const paymentDoc = await transaction.get(paymentRef);
             if (!paymentDoc.exists) {
                  console.warn(`Confirm Receipt: Payment ${paymentId} not found.`);
@@ -107,11 +108,11 @@ export async function POST(req: Request) {
             const sellerId = paymentData.sellerId;
             if (!sellerId) throw new Error('Seller ID missing on payment record.'); // Ensure sellerId exists
 
-            const sellerRef = adminDb.collection('users').doc(sellerId);
+            const sellerRef = adminDb!.collection('users').doc(sellerId);
             const earningId = uuidv4();
             const earningRef = sellerRef.collection('earnings').doc(earningId);
             const platformFeeRecordId = uuidv4();
-            const platformFeeRecordRef = adminDb.collection('platformFees').doc(platformFeeRecordId); // Collection for fees
+            const platformFeeRecordRef = adminDb!.collection('platformFees').doc(platformFeeRecordId); // Collection for fees
 
             const earningData: Omit<Earning, 'id' | 'createdAt'> = {
                  userId: sellerId,
@@ -198,4 +199,3 @@ export async function POST(req: Request) {
         return NextResponse.json({ message: error.message || 'Failed to confirm receipt.' }, { status });
     }
 }
-```
