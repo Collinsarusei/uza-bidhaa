@@ -6,7 +6,7 @@ import { adminDb } from '@/lib/firebase-admin'; // adminDb can be null
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import * as z from 'zod';
 import { createNotification } from '@/lib/notifications';
-import { Earning, Payment, PlatformSettings } from '@/lib/types'; 
+import { Earning, Payment, PlatformSettings, PlatformFeeRecord } from '@/lib/types'; // Import PlatformFeeRecord
 import { v4 as uuidv4 } from 'uuid';
 
 // --- Zod Schema --- 
@@ -79,6 +79,7 @@ export async function POST(req: Request) {
 
         // --- Firestore Transaction --- 
         const paymentRef = adminDb.collection('payments').doc(paymentId);
+        const platformFeeSettingsRef = adminDb.collection('settings').doc('platformFee'); // Reference to platform settings
 
         const result = await adminDb.runTransaction(async (transaction) => {
             const paymentDoc = await transaction.get(paymentRef);
@@ -104,10 +105,13 @@ export async function POST(req: Request) {
 
             // --- Prepare Updates --- 
             const sellerId = paymentData.sellerId;
-            // FIX: Add non-null assertion here
-            const sellerRef = adminDb!.collection('users').doc(sellerId);
+            if (!sellerId) throw new Error('Seller ID missing on payment record.'); // Ensure sellerId exists
+
+            const sellerRef = adminDb.collection('users').doc(sellerId);
             const earningId = uuidv4();
             const earningRef = sellerRef.collection('earnings').doc(earningId);
+            const platformFeeRecordId = uuidv4();
+            const platformFeeRecordRef = adminDb.collection('platformFees').doc(platformFeeRecordId); // Collection for fees
 
             const earningData: Omit<Earning, 'id' | 'createdAt'> = {
                  userId: sellerId,
@@ -116,6 +120,14 @@ export async function POST(req: Request) {
                  relatedItemId: paymentData.itemId,
                  status: 'available', 
             };
+
+             // Data for the platform fee record
+             const feeRecordData: Omit<PlatformFeeRecord, 'id' | 'createdAt'> = {
+                 amount: fee,
+                 relatedPaymentId: paymentId,
+                 relatedItemId: paymentData.itemId,
+                 sellerId: sellerId, // Record the seller for context
+             };
             
             // 1. Update Payment Status
             transaction.update(paymentRef, {
@@ -126,6 +138,7 @@ export async function POST(req: Request) {
             // 2. Create Earning Record for Seller
              transaction.set(earningRef, {
                  ...earningData,
+                 id: earningId, // Add id field
                  createdAt: FieldValue.serverTimestamp(),
              });
 
@@ -133,8 +146,21 @@ export async function POST(req: Request) {
              transaction.update(sellerRef, {
                  availableBalance: FieldValue.increment(netAmount)
              });
+
+             // 4. Create Platform Fee Record
+             transaction.set(platformFeeRecordRef, {
+                 ...feeRecordData,
+                 id: platformFeeRecordId, // Add id field
+                 createdAt: FieldValue.serverTimestamp(),
+             });
+
+             // 5. Increment Total Platform Fees in settings
+             transaction.set(platformFeeSettingsRef, {
+                 totalPlatformFees: FieldValue.increment(fee),
+                 updatedAt: FieldValue.serverTimestamp() // Also update the settings timestamp
+             }, { merge: true }); // Use merge: true to create if doesn't exist or update if does
             
-            console.log(`Confirm Receipt: Prepared updates for payment ${paymentId}, created earning ${earningId} for seller ${sellerId}.`);
+            console.log(`Confirm Receipt: Prepared updates for payment ${paymentId}, created earning ${earningId} for seller ${sellerId}, created fee record ${platformFeeRecordId}, and incremented total fees.`);
             return { success: true, sellerId, netAmount, itemId: paymentData.itemId, itemTitle: paymentData.itemTitle || 'Item' };
         });
 
@@ -172,3 +198,4 @@ export async function POST(req: Request) {
         return NextResponse.json({ message: error.message || 'Failed to confirm receipt.' }, { status });
     }
 }
+```

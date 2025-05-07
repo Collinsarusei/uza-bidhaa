@@ -6,7 +6,7 @@ import { adminDb } from '@/lib/firebase-admin';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from '@/app/api/auth/[...nextauth]/route';
-import { Payment, Item, Earning, UserProfile, PlatformSettings } from '@/lib/types';
+import { Payment, Item, Earning, UserProfile, PlatformSettings, PlatformFeeRecord } from '@/lib/types'; // Import PlatformFeeRecord
 import { createNotification } from '@/lib/notifications';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -77,6 +77,7 @@ export async function POST(req: Request, context: RouteContext) {
 
     try {
         const paymentRef = adminDb.collection('payments').doc(paymentId);
+        const platformFeeSettingsRef = adminDb.collection('settings').doc('platformFee'); // Reference to platform settings
 
         const result = await adminDb.runTransaction(async (transaction) => {
             const paymentDoc = await transaction.get(paymentRef);
@@ -97,6 +98,8 @@ export async function POST(req: Request, context: RouteContext) {
             const sellerRef = adminDb.collection('users').doc(sellerId);
             const earningId = uuidv4();
             const earningRef = sellerRef.collection('earnings').doc(earningId);
+            const platformFeeRecordId = uuidv4();
+            const platformFeeRecordRef = adminDb.collection('platformFees').doc(platformFeeRecordId); // Collection for fees
 
             const earningData: Omit<Earning, 'id' | 'createdAt'> = {
                 userId: sellerId,
@@ -106,26 +109,52 @@ export async function POST(req: Request, context: RouteContext) {
                 status: 'available',
             };
 
+            // Data for the platform fee record
+             const feeRecordData: Omit<PlatformFeeRecord, 'id' | 'createdAt'> = {
+                 amount: fee,
+                 relatedPaymentId: paymentId,
+                 relatedItemId: paymentData.itemId,
+                 sellerId: sellerId, // Record the seller for context
+             };
+
+            // 1. Update Payment Status
             transaction.update(paymentRef, {
                 status: 'released_to_seller_balance',
                 updatedAt: FieldValue.serverTimestamp(),
                 isDisputed: false, // Clear dispute flag if it was set
                 disputeReason: FieldValue.delete(),
             });
+            // 2. Update Item Status
             transaction.update(itemRef, {
                 status: 'sold', // Or 'completed'
                 updatedAt: FieldValue.serverTimestamp(),
             });
+            // 3. Create Earning Record
             transaction.set(earningRef, {
                 ...earningData,
                 id: earningId, // Ensure 'id' field is written
                 createdAt: FieldValue.serverTimestamp(),
             });
+            // 4. Increment Seller Balance
             transaction.update(sellerRef, {
                 availableBalance: FieldValue.increment(netAmount)
             });
 
-            console.log(`Admin Release: Payment ${paymentId} released to seller ${sellerId}. Net: ${netAmount}, Fee: ${fee}`);
+             // 5. Create Platform Fee Record
+             transaction.set(platformFeeRecordRef, {
+                 ...feeRecordData,
+                 id: platformFeeRecordId, // Add id field
+                 createdAt: FieldValue.serverTimestamp(),
+             });
+
+             // 6. Increment Total Platform Fees in settings
+             transaction.set(platformFeeSettingsRef, {
+                 totalPlatformFees: FieldValue.increment(fee),
+                 updatedAt: FieldValue.serverTimestamp() // Also update the settings timestamp
+             }, { merge: true }); // Use merge: true to create if not exists or update if does
+
+
+            console.log(`Admin Release: Payment ${paymentId} released to seller ${sellerId}. Net: ${netAmount}, Fee: ${fee}. Fee record ${platformFeeRecordId} created.`);
             return { success: true, sellerId, buyerId: paymentData.buyerId, netAmount, itemId: paymentData.itemId, itemTitle: (await transaction.get(itemRef)).data()?.title || 'Item' };
         });
 
@@ -157,3 +186,4 @@ export async function POST(req: Request, context: RouteContext) {
         return NextResponse.json({ message: error.message || 'Failed to release funds.' }, { status: 500 });
     }
 }
+```

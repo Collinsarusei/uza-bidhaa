@@ -29,7 +29,7 @@ import {
   Search,
   Send,
   Server,
-  Settings,
+  Settings, // Added Settings Icon
   Share2,
   Shield,
   ShieldAlert, // Added ShieldAlert
@@ -80,7 +80,7 @@ export const Icons = {
   search: Search,
   send: Send,
   server: Server,
-  settings: Settings,
+  settings: Settings, // Export Settings
   share2: Share2,
   shield: Shield,
   shieldAlert: ShieldAlert, // Export ShieldAlert
@@ -98,7 +98,7 @@ export const Icons = {
   inbox: Inbox,
   bell: Bell,
   bot: Bot,
-  mapPin: MapPin, 
+  mapPin: MapPin,
   // Add spinner alias for convenience if needed
-  spinner: Loader2, 
+  spinner: Loader2,
 };

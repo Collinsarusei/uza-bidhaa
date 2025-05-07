@@ -175,5 +175,18 @@ export interface Conversation {
 export interface PlatformSettings {
     id?: string; // Typically 'platformFee' or similar
     feePercentage: number; // Stored as a whole number, e.g., 10 for 10%
+    totalPlatformFees?: number; // Accumulated total fees collected
     updatedAt?: ApiTimestamp;
 }
+
+// Represents a record of a single fee collected by the platform
+export interface PlatformFeeRecord {
+    id: string; // Firestore document ID
+    amount: number; // The amount of the fee collected
+    relatedPaymentId: string; // The payment this fee was associated with
+    relatedItemId: string; // The item the payment was for
+    sellerId: string; // The seller involved in the transaction
+    createdAt: ApiTimestamp; // When the fee was recorded (typically when payment released)
+}
+
+```

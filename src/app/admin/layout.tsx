@@ -50,7 +50,8 @@ export default function AdminLayout({
 
 
   const navItems = [
-    { href: '/admin/fees', label: 'Fee Management', icon: <Icons.circleDollarSign /> },
+    { href: '/admin/fees', label: 'Fee % Setting', icon: <Icons.settings /> }, // Renamed for clarity
+    { href: '/admin/platform-fees', label: 'Platform Fees', icon: <Icons.circleDollarSign /> }, // New Page
     { href: '/admin/disputes', label: 'Dispute Management', icon: <Icons.shieldAlert /> },
     { href: '/admin/users', label: 'User Management', icon: <Icons.users /> },
     // Add more admin navigation items here
@@ -100,3 +101,5 @@ export default function AdminLayout({
     </div>
   );
 }
+
+```
