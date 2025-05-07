@@ -14,21 +14,30 @@ const DEFAULT_PLATFORM_FEE_PERCENTAGE = 0.10; // 10%
 
 async function isAdmin(userId: string | undefined): Promise<boolean> {
     if (!userId) return false;
-    const adminUserEmail = process.env.ADMIN_EMAIL;
-    if (adminUserEmail) {
-        const session = await getServerSession(authOptions);
-        return session?.user?.email === adminUserEmail;
+    // Check if adminDb is initialized before using it
+    if (!adminDb) {
+        console.error("isAdmin check failed: adminDb is null.");
+        return false;
     }
-    return !!userId; // Fallback, NOT SECURE for production
+    try {
+        // Use non-null assertion because we checked !adminDb above
+        const userDoc = await adminDb!.collection('users').doc(userId).get();
+        return userDoc.exists && userDoc.data()?.role === 'admin';
+    } catch (error) {
+        console.error("Error checking admin role:", error);
+        return false;
+    }
 }
 
 async function getPlatformFeePercentage(): Promise<number> {
+    // Check if adminDb is initialized before using it
     if (!adminDb) {
         console.warn("getPlatformFeePercentage (admin-release): Firebase Admin DB not initialized. Using default fee.");
         return DEFAULT_PLATFORM_FEE_PERCENTAGE;
     }
     try {
-        const feeDocRef = adminDb.collection('settings').doc('platformFee');
+        // Use non-null assertion because we checked !adminDb above
+        const feeDocRef = adminDb!.collection('settings').doc('platformFee');
         const docSnap = await feeDocRef.get();
         if (docSnap.exists) {
             const feeSettings = docSnap.data() as PlatformSettings;
@@ -43,6 +52,7 @@ async function getPlatformFeePercentage(): Promise<number> {
 }
 
 const calculateFee = async (amount: number): Promise<{ fee: number, netAmount: number }> => {
+    // getPlatformFeePercentage already handles the adminDb null check internally
     const platformFeeRate = await getPlatformFeePercentage();
     const fee = Math.round(amount * platformFeeRate * 100) / 100;
     const netAmount = Math.round((amount - fee) * 100) / 100;
@@ -62,12 +72,14 @@ export async function POST(req: Request, context: RouteContext) {
     if (!paymentId) {
         return NextResponse.json({ message: 'Missing payment ID' }, { status: 400 });
     }
+    // Check if adminDb is initialized
     if (!adminDb) {
         console.error(`Admin Release ${paymentId}: Firebase Admin DB not initialized.`);
         return NextResponse.json({ message: 'Server configuration error.' }, { status: 500 });
     }
 
     const session = await getServerSession(authOptions);
+    // isAdmin function now also checks for null adminDb internally
     if (!(await isAdmin(session?.user?.id))) {
         console.warn(`Admin Release ${paymentId}: Unauthorized attempt by user ${session?.user?.id}.`);
         return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
@@ -76,10 +88,14 @@ export async function POST(req: Request, context: RouteContext) {
     console.log(`Admin Release ${paymentId}: Authenticated admin action by ${adminUserId}.`);
 
     try {
-        const paymentRef = adminDb.collection('payments').doc(paymentId);
-        const platformFeeSettingsRef = adminDb.collection('settings').doc('platformFee'); // Reference to platform settings
+        // Use non-null assertion because we checked !adminDb above
+        const paymentRef = adminDb!.collection('payments').doc(paymentId);
+        const platformFeeSettingsRef = adminDb!.collection('settings').doc('platformFee'); // Reference to platform settings
 
-        const result = await adminDb.runTransaction(async (transaction) => {
+        const result = await adminDb!.runTransaction(async (transaction) => {
+            // Inside the transaction, we assume adminDb is valid based on the outer check
+            // For extreme type safety, you could add another check here, but it's generally redundant
+
             const paymentDoc = await transaction.get(paymentRef);
             if (!paymentDoc.exists) {
                 throw new Error('Payment record not found.');
@@ -94,12 +110,12 @@ export async function POST(req: Request, context: RouteContext) {
             const sellerId = paymentData.sellerId;
             if (!sellerId) throw new Error('Seller ID missing on payment record.');
 
-            const itemRef = adminDb.collection('items').doc(paymentData.itemId);
-            const sellerRef = adminDb.collection('users').doc(sellerId);
+            const itemRef = adminDb!.collection('items').doc(paymentData.itemId); // Use ! here too
+            const sellerRef = adminDb!.collection('users').doc(sellerId); // Use ! here too
             const earningId = uuidv4();
             const earningRef = sellerRef.collection('earnings').doc(earningId);
             const platformFeeRecordId = uuidv4();
-            const platformFeeRecordRef = adminDb.collection('platformFees').doc(platformFeeRecordId); // Collection for fees
+            const platformFeeRecordRef = adminDb!.collection('platformFees').doc(platformFeeRecordId); // Collection for fees, Use ! here too
 
             const earningData: Omit<Earning, 'id' | 'createdAt'> = {
                 userId: sellerId,
@@ -186,4 +202,3 @@ export async function POST(req: Request, context: RouteContext) {
         return NextResponse.json({ message: error.message || 'Failed to release funds.' }, { status: 500 });
     }
 }
-```
