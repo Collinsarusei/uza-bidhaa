@@ -33,6 +33,7 @@ export interface UserProfile {
   // ------------------------------------
 
   availableBalance?: number; // Store as number (e.g., 1000.50)
+  isSuspended?: boolean; // For admin to suspend user accounts
 }
 
 export interface Item {
@@ -47,7 +48,7 @@ export interface Item {
   acceptsInstallments: boolean;
   discountPercentage?: number | null;
   mediaUrls: string[];
-  status: 'available' | 'pending' | 'paid_escrow' | 'releasing' | 'released' | 'release_failed' | 'payout_initiated' | 'payout_failed' | 'failed' | 'cancelled' | 'sold';
+  status: 'available' | 'pending' | 'paid_escrow' | 'releasing' | 'released' | 'release_failed' | 'payout_initiated' | 'payout_failed' | 'failed' | 'cancelled' | 'sold' | 'disputed' | 'under_review';
   createdAt: ApiTimestamp;
   updatedAt: ApiTimestamp;
 }
@@ -55,7 +56,7 @@ export interface Item {
 export interface Notification {
   id: string;
   userId: string;
-  type: 'new_message' | 'item_listed' | 'payment_received' | 'payment_released' | 'unusual_activity' | 'item_sold' | 'kyc_approved' | 'kyc_rejected' | 'message_approved' | 'funds_available' | 'withdrawal_initiated' | 'withdrawal_completed' | 'withdrawal_failed';
+  type: 'new_message' | 'item_listed' | 'payment_received' | 'payment_released' | 'unusual_activity' | 'item_sold' | 'kyc_approved' | 'kyc_rejected' | 'message_approved' | 'funds_available' | 'withdrawal_initiated' | 'withdrawal_completed' | 'withdrawal_failed' | 'admin_action'; // Added admin_action
   message: string;
   relatedItemId?: string | null;
   relatedPaymentId?: string | null;
@@ -74,7 +75,7 @@ export interface Payment {
   sellerId: string;
   amount: number; // Amount buyer paid (in KES or your primary currency)
   currency: string;
-  status: 'initiated' | 'paid_to_platform' | 'released_to_seller_balance' | 'failed' | 'cancelled' | 'refunded';
+  status: 'initiated' | 'paid_to_platform' | 'released_to_seller_balance' | 'failed' | 'cancelled' | 'refunded' | 'disputed' | 'refund_pending' | 'admin_review';
   
   // --- Gateway Specific Fields ---
   paymentGateway?: 'intasend' | 'paystack' | string; // To identify the gateway used
@@ -89,8 +90,13 @@ export interface Payment {
   // -------------------------------
 
   failureReason?: string | null; // General failure reason
-  createdAt: ApiTimestamp;
+  createdAt: ApiTimestamp; // Timestamp of when the payment was initiated/created
   updatedAt: ApiTimestamp;
+
+  // Fields for dispute management
+  isDisputed?: boolean; // True if a dispute has been raised for this payment
+  disputeReason?: string | null; // Reason for the dispute
+  disputeSubmittedAt?: ApiTimestamp | null; // When the dispute was submitted
 }
 
 export interface Earning {

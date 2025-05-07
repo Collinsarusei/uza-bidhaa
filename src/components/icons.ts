@@ -32,10 +32,12 @@ import {
   Settings,
   Share2,
   Shield,
+  ShieldAlert, // Added ShieldAlert
   Sun,
   Tag,
   Trash,
   User,
+  Users, // Added Users
   X,
   Workflow,
   Image,
@@ -81,10 +83,12 @@ export const Icons = {
   settings: Settings,
   share2: Share2,
   shield: Shield,
+  shieldAlert: ShieldAlert, // Export ShieldAlert
   sun: Sun,
   tag: Tag,
   trash: Trash,
   user: User,
+  users: Users, // Export Users
   x: X,
   workflow: Workflow,
   image: Image,

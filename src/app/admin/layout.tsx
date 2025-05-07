@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { useEffect } from 'react';
+import React from 'react'; // Import React for React.cloneElement
 
 export default function AdminLayout({
   children,
@@ -20,6 +21,7 @@ export default function AdminLayout({
   const router = useRouter();
 
   // Placeholder for admin check. Replace with actual role verification.
+  // Ensure NEXT_PUBLIC_ADMIN_EMAIL is set in your .env.local for client-side check
   const isAdmin = session?.user?.email === process.env.NEXT_PUBLIC_ADMIN_EMAIL;
 
   useEffect(() => {
@@ -37,6 +39,8 @@ export default function AdminLayout({
     );
   }
    if (!isAdmin && status === 'authenticated') {
+     // This case might be brief as useEffect above will redirect.
+     // Consider removing this explicit return or making it more user-friendly.
      return (
         <div className="flex h-screen items-center justify-center">
              <p>Access Denied. Redirecting...</p>
@@ -47,8 +51,9 @@ export default function AdminLayout({
 
   const navItems = [
     { href: '/admin/fees', label: 'Fee Management', icon: <Icons.circleDollarSign /> },
+    { href: '/admin/disputes', label: 'Dispute Management', icon: <Icons.shieldAlert /> },
+    { href: '/admin/users', label: 'User Management', icon: <Icons.users /> },
     // Add more admin navigation items here
-    // { href: '/admin/users', label: 'User Management', icon: <Icons.user /> },
     // { href: '/admin/reports', label: 'Reports', icon: <Icons.file /> },
   ];
 
@@ -73,7 +78,8 @@ export default function AdminLayout({
                       pathname === item.href && "font-semibold"
                     )}
                   >
-                    {item.icon && React.cloneElement(item.icon, { className: "mr-2 h-4 w-4" })}
+                    {/* Ensure icon prop is correctly passed if using custom icon components */}
+                    {item.icon && React.cloneElement(item.icon as React.ReactElement, { className: "mr-2 h-4 w-4" })}
                     {item.label}
                   </Button>
                 </Link>
