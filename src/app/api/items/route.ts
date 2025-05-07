@@ -7,10 +7,14 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { v4 as uuidv4 } from 'uuid';
 import { createNotification } from '@/lib/notifications'; // Import the helper
 
-const itemsCollection = adminDb.collection('items');
-
 // GET /api/items - Fetch items from Firestore with optional filtering
 export async function GET(request: Request) {
+    if (!adminDb) {
+        console.error("API /api/items GET Error: Firebase Admin DB is not initialized. adminDb is null.");
+        return NextResponse.json({ message: "Server configuration error: Database not available." }, { status: 500 });
+    }
+    const itemsCollection = adminDb.collection('items');
+
     console.log("API: Fetching items from Firestore");
     const { searchParams } = new URL(request.url);
     const userIdToExclude = searchParams.get('userId');
@@ -70,6 +74,11 @@ export async function GET(request: Request) {
 
 // POST /api/items - Create a new item in Firestore
 export async function POST(request: Request) {
+    if (!adminDb) {
+        console.error("API /api/items POST Error: Firebase Admin DB is not initialized. adminDb is null.");
+        return NextResponse.json({ message: "Server configuration error: Database not available." }, { status: 500 });
+    }
+    const itemsCollection = adminDb.collection('items');
     console.log("API: Attempting to create item in Firestore");
 
     const session = await getServerSession(authOptions);
@@ -138,3 +147,4 @@ export async function POST(request: Request) {
         return NextResponse.json({ message: 'Failed to create item', error: error.message }, { status: 500 });
     }
 }
+
