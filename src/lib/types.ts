@@ -165,3 +165,9 @@ export interface Conversation {
         [userId: string]: ApiTimestamp;
     };
 }
+
+export interface PlatformSettings {
+    id?: string; // Typically 'platformFee' or similar
+    feePercentage: number; // Stored as a whole number, e.g., 10 for 10%
+    updatedAt?: ApiTimestamp;
+}

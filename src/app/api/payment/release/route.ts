@@ -5,21 +5,44 @@ import { authOptions } from '../../auth/[...nextauth]/route';
 import { adminDb } from '@/lib/firebase-admin'; // Can be null
 import { FieldValue } from 'firebase-admin/firestore';
 import * as z from 'zod';
-import { Payment, Earning } from '@/lib/types';
+import { Payment, Earning, PlatformSettings } from '@/lib/types';
 import { v4 as uuidv4 } from 'uuid';
 import { createNotification } from '@/lib/notifications';
 
 // --- Zod Schema --- 
-// Rename confirmSchema to releaseSchema for clarity
 const releaseSchema = z.object({
     paymentId: z.string().min(1, "Payment ID is required"),
 });
 
-// --- Platform Fee Calculation --- 
-const PLATFORM_FEE_PERCENTAGE = 0.10; // Example: 10% fee
+// --- Default Platform Fee --- 
+const DEFAULT_PLATFORM_FEE_PERCENTAGE = 0.10; // 10%
 
-const calculateFee = (amount: number): { fee: number, netAmount: number } => {
-    const fee = Math.round(amount * PLATFORM_FEE_PERCENTAGE * 100) / 100;
+// --- Platform Fee Calculation (Async) --- 
+async function getPlatformFeePercentage(): Promise<number> {
+    if (!adminDb) {
+        console.warn("getPlatformFeePercentage (release): Firebase Admin DB not initialized. Using default fee.");
+        return DEFAULT_PLATFORM_FEE_PERCENTAGE;
+    }
+    try {
+        const feeDocRef = adminDb.collection('settings').doc('platformFee');
+        const docSnap = await feeDocRef.get();
+        if (docSnap.exists) {
+            const feeSettings = docSnap.data() as PlatformSettings;
+            if (typeof feeSettings.feePercentage === 'number' && feeSettings.feePercentage >= 0 && feeSettings.feePercentage <= 100) {
+                console.log(`getPlatformFeePercentage (release): Using fee from Firestore: ${feeSettings.feePercentage}%`);
+                return feeSettings.feePercentage / 100; // Convert to decimal
+            }
+        }
+        console.log(`getPlatformFeePercentage (release): Fee not set or invalid in Firestore. Using default fee.`);
+    } catch (error) {
+        console.error("Error fetching platform fee from Firestore (release):", error);
+    }
+    return DEFAULT_PLATFORM_FEE_PERCENTAGE;
+}
+
+const calculateFee = async (amount: number): Promise<{ fee: number, netAmount: number }> => {
+    const platformFeeRate = await getPlatformFeePercentage();
+    const fee = Math.round(amount * platformFeeRate * 100) / 100;
     const netAmount = Math.round((amount - fee) * 100) / 100;
     return { fee, netAmount };
 };
@@ -28,12 +51,10 @@ const calculateFee = (amount: number): { fee: number, netAmount: number } => {
 export async function POST(req: Request) {
     console.log("--- API POST /api/payment/release START (Confirm Receipt) ---");
 
-    // --- FIX: Add Null Check --- 
     if (!adminDb) {
         console.error("Payment Release Error: Firebase Admin DB not initialized.");
         return NextResponse.json({ message: 'Server configuration error.' }, { status: 500 });
     }
-    // --- End Fix ---
 
     // --- Authentication (Buyer) --- 
     const session = await getServerSession(authOptions);
@@ -56,14 +77,9 @@ export async function POST(req: Request) {
         const { paymentId } = validation.data;
         console.log(`Payment Release: Request for paymentId: ${paymentId}`);
 
-        // --- Firestore Transaction --- 
-        // FIX: Use non-null assertion
-        const paymentRef = adminDb!.collection('payments').doc(paymentId);
-        // --- End Fix ---
+        const paymentRef = adminDb.collection('payments').doc(paymentId);
 
-        // FIX: Use non-null assertion
-        const result = await adminDb!.runTransaction(async (transaction) => {
-        // --- End Fix ---
+        const result = await adminDb.runTransaction(async (transaction) => {
             const paymentDoc = await transaction.get(paymentRef);
             if (!paymentDoc.exists) {
                  console.warn(`Payment Release: Payment ${paymentId} not found.`);
@@ -76,26 +92,22 @@ export async function POST(req: Request) {
                  console.warn(`Payment Release: User ${buyerId} is not the buyer for payment ${paymentId}.`);
                 throw new Error('Forbidden: You are not the buyer for this order.');
             }
-            // --- FIX: Check for correct status --- 
             if (paymentData.status !== 'paid_to_platform') {
-            // --- End Fix ---
                 console.log(`Payment Release: Payment ${paymentId} has status ${paymentData.status}, cannot release funds.`);
                  throw new Error(`Cannot release funds for order with status: ${paymentData.status}.`);
             }
 
             // --- Calculate Earnings & Fees --- 
-            const { fee, netAmount } = calculateFee(paymentData.amount);
+            const { fee, netAmount } = await calculateFee(paymentData.amount); // Await async calculation
             console.log(`Payment Release: Calculated fee=${fee}, netAmount=${netAmount} for payment ${paymentId}`);
 
             // --- Prepare Updates --- 
             const sellerId = paymentData.sellerId;
-            if (!sellerId) { // Added check for sellerId validity
+            if (!sellerId) { 
                 console.error(`Payment Release: Seller ID missing on payment record ${paymentId}`);
                 throw new Error('Internal error: Seller information missing.');
             }
-            // FIX: Use non-null assertion
-            const sellerRef = adminDb!.collection('users').doc(sellerId);
-            // --- End Fix ---
+            const sellerRef = adminDb.collection('users').doc(sellerId);
             const earningId = uuidv4();
             const earningRef = sellerRef.collection('earnings').doc(earningId);
 
@@ -125,24 +137,23 @@ export async function POST(req: Request) {
              });
             
             console.log(`Payment Release: Prepared updates for payment ${paymentId}, created earning ${earningId} for seller ${sellerId}.`);
-            return { success: true, sellerId, netAmount, itemId: paymentData.itemId };
+            return { success: true, sellerId, netAmount, itemId: paymentData.itemId, itemTitle: paymentData.itemTitle || 'Item' };
         });
 
         // --- Send Notification (Outside Transaction) --- 
         if (result?.success) {
             console.log(`Payment Release: Transaction successful for payment ${paymentId}.`);
             try {
-                let itemTitle = 'Item';
-                if (result.itemId) {
-                    // FIX: Use non-null assertion
-                    const itemDoc = await adminDb!.collection('items').doc(result.itemId).get();
-                     // --- End Fix ---
-                    if (itemDoc.exists) itemTitle = itemDoc.data()?.title || 'Item';
+                let itemTitleToNotify = result.itemTitle;
+                if (!itemTitleToNotify && result.itemId) {
+                    const itemDoc = await adminDb.collection('items').doc(result.itemId).get();
+                    if (itemDoc.exists) itemTitleToNotify = itemDoc.data()?.title || 'Item';
                 }
+
                  await createNotification({
                      userId: result.sellerId,
                      type: 'funds_available',
-                     message: `Funds (KES ${result.netAmount}) for "${itemTitle}" are now available in your earnings balance.`,
+                     message: `Funds (KES ${result.netAmount}) for "${itemTitleToNotify}" are now available in your earnings balance.`,
                      relatedItemId: result.itemId,
                      relatedPaymentId: paymentId,
                  });

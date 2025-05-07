@@ -57,6 +57,14 @@ function DashboardContent() {
 
   const { unreadCount, markAllAsRead } = useNotifications();
 
+  // Basic admin check (placeholder - replace with actual role check)
+  const isAdminUser = useMemo(() => {
+      // This is NOT secure. In a real app, verify admin status server-side
+      // or via secure custom claims in the session.
+      return session?.user?.email === process.env.NEXT_PUBLIC_ADMIN_EMAIL;
+  }, [session]);
+
+
   const handleLogout = async () => {
       await signOut({ redirect: false }); 
       router.push('/'); 
@@ -166,7 +174,6 @@ function DashboardContent() {
              )}
 
             <div className="hidden md:flex items-center gap-1"> 
-                {/* ADDED My Orders and My Earnings */} 
                  {session?.user && (
                      <TooltipProvider><Tooltip><TooltipTrigger asChild>
                          <Link href="/dashboard/my-orders" passHref><Button variant="link" size="sm">My Orders</Button></Link>
@@ -177,7 +184,11 @@ function DashboardContent() {
                          <Link href="/dashboard/my-earnings" passHref><Button variant="link" size="sm">My Earnings</Button></Link>
                      </TooltipTrigger><TooltipContent><p>View your seller earnings</p></TooltipContent></Tooltip></TooltipProvider>
                  )}
-                 {/* Separator */} 
+                {isAdminUser && (
+                    <TooltipProvider><Tooltip><TooltipTrigger asChild>
+                        <Link href="/admin/fees" passHref><Button variant="link" size="sm" className="text-red-500 hover:text-red-600">Admin Fees</Button></Link>
+                    </TooltipTrigger><TooltipContent><p>Manage Platform Fees</p></TooltipContent></Tooltip></TooltipProvider>
+                )}
                  {session?.user && <div className="h-6 w-px bg-border mx-2"></div>}
                 
                  {session?.user && (
@@ -244,9 +255,13 @@ function DashboardContent() {
                                      <Link href="/dashboard" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">Dashboard</Button></Link>
                                      <Link href="/sell" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">Sell Item</Button></Link>
                                      <Link href="/dashboard/my-listings" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">My Listings</Button></Link>
-                                     {/* ADDED My Orders/Earnings */} 
                                      <Link href="/dashboard/my-orders" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">My Orders</Button></Link>
                                      <Link href="/dashboard/my-earnings" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">My Earnings</Button></Link>
+                                     {isAdminUser && (
+                                        <Link href="/admin/fees" passHref onClick={() => setIsMobileNavOpen(false)}>
+                                            <Button variant="ghost" className="w-full justify-start text-red-500 hover:text-red-600">Admin Fees</Button>
+                                        </Link>
+                                     )}
                                      <Link href="/profile" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">Profile</Button></Link>
                                      <Button variant="ghost" onClick={handleLogout} className="w-full justify-start text-red-600 hover:text-red-700">Logout</Button>
                                  </>

@@ -3,7 +3,8 @@ import { Geist, Geist_Mono } from 'next/font/google';
 import './globals.css';
 import { Toaster } from "@/components/ui/toaster";
 import NextAuthSessionProvider from "@/components/providers/session-provider";
-import { NotificationProvider } from "@/components/providers/notification-provider"; // Import NotificationProvider
+import { NotificationProvider } from "@/components/providers/notification-provider"; 
+// import { AdminFeesProvider } from "@/components/providers/admin-fees-provider"; // Example for future admin context
 
 const geistSans = Geist({
   variable: '--font-geist-sans',
@@ -29,9 +30,10 @@ export default function RootLayout({
     <html lang="en">
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         <NextAuthSessionProvider>
-          {/* Wrap children with NotificationProvider inside SessionProvider */}
           <NotificationProvider>
-            {children} 
+            {/* <AdminFeesProvider> Example for future context */}
+              {children} 
+            {/* </AdminFeesProvider> */}
             <Toaster />
           </NotificationProvider>
         </NextAuthSessionProvider>

@@ -6,7 +6,7 @@ import { adminDb } from '@/lib/firebase-admin'; // adminDb can be null
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import * as z from 'zod';
 import { createNotification } from '@/lib/notifications';
-import { Earning, Payment } from '@/lib/types'; 
+import { Earning, Payment, PlatformSettings } from '@/lib/types'; 
 import { v4 as uuidv4 } from 'uuid';
 
 // --- Zod Schema --- 
@@ -14,11 +14,35 @@ const confirmSchema = z.object({
     paymentId: z.string().min(1, "Payment ID is required"),
 });
 
-// --- Platform Fee Calculation --- 
-const PLATFORM_FEE_PERCENTAGE = 0.10; 
+// --- Default Platform Fee --- 
+const DEFAULT_PLATFORM_FEE_PERCENTAGE = 0.10; // 10%
 
-const calculateFee = (amount: number): { fee: number, netAmount: number } => {
-    const fee = Math.round(amount * PLATFORM_FEE_PERCENTAGE * 100) / 100; 
+// --- Platform Fee Calculation (Async) --- 
+async function getPlatformFeePercentage(): Promise<number> {
+    if (!adminDb) {
+        console.warn("getPlatformFeePercentage: Firebase Admin DB not initialized. Using default fee.");
+        return DEFAULT_PLATFORM_FEE_PERCENTAGE;
+    }
+    try {
+        const feeDocRef = adminDb.collection('settings').doc('platformFee');
+        const docSnap = await feeDocRef.get();
+        if (docSnap.exists) {
+            const feeSettings = docSnap.data() as PlatformSettings;
+            if (typeof feeSettings.feePercentage === 'number' && feeSettings.feePercentage >= 0 && feeSettings.feePercentage <= 100) {
+                console.log(`getPlatformFeePercentage: Using fee from Firestore: ${feeSettings.feePercentage}%`);
+                return feeSettings.feePercentage / 100; // Convert to decimal e.g. 10 -> 0.10
+            }
+        }
+        console.log(`getPlatformFeePercentage: Fee not set or invalid in Firestore. Using default fee.`);
+    } catch (error) {
+        console.error("Error fetching platform fee from Firestore:", error);
+    }
+    return DEFAULT_PLATFORM_FEE_PERCENTAGE;
+}
+
+const calculateFee = async (amount: number): Promise<{ fee: number, netAmount: number }> => {
+    const platformFeeRate = await getPlatformFeePercentage();
+    const fee = Math.round(amount * platformFeeRate * 100) / 100; 
     const netAmount = Math.round((amount - fee) * 100) / 100;
     return { fee, netAmount };
 };
@@ -75,7 +99,7 @@ export async function POST(req: Request) {
             }
 
             // --- Calculate Earnings & Fees --- 
-            const { fee, netAmount } = calculateFee(paymentData.amount);
+            const { fee, netAmount } = await calculateFee(paymentData.amount); // Await async calculation
             console.log(`Confirm Receipt: Calculated fee=${fee}, netAmount=${netAmount} for payment ${paymentId}`);
 
             // --- Prepare Updates --- 
@@ -111,22 +135,23 @@ export async function POST(req: Request) {
              });
             
             console.log(`Confirm Receipt: Prepared updates for payment ${paymentId}, created earning ${earningId} for seller ${sellerId}.`);
-            return { success: true, sellerId, netAmount, itemId: paymentData.itemId };
+            return { success: true, sellerId, netAmount, itemId: paymentData.itemId, itemTitle: paymentData.itemTitle || 'Item' };
         });
 
         if (result?.success) {
             console.log(`Confirm Receipt: Transaction successful for payment ${paymentId}.`);
             try {
-                let itemTitle = 'Item';
-                if (result.itemId) {
-                     // FIX: Add non-null assertion here
+                // Use itemTitle from transaction result if available, otherwise fetch.
+                let itemTitleToNotify = result.itemTitle; 
+                if (!itemTitleToNotify && result.itemId) { // Fallback if itemTitle wasn't on payment record
                     const itemDoc = await adminDb!.collection('items').doc(result.itemId).get();
-                    if (itemDoc.exists) itemTitle = itemDoc.data()?.title || 'Item';
+                    if (itemDoc.exists) itemTitleToNotify = itemDoc.data()?.title || 'Item';
                 }
+
                  await createNotification({
                      userId: result.sellerId,
                      type: 'funds_available',
-                     message: `Funds (KES ${result.netAmount}) for "${itemTitle}" are now available in your earnings balance.`,
+                     message: `Funds (KES ${result.netAmount}) for "${itemTitleToNotify}" are now available in your earnings balance.`,
                      relatedItemId: result.itemId,
                      relatedPaymentId: paymentId,
                  });
