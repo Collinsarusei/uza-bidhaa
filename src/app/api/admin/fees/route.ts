@@ -52,7 +52,7 @@ export async function GET() {
     }
 
     try {
-        const feeDocRef = adminDb.collection(SETTINGS_COLLECTION).doc(PLATFORM_FEE_DOC_ID);
+        const feeDocRef = adminDb!.collection(SETTINGS_COLLECTION).doc(PLATFORM_FEE_DOC_ID);
         const docSnap = await feeDocRef.get();
 
         if (!docSnap.exists) {
@@ -94,8 +94,14 @@ export async function POST(req: Request) {
 
         const { feePercentage } = validation.data;
 
-        const feeDocRef = adminDb.collection(SETTINGS_COLLECTION).doc(PLATFORM_FEE_DOC_ID);
-        const settingsUpdate: Partial<PlatformSettings> & { updatedAt: FieldValue } = {
+        const feeDocRef = adminDb!.collection(SETTINGS_COLLECTION).doc(PLATFORM_FEE_DOC_ID);
+        
+        // Corrected type definition for settingsUpdate
+        const settingsUpdate: {
+            feePercentage: number;
+            updatedAt: FieldValue;
+            totalPlatformFees?: FieldValue; // If this field is sometimes updated here
+        } = {
             feePercentage: feePercentage,
             updatedAt: FieldValue.serverTimestamp(),
         };

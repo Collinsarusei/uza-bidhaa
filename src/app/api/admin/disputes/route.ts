@@ -10,12 +10,17 @@ import { Timestamp } from 'firebase-admin/firestore';
 
 async function isAdmin(userId: string | undefined): Promise<boolean> {
     if (!userId) return false;
-    const adminUserEmail = process.env.ADMIN_EMAIL;
-    if (adminUserEmail) {
-        const session = await getServerSession(authOptions);
-        return session?.user?.email === adminUserEmail;
+    if (!adminDb) {
+        console.error("isAdmin check failed: adminDb is null.");
+        return false;
     }
-    return !!userId; // Fallback, NOT SECURE for production
+    try {
+        const userDoc = await adminDb!.collection('users').doc(userId).get();
+        return userDoc.exists && userDoc.data()?.role === 'admin';
+    } catch (error) {
+        console.error("Error checking admin role:", error);
+        return false;
+    }
 }
 
 const safeTimestampToString = (timestamp: any): string | null => {
@@ -52,7 +57,7 @@ export async function GET() {
         sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
         const sevenDaysAgoTimestamp = Timestamp.fromDate(sevenDaysAgo);
 
-        const paymentsRef = adminDb.collection('payments');
+        const paymentsRef = adminDb!.collection('payments'); // Added !
         
         // Query for payments that are 'paid_to_platform' AND older than 7 days
         const overdueQuery = paymentsRef
@@ -79,18 +84,18 @@ export async function GET() {
                 let sellerName: string | undefined;
 
                 if (paymentData.itemId) {
-                    const itemDoc = await adminDb.collection('items').doc(paymentData.itemId).get();
+                    const itemDoc = await adminDb!.collection('items').doc(paymentData.itemId).get(); // Added !
                     if (itemDoc.exists) {
                         const item = itemDoc.data() as Item;
                         itemDetails = { title: item.title, mediaUrls: item.mediaUrls, price: item.price };
                     }
                 }
                 if (paymentData.buyerId) {
-                    const buyerDoc = await adminDb.collection('users').doc(paymentData.buyerId).get();
+                    const buyerDoc = await adminDb!.collection('users').doc(paymentData.buyerId).get(); // Added !
                     if (buyerDoc.exists) buyerName = (buyerDoc.data() as UserProfile).name;
                 }
                 if (paymentData.sellerId) {
-                    const sellerDoc = await adminDb.collection('users').doc(paymentData.sellerId).get();
+                    const sellerDoc = await adminDb!.collection('users').doc(paymentData.sellerId).get(); // Added !
                     if (sellerDoc.exists) sellerName = (sellerDoc.data() as UserProfile).name;
                 }
                 

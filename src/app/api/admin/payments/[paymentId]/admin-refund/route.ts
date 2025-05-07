@@ -97,7 +97,7 @@ export async function POST(req: Request, context: RouteContext) {
             // --- End TODO ---
             // For now, we assume manual refund or proceed with DB update only.
 
-            const itemRef = adminDb.collection('items').doc(paymentData.itemId);
+            const itemRef = adminDb!.collection('items').doc(paymentData.itemId);
             transaction.update(paymentRef, {
                 status: 'refunded', // Or 'refund_pending' if Paystack refund is async
                 updatedAt: FieldValue.serverTimestamp(),
