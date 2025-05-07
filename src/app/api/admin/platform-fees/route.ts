@@ -6,7 +6,7 @@ import { adminDb } from '@/lib/firebase-admin';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from '@/app/api/auth/[...nextauth]/route';
 import { PlatformSettings, PlatformFeeRecord } from '@/lib/types';
-import { Timestamp, FieldValue } from 'firebase-admin/firestore'; // Import FieldValue if needed, though Timestamp is the main concern here
+import { Timestamp, FieldValue, DocumentData } from 'firebase-admin/firestore'; // Import DocumentData
 
 // Reusable admin check function
 async function isAdmin(userId: string | undefined): Promise<boolean> {
@@ -73,20 +73,21 @@ export async function GET() {
 
         const feeRecords: PlatformFeeRecord[] = [];
         feesSnapshot.forEach(doc => {
-            // Get raw data, which includes createdAt as a Timestamp
-            const rawData = doc.data();
+            // Get raw data as DocumentData which includes all fields from Firestore
+            const rawData = doc.data() as DocumentData;
 
-            // Cast rawData to a type that includes properties expected for PlatformFeeRecord
-            // Access createdAt from rawData, then convert it
+            // Construct the PlatformFeeRecord by accessing fields from rawData
             const feeRecord: PlatformFeeRecord = {
                 id: doc.id,
-                amount: rawData.amount, // Assuming amount exists on rawData
-                relatedPaymentId: rawData.relatedPaymentId, // Assuming relatedPaymentId exists
-                relatedItemId: rawData.relatedItemId, // Assuming relatedItemId exists
-                sellerId: rawData.sellerId, // Assuming sellerId exists
-                createdAt: safeTimestampToString(rawData.createdAt), // Convert the Timestamp
+                amount: rawData.amount, // Access directly from rawData
+                relatedPaymentId: rawData.relatedPaymentId, // Access directly from rawData
+                relatedItemId: rawData.relatedItemId, // Access directly from rawData
+                sellerId: rawData.sellerId, // Access directly from rawData
+                createdAt: safeTimestampToString(rawData.createdAt), // Access createdAt from rawData and convert
             };
-            // Optional: Add checks if these fields might not exist in your documents
+
+            // Optional: Add runtime checks if these fields might genuinely be missing in some documents
+            // e.g., if (typeof rawData.amount !== 'number') { /* handle error or skip */ }
 
             feeRecords.push(feeRecord);
         });
