@@ -1,269 +1,214 @@
 // src/app/api/webhooks/paystack/route.ts
-import { NextResponse, NextRequest } from 'next/server';
+import { NextResponse } from 'next/server';
 import { adminDb } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
-import { createNotification } from '@/lib/notifications';
 import crypto from 'crypto';
-import { Earning, Payment } from '@/lib/types'; // Ensure Payment type is updated
+import { Payment, UserProfile, Item } from '@/lib/types';
+import { createNotification } from '@/lib/notifications';
 
-// --- Environment Variable Checks ---
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
-// You can set a webhook secret in Paystack dashboard for extra security, then verify it.
-// For now, we'll use the primary API secret key for HMAC verification.
 
 if (!PAYSTACK_SECRET_KEY) {
-    console.error("FATAL: Missing Paystack Secret Key environment variable (PAYSTACK_SECRET_KEY).");
+    console.error("FATAL: Paystack Secret Key not set in environment variables.");
 }
 
 // --- Helper: Process Charge Success Event ---
 async function handleChargeSuccess(payload: any) {
     console.log("Paystack Webhook: Processing charge.success event...", payload);
-    const paymentReference = payload.data.reference; // This is YOUR reference (paymentId)
-    const paystackTransactionId = payload.data.id; // Paystack's internal transaction ID
-    const amountPaidKobo = payload.data.amount;
-    const amountPaidKES = amountPaidKobo / 100; // Convert back to KES
-    const paymentStatus = payload.data.status; // Should be 'success'
+    
+    // --- Use payment_id from metadata as the reliable document ID --- 
+    const paymentId = payload?.data?.metadata?.payment_id; 
+    const paystackReference = payload?.data?.reference; // Keep for logging/reference
+    const paystackTransactionId = payload?.data?.id; 
+    const amountPaidKobo = payload?.data?.amount;
+    const paymentStatus = payload?.data?.status;
 
-    if (!paymentReference || !adminDb) {
-        console.warn("Charge Success Ignored: Missing reference or DB not init.");
-        return;
+    if (!paymentId || !adminDb) {
+        console.warn(`Charge Success Ignored: Missing payment_id in metadata or DB not init. Paystack Ref: ${paystackReference}`);
+        return; // Cannot proceed without our internal payment ID
     }
 
     if (paymentStatus !== 'success') {
-        console.warn(`Charge Success Ignored: Payment reference ${paymentReference} status is not 'success' (is '${paymentStatus}').`);
+        console.warn(`Charge Success Ignored: Payment reference ${paystackReference} status is not 'success' (is '${paymentStatus}'). Payment ID: ${paymentId}`);
+        // Optionally, update the payment record to 'failed' here if it was 'initiated'
+        // const paymentRef = adminDb.collection('payments').doc(paymentId);
+        // await paymentRef.update({ status: 'failed', failureReason: `Paystack reported status: ${paymentStatus}`, updatedAt: FieldValue.serverTimestamp() });
         return;
     }
 
-    const paymentRef = adminDb.collection('payments').doc(paymentReference);
-    const paymentDoc = await paymentRef.get();
-
-    if (!paymentDoc.exists) {
-        console.warn(`Charge Success Ignored: Payment record not found for reference: ${paymentReference}`);
-        return;
-    }
-    const paymentData = paymentDoc.data() as Payment;
-    if (!paymentData) {
-        console.warn(`Charge Success Ignored: Payment data empty for reference: ${paymentReference}`);
-        return;
-    }
-
-    if (['paid_to_platform', 'released_to_seller_balance', 'failed', 'refunded'].includes(paymentData.status)) {
-        console.log(`Charge Success Ignored: Payment ${paymentReference} already in terminal state (${paymentData.status}).`);
-        return;
-    }
-
-    // Verify amount (optional but good practice)
-    if (Math.round(paymentData.amount * 100) !== amountPaidKobo) {
-        console.warn(`Charge Success Warning: Amount mismatch for payment ${paymentReference}. Expected ${paymentData.amount * 100} Kobo, got ${amountPaidKobo} Kobo.`);
-        // Decide how to handle: log, flag for review, or proceed if minor diff
-    }
-
-    console.log(`Charge Success: Successful payment received for payment ${paymentReference}.`);
-    let itemTitle = 'Item';
-    if (paymentData.itemId) {
-        const itemDoc = await adminDb.collection('items').doc(paymentData.itemId).get();
-        if (itemDoc.exists) itemTitle = itemDoc.data()?.title || 'Item';
-    }
-
-    await adminDb.runTransaction(async (transaction) => {
-        const itemRef = adminDb!.collection('items').doc(paymentData.itemId);
-        transaction.update(paymentRef, {
-            status: 'paid_to_platform',
-            gatewayTransactionId: paystackTransactionId.toString(), // Store Paystack's ID
-            updatedAt: FieldValue.serverTimestamp(),
-        });
-        transaction.update(itemRef, {
-            status: 'paid_escrow',
-            updatedAt: FieldValue.serverTimestamp()
-        });
-    });
-    console.log(`Charge Success: Updated payment ${paymentReference} to paid_to_platform and item ${paymentData.itemId} to paid_escrow.`);
-
+    // --- Use paymentId (UUID) to find the Firestore document --- 
+    const paymentRef = adminDb.collection('payments').doc(paymentId);
+    
     try {
-        await createNotification({ userId: paymentData.sellerId, type: 'payment_received', message: `Payment received for "${itemTitle}" and is held pending buyer confirmation.`, relatedItemId: paymentData.itemId, relatedPaymentId: paymentReference });
-        await createNotification({ userId: paymentData.buyerId, type: 'payment_received', message: `Your payment for "${itemTitle}" was successful.`, relatedItemId: paymentData.itemId, relatedPaymentId: paymentReference });
-        console.log(`Charge Success: Notifications sent for payment ${paymentReference}.`);
-    } catch (notifyError) {
-        console.error(`Charge Success: Failed to send notifications for payment ${paymentReference}:`, notifyError);
-    }
-}
+        const paymentDoc = await paymentRef.get();
 
-// --- Helper: Process Transfer (Payout) Event ---
-async function handleTransferEvent(payload: any) {
-    console.log("Paystack Webhook: Processing transfer event...", payload);
-    const transferCode = payload.data.transfer_code; // Paystack's transfer code
-    const transferStatus = payload.data.status; // e.g., 'success', 'failed', 'reversed'
-    const internalWithdrawalReference = payload.data.reference; // YOUR reference for the withdrawal
-    // Paystack might also send the recipient_code and other details
-
-    if (!internalWithdrawalReference || !adminDb) { // If you used a reference when initiating transfer
-        console.warn("Transfer Event Ignored: Missing reference or DB not init.");
-        return;
-    }
-
-    // Query your withdrawals collection using the 'internalWithdrawalReference'
-    // This reference should have been set when you initiated the transfer (payout)
-    const withdrawalsRef = adminDb.collectionGroup('withdrawals');
-    const withdrawalQuery = withdrawalsRef.where('paystackTransferReference', '==', internalWithdrawalReference).limit(1);
-    // Or if you store transfer_code: .where('paystackTransferCode', '==', transferCode)
-    const snapshot = await withdrawalQuery.get();
-
-    if (snapshot.empty) {
-        console.warn(`Transfer Event Ignored: Withdrawal record not found for Paystack reference: ${internalWithdrawalReference}`);
-        return;
-    }
-
-    const withdrawalDoc = snapshot.docs[0];
-    const withdrawalRef = withdrawalDoc.ref;
-    const withdrawalData = withdrawalDoc.data();
-    const userId = withdrawalData.userId;
-    const withdrawalId = withdrawalDoc.id; // Your internal withdrawal ID
-    const withdrawalAmount = withdrawalData.amount;
-    const userRef = adminDb.collection('users').doc(userId);
-
-    console.log(`Transfer Event: Found withdrawal record ${withdrawalId} for user ${userId}. Paystack status: ${transferStatus}`);
-
-    if (['completed', 'failed'].includes(withdrawalData.status) && withdrawalData.paystackTransferCode === transferCode) {
-        console.log(`Transfer Event Ignored: Withdrawal ${withdrawalId} already in terminal state (${withdrawalData.status}) for this transfer_code.`);
-        return;
-    }
-
-    let notificationType: 'withdrawal_completed' | 'withdrawal_failed' | null = null;
-    let notificationMessage = '';
-
-    if (transferStatus === 'success') {
-        console.log(`Transfer Event: SUCCESS for withdrawal ${withdrawalId}.`);
-        await withdrawalRef.update({
-            status: 'completed',
-            paystackTransferCode: transferCode, // Store Paystack's transfer code
-            completedAt: FieldValue.serverTimestamp(),
-            failureReason: FieldValue.delete() // Clear any previous failure reason
-        });
-        notificationType = 'withdrawal_completed';
-        notificationMessage = `Your withdrawal of KES ${withdrawalAmount.toLocaleString()} has been completed successfully.`;
-
-    } else if (transferStatus === 'failed' || transferStatus === 'reversed') {
-        const failureReason = payload.data.reason || 'Transfer failed or was reversed by Paystack.';
-        console.warn(`Transfer Event: FAILED/REVERSED for withdrawal ${withdrawalId}. Reason: ${failureReason}`);
-        
-        // Only revert balance if this is the first failure/reversal for this specific transfer attempt
-        if (withdrawalData.status !== 'failed' || withdrawalData.paystackTransferCode !== transferCode) {
-            console.log(`Transfer Event: Attempting to revert balance/earnings for failed withdrawal ${withdrawalId}.`);
-            try {
-                await adminDb.runTransaction(async (transaction) => {
-                    transaction.update(withdrawalRef, {
-                        status: 'failed',
-                        paystackTransferCode: transferCode,
-                        failureReason: failureReason,
-                        updatedAt: FieldValue.serverTimestamp()
-                    });
-                    // Increment user's availableBalance
-                    transaction.update(userRef, {
-                        availableBalance: FieldValue.increment(withdrawalAmount)
-                    });
-                    // TODO: Revert Earning statuses if applicable
-                });
-                console.log(`Transfer Event: Balance/earnings reverted for failed withdrawal ${withdrawalId}.`);
-            } catch (revertError) {
-                console.error(`Transfer Event: CRITICAL - Failed to revert balance for failed withdrawal ${withdrawalId}!`, revertError);
-            }
-        } else {
-             console.log(`Transfer Event: Withdrawal ${withdrawalId} already marked as failed for this transfer. No balance reversion.`);
+        if (!paymentDoc.exists) {
+            console.warn(`Charge Success Ignored: Payment record not found for paymentId: ${paymentId} (Paystack Ref: ${paystackReference})`);
+            return;
         }
-        notificationType = 'withdrawal_failed';
-        notificationMessage = `Your withdrawal of KES ${withdrawalAmount.toLocaleString()} failed. Reason: ${failureReason}. The amount has been returned to your balance.`;
+        const paymentData = paymentDoc.data() as Payment;
+        if (!paymentData) {
+            console.warn(`Charge Success Ignored: Payment data empty for paymentId: ${paymentId}`);
+            return;
+        }
 
-    } else {
-        // e.g., pending, processing by Paystack
-        console.log(`Transfer Event: Received non-terminal status '${transferStatus}' for withdrawal ${withdrawalId}.`);
-        await withdrawalRef.update({ 
-            status: 'processing', // Or map Paystack statuses if needed
-            paystackTransferCode: transferCode,
-            updatedAt: FieldValue.serverTimestamp()
-        });
-    }
+        // Idempotency check: If already processed, ignore.
+        if (['paid_to_platform', 'released_to_seller_balance', 'failed', 'refunded'].includes(paymentData.status)) {
+            console.log(`Charge Success Ignored: Payment ${paymentId} already in terminal state (${paymentData.status}). Paystack Ref: ${paystackReference}`);
+            return;
+        }
 
-    if (notificationType && notificationMessage) {
-        try {
-            await createNotification({
-                userId: userId,
-                type: notificationType,
-                message: notificationMessage,
-                relatedWithdrawalId: withdrawalId
+        // --- Perform Transaction to update Payment and Item --- 
+        await adminDb.runTransaction(async (transaction) => {
+            const itemRef = adminDb!.collection('items').doc(paymentData.itemId);
+            // Update payment document
+            transaction.update(paymentRef, {
+                status: 'paid_to_platform',
+                gatewayTransactionId: paystackTransactionId ? paystackTransactionId.toString() : null, // Store Paystack's ID
+                updatedAt: FieldValue.serverTimestamp(),
             });
-             console.log(`Transfer Event: Notification sent for withdrawal ${withdrawalId}.`);
+            // Update item document
+            transaction.update(itemRef, {
+                status: 'paid_escrow', // Mark item as paid
+                updatedAt: FieldValue.serverTimestamp()
+            });
+        });
+        console.log(`Charge Success: Updated payment ${paymentId} to paid_to_platform and item ${paymentData.itemId} to paid_escrow. Paystack Ref: ${paystackReference}`);
+
+        // --- Send Notifications (Optional) ---
+        try {
+            // Notify Seller
+            await createNotification({
+                userId: paymentData.sellerId,
+                type: 'item_sold',
+                message: `Your item "${paymentData.itemTitle || 'Item'}" has been sold and payment is secured. Prepare for delivery/handover.`,
+                relatedItemId: paymentData.itemId,
+                relatedPaymentId: paymentId,
+            });
+             // Notify Buyer (Optional - maybe less necessary here, confirm receipt is more important)
+            // await createNotification({
+            //     userId: paymentData.buyerId,
+            //     type: 'payment_received',
+            //     message: `Your payment for "${paymentData.itemTitle || 'Item'}" was successful. Funds are held securely.`,
+            //     relatedItemId: paymentData.itemId,
+            //     relatedPaymentId: paymentId,
+            // });
         } catch (notifyError) {
-            console.error(`Transfer Event: Failed to send notification for ${withdrawalId}:`, notifyError);
+             console.error(`Charge Success: Failed to send notification for payment ${paymentId}:`, notifyError);
         }
+
+    } catch (error) {
+         console.error(`Charge Success Error processing paymentId ${paymentId} (Paystack Ref: ${paystackReference}):`, error);
+         // Consider adding specific error handling or retry logic if needed
     }
 }
 
-// --- Main Webhook Handler ---
-export async function POST(req: NextRequest) {
+// --- Helper: Process Transfer Success Event ---
+async function handleTransferSuccess(payload: any) {
+    // ... logic for successful payouts ...
+    console.log("Paystack Webhook: Processing transfer.success event...", payload);
+    const transferReference = payload?.data?.reference; // Your wdrl_... reference
+    const withdrawalId = transferReference?.startsWith('wdrl_') ? transferReference.substring(5) : null;
+    const paystackTransferCode = payload?.data?.transfer_code;
+
+     if (!withdrawalId || !adminDb) {
+         console.warn(`Transfer Success Ignored: Could not parse withdrawalId from reference ${transferReference} or DB not init.`);
+         return;
+     }
+    // TODO: Find the user associated with this withdrawal to update their record
+    // You might need to query the withdrawals collection across all users, or include userId in metadata/reference
+    // For now, assuming withdrawals are stored under the user:
+    // const withdrawalRef = adminDb.collectionGroup('withdrawals').where('id', '==', withdrawalId).limit(1);
+    // const snapshot = await withdrawalRef.get(); 
+     // ... find userRef and update withdrawal status to 'completed' ...
+     console.log(`Transfer Success: Need to implement logic to find user and update withdrawal ${withdrawalId} to completed.`);
+}
+
+// --- Helper: Process Transfer Failed Event ---
+async function handleTransferFailed(payload: any) {
+    // ... logic for failed payouts ...
+     console.log("Paystack Webhook: Processing transfer.failed event...", payload);
+     const transferReference = payload?.data?.reference;
+     const withdrawalId = transferReference?.startsWith('wdrl_') ? transferReference.substring(5) : null;
+     const failureReason = payload?.data?.failure_reason || "Transfer failed without specific reason from Paystack";
+
+     if (!withdrawalId || !adminDb) {
+         console.warn(`Transfer Failed Ignored: Could not parse withdrawalId from reference ${transferReference} or DB not init.`);
+         return;
+     }
+    // TODO: Find user and withdrawal record, update status to 'failed', maybe revert balance (carefully!)
+     console.log(`Transfer Failed: Need to implement logic to find user and update withdrawal ${withdrawalId} to failed. Reason: ${failureReason}`);
+}
+
+// --- Helper: Process Transfer Reversed Event ---
+async function handleTransferReversed(payload: any) {
+    // ... logic for reversed payouts ...
+     console.log("Paystack Webhook: Processing transfer.reversed event...", payload);
+      const transferReference = payload?.data?.reference;
+     const withdrawalId = transferReference?.startsWith('wdrl_') ? transferReference.substring(5) : null;
+     // ... logic similar to failed, potentially reverting balance ...
+     console.log(`Transfer Reversed: Need to implement logic for reversal of withdrawal ${withdrawalId}.`);
+}
+
+
+// --- Main POST Handler ---
+export async function POST(req: Request) {
     console.log("--- API POST /api/webhooks/paystack START ---");
 
-    if (!adminDb) {
-        console.error("Paystack Webhook Error: Firebase Admin DB not initialized.");
-        return NextResponse.json({ message: 'Server configuration error' }, { status: 500 });
-    }
     if (!PAYSTACK_SECRET_KEY) {
-         console.error("Paystack Webhook Error: Paystack Secret Key missing.");
-        return NextResponse.json({ message: 'Webhook configuration error' }, { status: 500 });
+        return NextResponse.json({ message: 'Server configuration error.' }, { status: 500 });
     }
 
-    let requestBodyText;
-    try {
-         requestBodyText = await req.text();
-    } catch (err) {
-        console.error("Paystack Webhook Error: Could not read request body.", err);
-        return NextResponse.json({ message: 'Bad request' }, { status: 400 });
+    const signature = req.headers.get('x-paystack-signature');
+    const bodyText = await req.text(); // Read body as text ONCE
+
+    // Verify webhook signature
+    const hash = crypto.createHmac('sha512', PAYSTACK_SECRET_KEY)
+                       .update(bodyText)
+                       .digest('hex');
+
+    if (hash !== signature) {
+        console.warn("Paystack Webhook Handler: Invalid signature.");
+        return NextResponse.json({ message: 'Invalid signature' }, { status: 401 });
     }
+    console.log("Paystack Webhook Handler: Signature verified.");
+
+    // Parse the verified body
+    const payload = JSON.parse(bodyText);
+    const eventType = payload.event;
+    console.log(`Paystack Webhook Handler: Processing event type: ${eventType}`);
 
     try {
-        // --- Verify Signature (using raw body text) ---
-        const signature = req.headers.get('x-paystack-signature');
-        if (!signature) {
-            console.warn("Paystack Webhook Handler: Missing webhook signature.");
-            return NextResponse.json({ message: 'Missing signature' }, { status: 400 });
+        switch (eventType) {
+            case 'charge.success':
+                await handleChargeSuccess(payload);
+                break;
+             case 'transfer.success':
+                 await handleTransferSuccess(payload);
+                 break;
+             case 'transfer.failed':
+                 await handleTransferFailed(payload);
+                 break;
+            case 'transfer.reversed':
+                 await handleTransferReversed(payload);
+                 break;
+            // Add other events you want to handle (e.g., transfer.otp)
+            default:
+                console.log(`Paystack Webhook Handler: Unhandled event type: ${eventType}`);
         }
-
-        const hash = crypto.createHmac('sha512', PAYSTACK_SECRET_KEY)
-                           .update(requestBodyText)
-                           .digest('hex');
-
-        if (hash !== signature) {
-            console.warn("Paystack Webhook Handler: Invalid webhook signature.");
-            return NextResponse.json({ message: 'Invalid signature' }, { status: 403 });
-        }
-        console.log("Paystack Webhook Handler: Signature verified.");
-
-        // --- Process Verified Payload ---
-        const payload = JSON.parse(requestBodyText);
-        const eventType = payload.event; // Paystack event type (e.g., 'charge.success')
-        console.log(`Paystack Webhook Handler: Processing event type: ${eventType}`);
-
-        // --- Dispatch based on event type ---
-        if (eventType === 'charge.success') {
-             await handleChargeSuccess(payload);
-        } else if (eventType === 'transfer.success' || eventType === 'transfer.failed' || eventType === 'transfer.reversed') {
-             await handleTransferEvent(payload);
-        }
-        // Add other event types if needed (e.g., 'subscription.create', 'invoice.update')
-        else {
-             console.warn(`Paystack Webhook Handler: Received unhandled event type: ${eventType}`);
-        }
-
+        
         console.log(`--- API POST /api/webhooks/paystack SUCCESS --- Event '${eventType}' processed.`);
         return NextResponse.json({ received: true }, { status: 200 });
-
+    
     } catch (error: any) {
-        console.error(`--- API POST /api/webhooks/paystack FAILED (Event: ${JSON.parse(requestBodyText || '{}').event || 'unknown'}) --- Error processing event:`, error);
-        return NextResponse.json({ message: 'Failed to process webhook', error: error.message }, { status: 500 });
+         console.error(`--- API POST /api/webhooks/paystack FAILED processing event ${eventType} --- Error:`, error);
+         // Return 500 but don't necessarily ask Paystack to retry unless it's a transient issue
+         return NextResponse.json({ message: 'Webhook processing error', error: error.message }, { status: 500 });
     }
 }
 
-// Paystack webhook verification does not typically use a GET challenge.
-export async function GET(req: NextRequest) {
-    console.log("--- API GET /api/webhooks/paystack Received --- (Should be POST)");
-    return NextResponse.json({ message: 'Webhook endpoint expects POST requests.' }, { status: 405 });
+// --- GET Handler (Method Not Allowed) ---
+export async function GET(req: Request) {
+    console.log("--- API GET /api/webhooks/paystack Received (Not Allowed) ---");
+    return NextResponse.json({ message: "Webhook endpoint expects POST requests." }, { status: 405 });
 }
