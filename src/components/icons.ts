@@ -47,7 +47,8 @@ import {
   Inbox,
   Bell,
   Bot,
-  MapPin // Added MapPin
+  MapPin, // Added MapPin
+  LayoutGrid // Added LayoutGrid for Admin Dashboard
 } from "lucide-react";
 
 // Re-export all icons for easier import
@@ -99,6 +100,7 @@ export const Icons = {
   bell: Bell,
   bot: Bot,
   mapPin: MapPin,
+  layoutGrid: LayoutGrid, // Export LayoutGrid
   // Add spinner alias for convenience if needed
   spinner: Loader2,
 };

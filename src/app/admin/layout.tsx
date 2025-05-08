@@ -20,27 +20,25 @@ export default function AdminLayout({
   const { data: session, status } = useSession();
   const router = useRouter();
 
-  // Placeholder for admin check. Replace with actual role verification.
-  // Ensure NEXT_PUBLIC_ADMIN_EMAIL is set in your .env.local for client-side check
-  const isAdmin = session?.user?.email === process.env.NEXT_PUBLIC_ADMIN_EMAIL;
+  // Placeholder for admin check. Replace with actual role verification from Firestore.
+  // const isAdmin = session?.user?.role === 'admin'; // Example for role-based check
+  const isAdminUser = session?.user?.email === process.env.NEXT_PUBLIC_ADMIN_EMAIL; // Current check
 
   useEffect(() => {
-    if (status === 'loading') return; // Don't do anything while loading
-    if (status === 'unauthenticated' || !isAdmin) {
-      router.replace('/dashboard'); // Or your login page
+    if (status === 'loading') return;
+    if (status === 'unauthenticated' || !isAdminUser) {
+      router.replace('/dashboard'); 
     }
-  }, [status, isAdmin, router]);
+  }, [status, isAdminUser, router]);
 
-  if (status === 'loading' || (status === 'authenticated' && !isAdmin)) {
+  if (status === 'loading' || (status === 'authenticated' && !isAdminUser)) {
     return (
       <div className="flex h-screen items-center justify-center">
         <Icons.spinner className="h-10 w-10 animate-spin" />
       </div>
     );
   }
-   if (!isAdmin && status === 'authenticated') {
-     // This case might be brief as useEffect above will redirect.
-     // Consider removing this explicit return or making it more user-friendly.
+   if (!isAdminUser && status === 'authenticated') {
      return (
         <div className="flex h-screen items-center justify-center">
              <p>Access Denied. Redirecting...</p>
@@ -48,14 +46,13 @@ export default function AdminLayout({
      );
    }
 
-
   const navItems = [
-    { href: '/admin/fees', label: 'Fee % Setting', icon: <Icons.settings /> }, // Renamed for clarity
-    { href: '/admin/platform-fees', label: 'Platform Fees', icon: <Icons.circleDollarSign /> }, // New Page
+    { href: '/admin', label: 'Dashboard', icon: <Icons.layoutGrid /> }, // Changed from layoutDashboard
+    { href: '/admin/fees', label: 'Fee % Setting', icon: <Icons.settings /> }, 
+    { href: '/admin/platform-fees', label: 'Platform Fees Log', icon: <Icons.circleDollarSign /> }, 
+    { href: '/admin/withdraw-platform-fees', label: 'Withdraw Fees', icon: <Icons.send /> }, // Changed from downloadCloud
     { href: '/admin/disputes', label: 'Dispute Management', icon: <Icons.shieldAlert /> },
     { href: '/admin/users', label: 'User Management', icon: <Icons.users /> },
-    // Add more admin navigation items here
-    // { href: '/admin/reports', label: 'Reports', icon: <Icons.file /> },
   ];
 
   return (
@@ -79,7 +76,6 @@ export default function AdminLayout({
                       pathname === item.href && "font-semibold"
                     )}
                   >
-                    {/* Ensure icon prop is correctly passed if using custom icon components */}
                     {item.icon && React.cloneElement(item.icon as React.ReactElement, { className: "mr-2 h-4 w-4" })}
                     {item.label}
                   </Button>

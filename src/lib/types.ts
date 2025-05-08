@@ -7,6 +7,7 @@ type FirestoreTimestamp = Timestamp;
 export type ApiTimestamp = string | null;
 
 export interface UserProfile {
+  lastVerifiedPayoutMethod: string;
   id: string;
   name: string;
   username?: string;
@@ -87,10 +88,12 @@ export interface Payment {
 
   // Paystack specific
   gatewayTransactionId?: string | null;   // Paystack's transaction ID (from charge.success)
-  gatewayReference?: string | null;       // Your reference sent to Paystack (should match 'id')
+  paystackReference?: string; // Renamed from gatewayReference and made non-optional for new payments
+  paystackAuthorizationUrl?: string;
+  paystackAccessCode?: string;
   // -------------------------------
 
-  failureReason?: string | null; // General failure reason
+  failureReason?: string | null; // General failure reason, can be from Paystack or internal
   createdAt: ApiTimestamp; // Timestamp of when the payment was initiated/created
   updatedAt: ApiTimestamp;
 
@@ -140,6 +143,29 @@ export interface Withdrawal {
     completedAt?: ApiTimestamp; // When the withdrawal was successfully completed
 }
 
+export interface AdminPlatformFeeWithdrawal {
+    id: string; // Firestore document ID for this withdrawal record
+    adminUserId: string; // ID of the admin who initiated the withdrawal
+    amount: number; // Amount withdrawn
+    currency: string; // e.g., KES
+    status: 'pending_gateway' | 'processing' | 'completed' | 'failed';
+    payoutMethod: 'mpesa' | 'bank_account';
+    destinationDetails: {
+        accountName?: string; // For bank
+        accountNumber: string; // M-Pesa phone or Bank account number
+        bankCode?: string; // For bank
+        bankName?: string; // For bank, as selected/provided by admin
+    };
+    paymentGateway: 'paystack';
+    paystackTransferReference?: string; 
+    paystackTransferCode?: string;
+    failureReason?: string | null;
+    initiatedAt: ApiTimestamp;
+    updatedAt: ApiTimestamp;
+    completedAt?: ApiTimestamp;
+}
+
+
 // Message, ParticipantData, Conversation remain unchanged from your provided code
 export interface Message {
   id: string;
@@ -169,7 +195,7 @@ export interface Conversation {
         [userId: string]: ParticipantData;
     };
     readStatus?: {
-        [userId: string]: ApiTimestamp;
+        [userId:string]: ApiTimestamp;
     };
 }
 
@@ -190,4 +216,3 @@ export interface PlatformFeeRecord {
     createdAt: ApiTimestamp; // When the fee was recorded (typically when payment released)
 }
 
-```
