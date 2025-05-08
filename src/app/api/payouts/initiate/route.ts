@@ -31,11 +31,7 @@ export async function POST(req: Request) {
         console.error("Payout Initiate Error: Paystack Secret Key not configured.");
         return NextResponse.json({ message: 'Server payment configuration error.' }, { status: 500 });
      }
-     // Optional: Keep check or remove if confident, but good for sanity check during dev
-     if (PAYSTACK_MPESA_BANK_CODE_KENYA === 'MPESA') {
-        console.error("FATAL: PAYSTACK_MPESA_BANK_CODE_KENYA placeholder was not replaced!");
-        return NextResponse.json({ message: 'Server configuration error: M-Pesa bank code not set.' }, { status: 500 });
-   }
+    // Removed the incorrect placeholder check here
 
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) { 
@@ -150,14 +146,14 @@ export async function POST(req: Request) {
 
             // Define the update object with explicit types for Firestore write
             const userProfileUpdate: {
-                paystackRecipientCode: string | null; // Corrected: Changed to string | null
+                paystackRecipientCode: string | null; // Type allows null
                 lastVerifiedPayoutMethod: Withdrawal['payoutMethod'];
                 updatedAt: FieldValue;
                 lastVerifiedMpesa: string | null;
                 lastVerifiedBankAcc: string | null;
                 lastVerifiedBankCode: string | null;
             } = {
-                paystackRecipientCode: recipientCode!, // Assign the string value
+                paystackRecipientCode: recipientCode!, // Use non-null assertion here
                 lastVerifiedPayoutMethod: payoutMethodForRecord,
                 updatedAt: FieldValue.serverTimestamp(),
                 // Initialize all verification fields to null initially
