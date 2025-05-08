@@ -112,8 +112,6 @@ export default function ItemDetailPage() {
   const handleInitiatePayment = async () => {
       if (!item || !session?.user?.id) {
            toast({ title: "Login Required", description: "Please log in to purchase items.", variant: "destructive" });
-            // Optional: Redirect to login
-            // router.push('/auth');
            return;
       }
       if (item.status !== 'available') {
@@ -127,35 +125,40 @@ export default function ItemDetailPage() {
 
       setIsInitiatingPayment(true);
       try {
-            console.log(`Initiating payment for item: ${item.id}`);
+            console.log(`Initiating payment for item: ${item.id}, amount: ${item.price}`); // Log amount
             const response = await fetch('/api/payment/initiate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ itemId: item.id })
+                // Corrected body to include amount
+                body: JSON.stringify({ 
+                    itemId: item.id, 
+                    amount: item.price // Include the item price
+                })
             });
             const result = await response.json();
-            if (!response.ok || !result.checkoutUrl) {
+
+            // --- Adjust based on Paystack Response --- 
+            // Paystack's initialize returns authorization_url, access_code, reference
+            if (!response.ok || !result.authorization_url) {
                 throw new Error(result.message || 'Failed to prepare payment checkout.');
             }
-            console.log(`Redirecting to IntaSend checkout: ${result.checkoutUrl}`);
-            // Redirect the user to the IntaSend payment page
-            window.location.href = result.checkoutUrl;
-            // No need to set loading to false if redirecting
+            console.log(`Redirecting to Paystack checkout: ${result.authorization_url}`);
+            // Redirect the user to the Paystack payment page
+            window.location.href = result.authorization_url;
+            // ----------------------------------------
 
       } catch (err) {
             const message = err instanceof Error ? err.message : 'Failed to initiate payment.';
             console.error("Initiate Payment Error:", err);
             toast({ title: "Payment Error", description: message, variant: "destructive" });
-            setIsInitiatingPayment(false); // Set loading to false only on error
+            setIsInitiatingPayment(false); 
       }
-      // No finally block setting to false needed due to redirect
   };
   // -------------------------
 
   // --- RENDER LOGIC --- 
 
   if (isLoading) {
-    // ... Skeleton remains the same ...
      return (
       <div className="container mx-auto p-4 md:p-6 max-w-4xl">
         <Skeleton className="h-10 w-1/4 mb-4" /> 
@@ -171,7 +174,6 @@ export default function ItemDetailPage() {
                 <Skeleton className="h-4 w-full" />
                 <Skeleton className="h-4 w-5/6" />
              </div>
-             {/* Skeletons for Action Buttons */} 
              <Skeleton className="h-10 w-full mt-4" /> 
              <Skeleton className="h-10 w-full mt-2" /> 
            </div>
@@ -181,7 +183,6 @@ export default function ItemDetailPage() {
   }
 
   if (error) {
-    // ... Error remains the same ...
      return (
       <div className="container mx-auto p-4 md:p-6 max-w-4xl text-center text-red-600">
           <Button variant="outline" onClick={() => router.back()} className="mb-4">
@@ -193,7 +194,6 @@ export default function ItemDetailPage() {
   }
 
   if (!item) {
-     // ... Not Found remains the same ...
      return (
       <div className="container mx-auto p-4 md:p-6 max-w-4xl text-center text-muted-foreground">
          <Button variant="outline" onClick={() => router.back()} className="mb-4">
