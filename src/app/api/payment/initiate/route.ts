@@ -10,13 +10,15 @@ import * as z from 'zod';
 
 // --- Environment Variables & Constants ---
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
-const PLATFORM_CALLBACK_URL_PAYMENT = process.env.NEXT_PUBLIC_APP_URL ? `${process.env.NEXT_PUBLIC_APP_URL}/api/webhooks/paystack` : '';
+// This webhook URL is correct for Paystack to SEND events TO, but NOT for user redirect.
+// const PLATFORM_WEBHOOK_URL_PAYSTACK = process.env.NEXT_PUBLIC_APP_URL ? `${process.env.NEXT_PUBLIC_APP_URL}/api/webhooks/paystack` : '';
+const APP_BASE_URL = process.env.NEXT_PUBLIC_APP_URL || '';
 
 if (!PAYSTACK_SECRET_KEY) {
     console.error("FATAL: Missing Paystack Secret Key environment variable (PAYSTACK_SECRET_KEY).");
 }
-if (!PLATFORM_CALLBACK_URL_PAYMENT) {
-    console.error("FATAL: Missing Platform Callback URL for Paystack (NEXT_PUBLIC_APP_URL).");
+if (!APP_BASE_URL) {
+    console.error("FATAL: Missing App Base URL (NEXT_PUBLIC_APP_URL).");
 }
 
 const paymentInitiateSchema = z.object({
@@ -31,8 +33,8 @@ export async function POST(req: Request) {
         console.error("Payment Initiate Error: Firebase Admin DB not initialized.");
         return NextResponse.json({ message: 'Server configuration error.' }, { status: 500 });
     }
-    if (!PAYSTACK_SECRET_KEY || !PLATFORM_CALLBACK_URL_PAYMENT) { 
-        console.error("Payment Initiate Error: Paystack Secret Key or Callback URL not configured.");
+    if (!PAYSTACK_SECRET_KEY || !APP_BASE_URL) { 
+        console.error("Payment Initiate Error: Paystack Secret Key or App Base URL not configured.");
         return NextResponse.json({ message: 'Server payment configuration error.' }, { status: 500 });
     }
 
@@ -76,6 +78,10 @@ export async function POST(req: Request) {
         const paymentId = uuidv4();
         const paystackReference = `payment_${paymentId}`;
 
+        // Construct the correct callback URL for user redirect (back to item page)
+        const userCallbackUrl = `${APP_BASE_URL}/item/${itemId}?payment_status=pending&ref=${paystackReference}`;
+        console.log(`Payment Initiate: Using callback URL for user redirect: ${userCallbackUrl}`);
+
         const paymentData: Payment = {
             id: paymentId,
             buyerId: userId,
@@ -84,9 +90,9 @@ export async function POST(req: Request) {
             itemTitle: itemData.title, 
             amount: amount,
             currency: 'KES', 
-            status: 'initiated', // Corrected status
+            status: 'initiated',
             paymentGateway: 'paystack',
-            paystackReference: paystackReference, // This will be valid after type update
+            paystackReference: paystackReference,
             createdAt: FieldValue.serverTimestamp() as any, 
             updatedAt: FieldValue.serverTimestamp() as any, 
         };
@@ -98,7 +104,7 @@ export async function POST(req: Request) {
             amount: amountInKobo,
             currency: 'KES',
             reference: paystackReference,
-            callback_url: PLATFORM_CALLBACK_URL_PAYMENT,
+            callback_url: userCallbackUrl, // Use the user-facing URL here
             metadata: {
                 payment_id: paymentId,
                 user_id: userId,
@@ -125,7 +131,7 @@ export async function POST(req: Request) {
         if (!paystackResponse.ok || !paystackResult.status) {
             console.error("Paystack Initialize Transaction Error:", paystackResult);
             await adminDb!.collection('payments').doc(paymentId).update({
-                status: 'failed', // Corrected status
+                status: 'failed',
                 failureReason: paystackResult.message || 'Paystack API error during initialization.',
                 updatedAt: FieldValue.serverTimestamp(),
             });
@@ -133,9 +139,9 @@ export async function POST(req: Request) {
         }
 
         await adminDb!.collection('payments').doc(paymentId).update({
-            status: 'initiated', // Corrected status - user needs to complete payment on Paystack
-            paystackAuthorizationUrl: paystackResult.data.authorization_url, // This will be valid after type update
-            paystackAccessCode: paystackResult.data.access_code, // This will be valid after type update
+            status: 'initiated',
+            paystackAuthorizationUrl: paystackResult.data.authorization_url, 
+            paystackAccessCode: paystackResult.data.access_code, 
             updatedAt: FieldValue.serverTimestamp(),
         });
         console.log(`Payment Initiate: Payment ${paymentId} updated with Paystack auth URL. Status: 'initiated'.`);
