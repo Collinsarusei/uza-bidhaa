@@ -84,7 +84,6 @@ export async function POST(req: Request) {
         if (!validation.success) {
             return NextResponse.json({ message: 'Invalid input', errors: validation.error.flatten().fieldErrors }, { status: 400 });
         }
-        // accountName and bankName can be undefined here
         const { amount, payoutMethod, mpesaPhoneNumber, bankCode, accountNumber, accountName, bankName } = validation.data;
         const amountInKobo = Math.round(amount * 100);
 
@@ -138,7 +137,7 @@ export async function POST(req: Request) {
         await adminDb!.runTransaction(async (transaction) => {
             const settingsDoc = await transaction.get(platformFeeSettingsRef);
             if (!settingsDoc.exists) {
-                throw new Error("Platform fee settings not found.");
+                throw new Error("Platform fee settings document not found. Cannot verify balance.");
             }
             const platformSettings = settingsDoc.data() as PlatformSettings;
             const currentTotalFees = platformSettings.totalPlatformFees ?? 0;
@@ -156,10 +155,10 @@ export async function POST(req: Request) {
                 status: 'pending_gateway',
                 payoutMethod: payoutMethod,
                 destinationDetails: {
-                    accountName: accountName ?? null, // Convert undefined to null
+                    accountName: accountName ?? null, 
                     accountNumber: destinationAccountNumberForPayload, 
-                    bankCode: payoutMethod === 'bank_account' ? bankCode : undefined,
-                    bankName: bankName ?? null, // Convert undefined to null
+                    bankCode: payoutMethod === 'bank_account' ? bankCode : null, // Corrected: Use null instead of undefined
+                    bankName: bankName ?? null, 
                 },
                 paymentGateway: 'paystack',
                 initiatedAt: FieldValue.serverTimestamp() as any,
@@ -249,8 +248,12 @@ export async function POST(req: Request) {
 
     } catch (error: any) {
         console.error("--- API POST /api/admin/withdraw-fees FAILED --- Catch Block Error:", error);
+        // Check if withdrawal record was potentially created before error occurred
         if (adminWithdrawalId) { 
              try {
+                 // If the error happened AFTER the balance was debited in the transaction,
+                 // but BEFORE Paystack calls succeeded, we should ideally revert the balance.
+                 // However, simply marking as failed here is safer if unsure where the error occurred.
                  await adminDb?.collection('adminFeeWithdrawals').doc(adminWithdrawalId).update({ 
                      status: 'failed', 
                      failureReason: `System Error: ${error.message}`,
@@ -259,6 +262,10 @@ export async function POST(req: Request) {
              } catch (dbError) {
                   console.error(`Admin Fee Withdrawal: FAILED to update withdrawal ${adminWithdrawalId} to failed status after catch:`, dbError);
              }
+        }
+        // If the error was the insufficient funds error, return 400
+        if (error.message?.includes('Insufficient platform fees')) {
+             return NextResponse.json({ message: error.message }, { status: 400 });
         }
         return NextResponse.json({ message: error.message || 'Failed to process admin fee withdrawal.' }, { status: 500 });
     }
