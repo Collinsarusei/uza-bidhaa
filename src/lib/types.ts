@@ -151,10 +151,10 @@ export interface AdminPlatformFeeWithdrawal {
     status: 'pending_gateway' | 'processing' | 'completed' | 'failed';
     payoutMethod: 'mpesa' | 'bank_account';
     destinationDetails: {
-        accountName?: string; // For bank
+        accountName?: string | null; // Corrected: Allow null
         accountNumber: string; // M-Pesa phone or Bank account number
         bankCode?: string; // For bank
-        bankName?: string; // For bank, as selected/provided by admin
+        bankName?: string | null; // Corrected: Allow null
     };
     paymentGateway: 'paystack';
     paystackTransferReference?: string; 

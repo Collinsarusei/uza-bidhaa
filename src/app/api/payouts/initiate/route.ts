@@ -74,17 +74,9 @@ export async function POST(req: Request) {
             determinedPayoutTypeForPaystack = 'mobile_money';
             determinedBankCodeForPaystack = PAYSTACK_MPESA_BANK_CODE_KENYA; // Use the correct code
             const cleanedMpesa = rawMpesaPhoneNumber.replace(/\s+/g, '');
-            // Use local format (07... or 7...) for Paystack account_number
-            recipientAccountNumber = cleanedMpesa.startsWith('254') 
-                ? `0${cleanedMpesa.substring(3)}` 
-                : cleanedMpesa.startsWith('+') 
-                ? `0${cleanedMpesa.substring(4)}` 
-                : cleanedMpesa; // Assume it's already 07... or 7...
-            // Ensure it starts with 07... or 7... for Paystack (adjust logic if needed)
+            recipientAccountNumber = cleanedMpesa.startsWith('0') ? `0${cleanedMpesa.substring(1)}` : cleanedMpesa.startsWith('+') ? `0${cleanedMpesa.substring(4)}` : cleanedMpesa;
             if (!recipientAccountNumber.startsWith('07') && !recipientAccountNumber.startsWith('7')) {
-                 // Potentially throw error or adjust based on exact Paystack requirement if 7... is needed
-                 // For now, assuming 07... is the target based on user feedback
-                 if (recipientAccountNumber.startsWith('1')) { // Likely Safaricom new numbers starting 1
+                 if (recipientAccountNumber.startsWith('1')) { 
                     recipientAccountNumber = `0${recipientAccountNumber}`;
                  } else {
                     throw new Error("Could not format M-Pesa number to expected local format (07...). Original: " + rawMpesaPhoneNumber);
@@ -95,7 +87,6 @@ export async function POST(req: Request) {
             lastVerifiedFieldToCheck = userData?.lastVerifiedMpesa || '';
             console.log(`Payout Initiate: Selected M-Pesa. Type: ${determinedPayoutTypeForPaystack}, Bank Code: ${determinedBankCodeForPaystack}, Account: ${recipientAccountNumber} (using local format)`);
         } 
-        // Fallback to Bank if M-Pesa is not available/valid but Bank details are
         else if (bankCode && bankAccountNumber && bankName) {
             determinedPayoutTypeForPaystack = 'nuban'; 
             determinedBankCodeForPaystack = bankCode;
@@ -119,7 +110,7 @@ export async function POST(req: Request) {
         // --- Step 1: Create/Update Paystack Transfer Recipient ---
         let recipientCode = userData?.paystackRecipientCode; // Can be string | null | undefined here
         recipientNeedsUpdate = !recipientCode || 
-                               lastVerifiedFieldToCheck !== recipientAccountNumber || // Compare against the formatted local number
+                               lastVerifiedFieldToCheck !== recipientAccountNumber || 
                                userData?.lastVerifiedPayoutMethod !== payoutMethodForRecord;
 
         if (recipientNeedsUpdate) {
@@ -130,7 +121,8 @@ export async function POST(req: Request) {
                 account_number: recipientAccountNumber, // Use the formatted local number
                 bank_code: determinedBankCodeForPaystack, 
                 currency: 'KES',
-                metadata: { internal_user_id: userId, payout_method: payoutMethodForRecord }
+                // Include user ID in metadata for easier recipient lookup if needed
+                metadata: { internal_user_id: userId, payout_method: payoutMethodForRecord } 
             };
 
             console.log("Recipient Payload to Paystack:", recipientPayload);
@@ -156,15 +148,13 @@ export async function POST(req: Request) {
                  }
                 return NextResponse.json({ message: `Paystack recipient creation error: ${errorMsg}` }, { status: 502 });
             }
-            // At this point, recipientResult.data.recipient_code is guaranteed to be a string
             recipientCode = recipientResult.data.recipient_code; 
 
-            // Define the update object with explicit types for Firestore write
             const userProfileUpdate: {
-                paystackRecipientCode: string | null; 
+                paystackRecipientCode: string | null;
                 lastVerifiedPayoutMethod: Withdrawal['payoutMethod'];
                 updatedAt: FieldValue;
-                lastVerifiedMpesa: string | null; // Store the formatted local number used for verification
+                lastVerifiedMpesa: string | null;
                 lastVerifiedBankAcc: string | null;
                 lastVerifiedBankCode: string | null;
             } = {
@@ -176,15 +166,14 @@ export async function POST(req: Request) {
                 lastVerifiedBankCode: null,
             };
 
-            // Set the correct verification field based on the method
             if (payoutMethodForRecord === 'mobile_money') {
-                userProfileUpdate.lastVerifiedMpesa = recipientAccountNumber; // Store formatted local number
-            } else { // bank_account case
+                userProfileUpdate.lastVerifiedMpesa = recipientAccountNumber; 
+            } else { 
                 userProfileUpdate.lastVerifiedBankAcc = recipientAccountNumber;
                 userProfileUpdate.lastVerifiedBankCode = determinedBankCodeForPaystack;
             }
             
-            await userRef.update(userProfileUpdate); // Update Firestore
+            await userRef.update(userProfileUpdate); 
             console.log(`Payout Initiate: Paystack Recipient ${recipientCode} created/updated for ${userId}.`);
         } else {
              if (!recipientCode) {
@@ -207,14 +196,13 @@ export async function POST(req: Request) {
                  amount: withdrawalAmount,
                  status: 'pending_gateway',
                  payoutMethod: payoutMethodForRecord, 
-                 // Masking assumes recipientAccountNumber is the local format now
-                 payoutDetailsMasked: `${recipientAccountNumber.substring(0, 3)}****${recipientAccountNumber.substring(recipientAccountNumber.length - 4)}`,
+                 payoutDetailsMasked: `${recipientAccountNumber.substring(0,(payoutMethodForRecord === 'mobile_money' ? 6: 3))}****${recipientAccountNumber.substring(recipientAccountNumber.length - (payoutMethodForRecord === 'mobile_money' ? 2: 4))}`,
                  paymentGateway: 'paystack',
                  paystackRecipientCode: recipientCode, 
                  paystackTransferReference: paystackTransferReference,
                  requestedAt: FieldValue.serverTimestamp() as any,
                  updatedAt: FieldValue.serverTimestamp() as any,
-                 ...(payoutMethodForRecord === 'mobile_money' && { mpesaPhoneNumber: recipientAccountNumber }), // Store formatted local number
+                 ...(payoutMethodForRecord === 'mobile_money' && { mpesaPhoneNumber: recipientAccountNumber }), 
              };
              transaction.set(withdrawalRef, withdrawalDataToSet);
         });
@@ -226,7 +214,12 @@ export async function POST(req: Request) {
             recipient: recipientCode, 
             currency: 'KES',
             reason: `Uza Bidhaa Payout - ${withdrawalId.substring(0,8)}`,
-            reference: paystackTransferReference
+            reference: paystackTransferReference,
+            // Add metadata for webhook identification
+            metadata: {
+                withdrawal_id: withdrawalId,
+                user_id: userId
+            }
         };
 
         console.log("Payout Initiate: Calling Paystack Initiate Transfer API with payload:", transferPayload);
@@ -240,7 +233,6 @@ export async function POST(req: Request) {
         });
         const transferResult = await transferResponse.json();
 
-        // --- Handle Transfer Initiation Response ---
         if (!transferResponse.ok || !transferResult.status || transferResult.data?.status === 'failed' || transferResult.data?.status === 'abandoned') {
             console.error(`Paystack Initiate Transfer Error/Failure (${payoutMethodForRecord}):`, transferResult);
             const failureMsg = transferResult.message || (transferResult.data ? `${transferResult.data.status}: ${transferResult.data.message || transferResult.data.gateway_response}` : 'Unknown Paystack transfer error.');
@@ -259,7 +251,6 @@ export async function POST(req: Request) {
             return NextResponse.json({ message: failureMsg || 'Failed to initiate transfer with Paystack.' }, { status: 502 });
         }
 
-        // --- Update Withdrawal Status on Success ---
         console.log(`Payout Initiate: Paystack Transfer initiated for ${withdrawalId}. Status: ${transferResult.data.status}, Code: ${transferResult.data.transfer_code}`);
          await withdrawalRef.update({
              status: transferResult.data.status === 'otp' ? 'pending_gateway' : 'processing',
@@ -267,7 +258,6 @@ export async function POST(req: Request) {
              updatedAt: FieldValue.serverTimestamp()
          });
 
-        // --- Send Notification ---
         try {
             await createNotification({
                 userId: userId, 

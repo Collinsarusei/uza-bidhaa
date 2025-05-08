@@ -84,6 +84,7 @@ export async function POST(req: Request) {
         if (!validation.success) {
             return NextResponse.json({ message: 'Invalid input', errors: validation.error.flatten().fieldErrors }, { status: 400 });
         }
+        // accountName and bankName can be undefined here
         const { amount, payoutMethod, mpesaPhoneNumber, bankCode, accountNumber, accountName, bankName } = validation.data;
         const amountInKobo = Math.round(amount * 100);
 
@@ -98,15 +99,13 @@ export async function POST(req: Request) {
         // Prepare Paystack recipient and transfer details
         if (payoutMethod === 'mpesa') {
             const cleanedMpesa = mpesaPhoneNumber!.replace(/\s+/g, '');
-            // Use local format (07... or 7...) for Paystack account_number
             destinationAccountNumberForPayload = cleanedMpesa.startsWith('254') 
                 ? `0${cleanedMpesa.substring(3)}` 
                 : cleanedMpesa.startsWith('+') 
                 ? `0${cleanedMpesa.substring(4)}` 
                 : cleanedMpesa; 
-             // Ensure it starts with 07... or 7... (adjust if needed)
              if (!destinationAccountNumberForPayload.startsWith('07') && !destinationAccountNumberForPayload.startsWith('7')) {
-                 if (destinationAccountNumberForPayload.startsWith('1')) { // Safaricom new numbers
+                 if (destinationAccountNumberForPayload.startsWith('1')) { 
                     destinationAccountNumberForPayload = `0${destinationAccountNumberForPayload}`;
                  } else {
                     throw new Error("Could not format M-Pesa number to expected local format (07...). Original: " + mpesaPhoneNumber);
@@ -117,10 +116,10 @@ export async function POST(req: Request) {
             recipientPayload = {
                 type: 'mobile_money',
                 name: accountName || `Admin Mpesa ${destinationAccountNumberForPayload.slice(-4)}`, 
-                account_number: destinationAccountNumberForPayload, // Use local format
+                account_number: destinationAccountNumberForPayload, 
                 bank_code: PAYSTACK_MPESA_BANK_CODE_KENYA, 
                 currency: 'KES',
-                metadata: { admin_withdrawal_id: adminWithdrawalId, admin_user_id: adminUserId }
+                metadata: { admin_withdrawal_id: adminWithdrawalId, admin_user_id: adminUserId } 
             };
         } else { // bank_account
             destinationAccountNumberForPayload = accountNumber!;
@@ -157,10 +156,10 @@ export async function POST(req: Request) {
                 status: 'pending_gateway',
                 payoutMethod: payoutMethod,
                 destinationDetails: {
-                    accountName: accountName,
-                    accountNumber: destinationAccountNumberForPayload, // Store formatted number
+                    accountName: accountName ?? null, // Convert undefined to null
+                    accountNumber: destinationAccountNumberForPayload, 
                     bankCode: payoutMethod === 'bank_account' ? bankCode : undefined,
-                    bankName: bankName, 
+                    bankName: bankName ?? null, // Convert undefined to null
                 },
                 paymentGateway: 'paystack',
                 initiatedAt: FieldValue.serverTimestamp() as any,
@@ -204,7 +203,11 @@ export async function POST(req: Request) {
             recipient: paystackRecipientCode,
             currency: 'KES',
             reason: transferReason,
-            reference: transferReference
+            reference: transferReference,
+            metadata: {
+                 admin_withdrawal_id: adminWithdrawalId,
+                 admin_user_id: adminUserId
+            }
         };
         
         console.log("Initiating Paystack Transfer with payload:", transferPayload);
