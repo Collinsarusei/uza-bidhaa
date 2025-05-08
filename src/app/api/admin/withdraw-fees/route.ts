@@ -13,6 +13,9 @@ import { v4 as uuidv4 } from 'uuid';
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 const MIN_PLATFORM_WITHDRAWAL = 100; // Minimum KES 100 for withdrawal
 
+// Correct Paystack bank code for M-Pesa Kenya
+const PAYSTACK_MPESA_BANK_CODE_KENYA = 'MPESA';
+
 // Schema for input validation
 const withdrawalRequestSchema = z.object({
     amount: z.number().positive("Amount must be positive").min(MIN_PLATFORM_WITHDRAWAL),
@@ -21,6 +24,7 @@ const withdrawalRequestSchema = z.object({
     bankCode: z.string().optional(),          // Required if payoutMethod is bank_account
     accountNumber: z.string().optional(),   // Required if payoutMethod is bank_account
     accountName: z.string().optional(),     // Optional for bank, Paystack can verify
+    bankName: z.string().optional(),       // Added to pass bank name from UI for record
 }).refine(data => {
     if (data.payoutMethod === 'mpesa') {
         return !!data.mpesaPhoneNumber && /^(?:254|\+254|0)?([17]\d{8})$/.test(data.mpesaPhoneNumber);
@@ -34,10 +38,14 @@ const withdrawalRequestSchema = z.object({
     path: ["payoutDetails"], // Custom path for error
 });
 
+// Role-based admin check
 async function isAdmin(userId: string | undefined): Promise<boolean> {
-    if (!userId || !adminDb) return false;
+    if (!userId || !adminDb) { 
+        console.error("isAdmin check failed: Missing userId or adminDb is null.");
+        return false;
+    }
     try {
-        const userDoc = await adminDb.collection('users').doc(userId).get();
+        const userDoc = await adminDb!.collection('users').doc(userId).get(); 
         return userDoc.exists && userDoc.data()?.role === 'admin';
     } catch (error) {
         console.error("Error checking admin role:", error);
@@ -49,31 +57,39 @@ export async function POST(req: Request) {
     console.log("--- API POST /api/admin/withdraw-fees START ---");
 
     if (!adminDb) {
+        console.error("Admin Fee Withdrawal Error: Firebase Admin DB not initialized.");
         return NextResponse.json({ message: 'Server configuration error (DB)' }, { status: 500 });
     }
     if (!PAYSTACK_SECRET_KEY) {
+        console.error("Admin Fee Withdrawal Error: Paystack Secret Key not configured.");
         return NextResponse.json({ message: 'Server payment configuration error (Paystack Key)' }, { status: 500 });
     }
 
     const session = await getServerSession(authOptions);
     if (!session?.user?.id || !(await isAdmin(session.user.id))) {
+        console.warn("Admin Fee Withdrawal: Unauthorized attempt.");
         return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
     }
     const adminUserId = session.user.id;
 
+    // Declare adminWithdrawalId outside the try block
+    let adminWithdrawalId: string | null = null; 
+
     try {
+        adminWithdrawalId = uuidv4(); // Assign value inside try
+
         const body = await req.json();
         const validation = withdrawalRequestSchema.safeParse(body);
 
         if (!validation.success) {
             return NextResponse.json({ message: 'Invalid input', errors: validation.error.flatten().fieldErrors }, { status: 400 });
         }
-        const { amount, payoutMethod, mpesaPhoneNumber, bankCode, accountNumber, accountName } = validation.data;
+        const { amount, payoutMethod, mpesaPhoneNumber, bankCode, accountNumber, accountName, bankName } = validation.data;
         const amountInKobo = Math.round(amount * 100);
 
-        const platformFeeSettingsRef = adminDb.collection('settings').doc('platformFee');
-        const adminWithdrawalId = uuidv4();
-        const adminWithdrawalRef = adminDb.collection('adminFeeWithdrawals').doc(adminWithdrawalId);
+        const platformFeeSettingsRef = adminDb!.collection('settings').doc('platformFee');
+        // Use the ID generated outside the try block
+        const adminWithdrawalRef = adminDb!.collection('adminFeeWithdrawals').doc(adminWithdrawalId);
 
         let paystackRecipientCode: string | null = null;
         let recipientPayload: any;
@@ -89,23 +105,25 @@ export async function POST(req: Request) {
             
             recipientPayload = {
                 type: 'mobile_money',
-                name: accountName || `Admin Mpesa ${mpesaNumberForPaystack.slice(-4)}`, // Default name
+                name: accountName || `Admin Mpesa ${mpesaNumberForPaystack.slice(-4)}`, 
                 account_number: mpesaNumberForPaystack,
-                bank_code: 'mpesa', 
+                bank_code: PAYSTACK_MPESA_BANK_CODE_KENYA, 
                 currency: 'KES',
+                metadata: { admin_withdrawal_id: adminWithdrawalId, admin_user_id: adminUserId }
             };
         } else { // bank_account
             recipientPayload = {
-                type: 'nuban', // or 'basic' depending on Paystack docs for your region/bank type
+                type: 'nuban', 
                 name: accountName || `Admin Bank ${accountNumber!.slice(-4)}`,
                 account_number: accountNumber!,
                 bank_code: bankCode!,
                 currency: 'KES',
+                metadata: { admin_withdrawal_id: adminWithdrawalId, admin_user_id: adminUserId }
             };
         }
 
         // Transaction to ensure atomicity of checking balance and creating withdrawal record
-        await adminDb.runTransaction(async (transaction) => {
+        await adminDb!.runTransaction(async (transaction) => {
             const settingsDoc = await transaction.get(platformFeeSettingsRef);
             if (!settingsDoc.exists) {
                 throw new Error("Platform fee settings not found.");
@@ -114,12 +132,12 @@ export async function POST(req: Request) {
             const currentTotalFees = platformSettings.totalPlatformFees ?? 0;
 
             if (amount > currentTotalFees) {
-                throw new Error(`Insufficient platform fees. Available: KES ${currentTotalFees}, Requested: KES ${amount}`);
+                throw new Error(`Insufficient platform fees. Available: KES ${currentTotalFees.toLocaleString()}, Requested: KES ${amount.toLocaleString()}`);
             }
 
             // Create initial withdrawal record
             const withdrawalData: AdminPlatformFeeWithdrawal = {
-                id: adminWithdrawalId,
+                id: adminWithdrawalId!, // Use non-null assertion as it's assigned above
                 adminUserId: adminUserId,
                 amount: amount,
                 currency: 'KES',
@@ -129,14 +147,13 @@ export async function POST(req: Request) {
                     accountName: accountName,
                     accountNumber: payoutMethod === 'mpesa' ? mpesaPhoneNumber! : accountNumber!,
                     bankCode: payoutMethod === 'bank_account' ? bankCode : undefined,
-                    bankName: body.bankName, // if you pass bankName from UI for display
+                    bankName: bankName, 
                 },
                 paymentGateway: 'paystack',
                 initiatedAt: FieldValue.serverTimestamp() as any,
                 updatedAt: FieldValue.serverTimestamp() as any,
             };
             transaction.set(adminWithdrawalRef, withdrawalData);
-            // Decrement platform fees (optimistic, will be reverted if Paystack fails)
             transaction.update(platformFeeSettingsRef, { 
                 totalPlatformFees: FieldValue.increment(-amount) 
             });
@@ -155,15 +172,16 @@ export async function POST(req: Request) {
 
         if (!recipientResponse.ok || !recipientResult.status || !recipientResult.data?.recipient_code) {
             console.error("Paystack Create Recipient Error:", recipientResult);
-            // Revert Firestore changes
-            await adminDb.runTransaction(async (transaction) => {
+            await adminDb!.runTransaction(async (transaction) => {
                 transaction.update(platformFeeSettingsRef, { totalPlatformFees: FieldValue.increment(amount) });
-                transaction.update(adminWithdrawalRef, { status: 'failed', failureReason: `Recipient Creation Failed: ${recipientResult.message}` });
+                transaction.update(adminWithdrawalRef, { status: 'failed', failureReason: `Recipient Creation Failed: ${recipientResult.message || 'Unknown error'}` });
             });
-            return NextResponse.json({ message: `Failed to create Paystack recipient: ${recipientResult.message}` }, { status: 502 });
+            console.warn(`Admin Fee Withdrawal: Reverted balance increment for failed recipient creation ${adminWithdrawalId}.`);
+            return NextResponse.json({ message: `Failed to create Paystack recipient: ${recipientResult.message || 'Unknown error'}` }, { status: 502 });
         }
         paystackRecipientCode = recipientResult.data.recipient_code;
-        await adminWithdrawalRef.update({ paystackRecipientCode });
+        await adminWithdrawalRef.update({ paystackRecipientCode }); 
+        console.log(`Admin Fee Withdrawal: Paystack recipient ${paystackRecipientCode} created.`);
 
         // Initiate Paystack Transfer
         const transferReference = `adm_wdrl_${adminWithdrawalId}`;
@@ -186,21 +204,21 @@ export async function POST(req: Request) {
 
         if (!transferResponse.ok || !transferResult.status || transferResult.data?.status === 'failed' || transferResult.data?.status === 'abandoned') {
             console.error("Paystack Initiate Transfer Error:", transferResult);
-            // Revert Firestore changes
-            await adminDb.runTransaction(async (transaction) => {
+            await adminDb!.runTransaction(async (transaction) => {
                 transaction.update(platformFeeSettingsRef, { totalPlatformFees: FieldValue.increment(amount) });
                 transaction.update(adminWithdrawalRef, { 
                     status: 'failed', 
-                    failureReason: `Transfer Failed: ${transferResult.message || transferResult.data?.gateway_response}`,
-                    paystackTransferReference: transferReference
+                    failureReason: `Transfer Failed: ${transferResult.message || transferResult.data?.gateway_response || 'Unknown error'}`,
+                    paystackTransferReference: transferReference 
                 });
             });
-            return NextResponse.json({ message: `Paystack transfer failed: ${transferResult.message || transferResult.data?.gateway_response}` }, { status: 502 });
+             console.warn(`Admin Fee Withdrawal: Reverted balance increment for failed transfer ${adminWithdrawalId}.`);
+            return NextResponse.json({ message: `Paystack transfer failed: ${transferResult.message || transferResult.data?.gateway_response || 'Unknown error'}` }, { status: 502 });
         }
 
         // Success - update withdrawal record
         await adminWithdrawalRef.update({
-            status: transferResult.data.status === 'otp' ? 'pending_gateway' : 'processing', // Or 'success' if applicable
+            status: transferResult.data.status === 'otp' ? 'pending_gateway' : 'processing', 
             paystackTransferCode: transferResult.data.transfer_code,
             paystackTransferReference: transferReference,
             updatedAt: FieldValue.serverTimestamp()
@@ -214,9 +232,19 @@ export async function POST(req: Request) {
         }, { status: 200 });
 
     } catch (error: any) {
-        console.error("--- API POST /api/admin/withdraw-fees FAILED --- Error:", error);
-        // Attempt to mark record as failed if ID exists, but avoid decrementing balance again if it failed before that point
-        // This part needs careful handling depending on where the error occurred.
+        console.error("--- API POST /api/admin/withdraw-fees FAILED --- Catch Block Error:", error);
+        // Attempt to mark record as failed if ID exists
+        if (adminWithdrawalId) { // Check if ID was generated before error
+             try {
+                 await adminDb?.collection('adminFeeWithdrawals').doc(adminWithdrawalId).update({ 
+                     status: 'failed', 
+                     failureReason: `System Error: ${error.message}`,
+                     updatedAt: FieldValue.serverTimestamp()
+                 });
+             } catch (dbError) {
+                  console.error(`Admin Fee Withdrawal: FAILED to update withdrawal ${adminWithdrawalId} to failed status after catch:`, dbError);
+             }
+        }
         return NextResponse.json({ message: error.message || 'Failed to process admin fee withdrawal.' }, { status: 500 });
     }
 }
