@@ -27,7 +27,8 @@ const withdrawalRequestSchema = z.object({
     bankName: z.string().optional(),       // Added to pass bank name from UI for record
 }).refine(data => {
     if (data.payoutMethod === 'mpesa') {
-        return !!data.mpesaPhoneNumber && /^(?:254|\+254|0)?([17]\d{8})$/.test(data.mpesaPhoneNumber);
+        // Validate original format before conversion attempt
+        return !!data.mpesaPhoneNumber && /^(?:254|\+254|0)?([17]\d{8})$/.test(data.mpesaPhoneNumber.replace(/\s+/g, ''));
     }
     if (data.payoutMethod === 'bank_account') {
         return !!data.bankCode && !!data.accountNumber;
@@ -72,11 +73,10 @@ export async function POST(req: Request) {
     }
     const adminUserId = session.user.id;
 
-    // Declare adminWithdrawalId outside the try block
     let adminWithdrawalId: string | null = null; 
 
     try {
-        adminWithdrawalId = uuidv4(); // Assign value inside try
+        adminWithdrawalId = uuidv4(); 
 
         const body = await req.json();
         const validation = withdrawalRequestSchema.safeParse(body);
@@ -88,34 +88,47 @@ export async function POST(req: Request) {
         const amountInKobo = Math.round(amount * 100);
 
         const platformFeeSettingsRef = adminDb!.collection('settings').doc('platformFee');
-        // Use the ID generated outside the try block
         const adminWithdrawalRef = adminDb!.collection('adminFeeWithdrawals').doc(adminWithdrawalId);
 
         let paystackRecipientCode: string | null = null;
         let recipientPayload: any;
         let transferReason = `Platform Fee Withdrawal - ${adminWithdrawalId.substring(0,8)}`;
+        let destinationAccountNumberForPayload: string;
 
         // Prepare Paystack recipient and transfer details
         if (payoutMethod === 'mpesa') {
-            const mpesaNumberForPaystack = mpesaPhoneNumber!.startsWith('0') 
-                ? `254${mpesaPhoneNumber!.substring(1)}` 
-                : mpesaPhoneNumber!.startsWith('+') 
-                ? mpesaPhoneNumber!.substring(1) 
-                : mpesaPhoneNumber!;
+            const cleanedMpesa = mpesaPhoneNumber!.replace(/\s+/g, '');
+            // Use local format (07... or 7...) for Paystack account_number
+            destinationAccountNumberForPayload = cleanedMpesa.startsWith('254') 
+                ? `0${cleanedMpesa.substring(3)}` 
+                : cleanedMpesa.startsWith('+') 
+                ? `0${cleanedMpesa.substring(4)}` 
+                : cleanedMpesa; 
+             // Ensure it starts with 07... or 7... (adjust if needed)
+             if (!destinationAccountNumberForPayload.startsWith('07') && !destinationAccountNumberForPayload.startsWith('7')) {
+                 if (destinationAccountNumberForPayload.startsWith('1')) { // Safaricom new numbers
+                    destinationAccountNumberForPayload = `0${destinationAccountNumberForPayload}`;
+                 } else {
+                    throw new Error("Could not format M-Pesa number to expected local format (07...). Original: " + mpesaPhoneNumber);
+                 }
+             }
+            console.log(`Admin Fee Withdrawal: Using M-Pesa number ${destinationAccountNumberForPayload} for Paystack.`);
             
             recipientPayload = {
                 type: 'mobile_money',
-                name: accountName || `Admin Mpesa ${mpesaNumberForPaystack.slice(-4)}`, 
-                account_number: mpesaNumberForPaystack,
+                name: accountName || `Admin Mpesa ${destinationAccountNumberForPayload.slice(-4)}`, 
+                account_number: destinationAccountNumberForPayload, // Use local format
                 bank_code: PAYSTACK_MPESA_BANK_CODE_KENYA, 
                 currency: 'KES',
                 metadata: { admin_withdrawal_id: adminWithdrawalId, admin_user_id: adminUserId }
             };
         } else { // bank_account
+            destinationAccountNumberForPayload = accountNumber!;
+            console.log(`Admin Fee Withdrawal: Using bank account ${destinationAccountNumberForPayload} for Paystack.`);
             recipientPayload = {
                 type: 'nuban', 
-                name: accountName || `Admin Bank ${accountNumber!.slice(-4)}`,
-                account_number: accountNumber!,
+                name: accountName || `Admin Bank ${destinationAccountNumberForPayload.slice(-4)}`,
+                account_number: destinationAccountNumberForPayload,
                 bank_code: bankCode!,
                 currency: 'KES',
                 metadata: { admin_withdrawal_id: adminWithdrawalId, admin_user_id: adminUserId }
@@ -137,7 +150,7 @@ export async function POST(req: Request) {
 
             // Create initial withdrawal record
             const withdrawalData: AdminPlatformFeeWithdrawal = {
-                id: adminWithdrawalId!, // Use non-null assertion as it's assigned above
+                id: adminWithdrawalId!, 
                 adminUserId: adminUserId,
                 amount: amount,
                 currency: 'KES',
@@ -145,7 +158,7 @@ export async function POST(req: Request) {
                 payoutMethod: payoutMethod,
                 destinationDetails: {
                     accountName: accountName,
-                    accountNumber: payoutMethod === 'mpesa' ? mpesaPhoneNumber! : accountNumber!,
+                    accountNumber: destinationAccountNumberForPayload, // Store formatted number
                     bankCode: payoutMethod === 'bank_account' ? bankCode : undefined,
                     bankName: bankName, 
                 },
@@ -233,8 +246,7 @@ export async function POST(req: Request) {
 
     } catch (error: any) {
         console.error("--- API POST /api/admin/withdraw-fees FAILED --- Catch Block Error:", error);
-        // Attempt to mark record as failed if ID exists
-        if (adminWithdrawalId) { // Check if ID was generated before error
+        if (adminWithdrawalId) { 
              try {
                  await adminDb?.collection('adminFeeWithdrawals').doc(adminWithdrawalId).update({ 
                      status: 'failed', 

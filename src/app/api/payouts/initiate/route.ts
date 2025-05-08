@@ -31,7 +31,6 @@ export async function POST(req: Request) {
         console.error("Payout Initiate Error: Paystack Secret Key not configured.");
         return NextResponse.json({ message: 'Server payment configuration error.' }, { status: 500 });
      }
-    // Removed the incorrect placeholder check here
 
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) { 
@@ -75,10 +74,26 @@ export async function POST(req: Request) {
             determinedPayoutTypeForPaystack = 'mobile_money';
             determinedBankCodeForPaystack = PAYSTACK_MPESA_BANK_CODE_KENYA; // Use the correct code
             const cleanedMpesa = rawMpesaPhoneNumber.replace(/\s+/g, '');
-            recipientAccountNumber = cleanedMpesa.startsWith('0') ? `254${cleanedMpesa.substring(1)}` : cleanedMpesa.startsWith('+') ? cleanedMpesa.substring(1) : cleanedMpesa;
+            // Use local format (07... or 7...) for Paystack account_number
+            recipientAccountNumber = cleanedMpesa.startsWith('254') 
+                ? `0${cleanedMpesa.substring(3)}` 
+                : cleanedMpesa.startsWith('+') 
+                ? `0${cleanedMpesa.substring(4)}` 
+                : cleanedMpesa; // Assume it's already 07... or 7...
+            // Ensure it starts with 07... or 7... for Paystack (adjust logic if needed)
+            if (!recipientAccountNumber.startsWith('07') && !recipientAccountNumber.startsWith('7')) {
+                 // Potentially throw error or adjust based on exact Paystack requirement if 7... is needed
+                 // For now, assuming 07... is the target based on user feedback
+                 if (recipientAccountNumber.startsWith('1')) { // Likely Safaricom new numbers starting 1
+                    recipientAccountNumber = `0${recipientAccountNumber}`;
+                 } else {
+                    throw new Error("Could not format M-Pesa number to expected local format (07...). Original: " + rawMpesaPhoneNumber);
+                 }
+            }
+
             payoutMethodForRecord = 'mobile_money';
             lastVerifiedFieldToCheck = userData?.lastVerifiedMpesa || '';
-            console.log(`Payout Initiate: Selected M-Pesa. Type: ${determinedPayoutTypeForPaystack}, Bank Code: ${determinedBankCodeForPaystack}, Account: ${recipientAccountNumber}`);
+            console.log(`Payout Initiate: Selected M-Pesa. Type: ${determinedPayoutTypeForPaystack}, Bank Code: ${determinedBankCodeForPaystack}, Account: ${recipientAccountNumber} (using local format)`);
         } 
         // Fallback to Bank if M-Pesa is not available/valid but Bank details are
         else if (bankCode && bankAccountNumber && bankName) {
@@ -104,7 +119,7 @@ export async function POST(req: Request) {
         // --- Step 1: Create/Update Paystack Transfer Recipient ---
         let recipientCode = userData?.paystackRecipientCode; // Can be string | null | undefined here
         recipientNeedsUpdate = !recipientCode || 
-                               lastVerifiedFieldToCheck !== recipientAccountNumber || 
+                               lastVerifiedFieldToCheck !== recipientAccountNumber || // Compare against the formatted local number
                                userData?.lastVerifiedPayoutMethod !== payoutMethodForRecord;
 
         if (recipientNeedsUpdate) {
@@ -112,8 +127,8 @@ export async function POST(req: Request) {
             const recipientPayload = {
                 type: determinedPayoutTypeForPaystack, 
                 name: userData.name || userName,
-                account_number: recipientAccountNumber,
-                bank_code: determinedBankCodeForPaystack, // This uses the constant now
+                account_number: recipientAccountNumber, // Use the formatted local number
+                bank_code: determinedBankCodeForPaystack, 
                 currency: 'KES',
                 metadata: { internal_user_id: userId, payout_method: payoutMethodForRecord }
             };
@@ -146,17 +161,16 @@ export async function POST(req: Request) {
 
             // Define the update object with explicit types for Firestore write
             const userProfileUpdate: {
-                paystackRecipientCode: string | null; // Type allows null
+                paystackRecipientCode: string | null; 
                 lastVerifiedPayoutMethod: Withdrawal['payoutMethod'];
                 updatedAt: FieldValue;
-                lastVerifiedMpesa: string | null;
+                lastVerifiedMpesa: string | null; // Store the formatted local number used for verification
                 lastVerifiedBankAcc: string | null;
                 lastVerifiedBankCode: string | null;
             } = {
-                paystackRecipientCode: recipientCode!, // Use non-null assertion here
+                paystackRecipientCode: recipientCode!, 
                 lastVerifiedPayoutMethod: payoutMethodForRecord,
                 updatedAt: FieldValue.serverTimestamp(),
-                // Initialize all verification fields to null initially
                 lastVerifiedMpesa: null,
                 lastVerifiedBankAcc: null,
                 lastVerifiedBankCode: null,
@@ -164,7 +178,7 @@ export async function POST(req: Request) {
 
             // Set the correct verification field based on the method
             if (payoutMethodForRecord === 'mobile_money') {
-                userProfileUpdate.lastVerifiedMpesa = recipientAccountNumber;
+                userProfileUpdate.lastVerifiedMpesa = recipientAccountNumber; // Store formatted local number
             } else { // bank_account case
                 userProfileUpdate.lastVerifiedBankAcc = recipientAccountNumber;
                 userProfileUpdate.lastVerifiedBankCode = determinedBankCodeForPaystack;
@@ -173,9 +187,7 @@ export async function POST(req: Request) {
             await userRef.update(userProfileUpdate); // Update Firestore
             console.log(`Payout Initiate: Paystack Recipient ${recipientCode} created/updated for ${userId}.`);
         } else {
-             // If recipient didn't need update, recipientCode could still be null if it was never created before.
-             // We need a valid recipientCode to proceed. Throw error if it's null/undefined here.
-            if (!recipientCode) {
+             if (!recipientCode) {
                  console.error(`Payout Initiate: Logic error - Recipient code is missing for user ${userId} even though recipientNeedsUpdate is false.`);
                  return NextResponse.json({ message: 'User payout recipient code is missing. Please try saving payout details again.' }, { status: 500 });
              }
@@ -195,13 +207,14 @@ export async function POST(req: Request) {
                  amount: withdrawalAmount,
                  status: 'pending_gateway',
                  payoutMethod: payoutMethodForRecord, 
-                 payoutDetailsMasked: `${recipientAccountNumber.substring(0,(payoutMethodForRecord === 'mobile_money' ? 6: 3))}****${recipientAccountNumber.substring(recipientAccountNumber.length - (payoutMethodForRecord === 'mobile_money' ? 2: 4))}`,
+                 // Masking assumes recipientAccountNumber is the local format now
+                 payoutDetailsMasked: `${recipientAccountNumber.substring(0, 3)}****${recipientAccountNumber.substring(recipientAccountNumber.length - 4)}`,
                  paymentGateway: 'paystack',
-                 paystackRecipientCode: recipientCode, // recipientCode is guaranteed string here
+                 paystackRecipientCode: recipientCode, 
                  paystackTransferReference: paystackTransferReference,
                  requestedAt: FieldValue.serverTimestamp() as any,
                  updatedAt: FieldValue.serverTimestamp() as any,
-                 ...(payoutMethodForRecord === 'mobile_money' && { mpesaPhoneNumber: recipientAccountNumber }),
+                 ...(payoutMethodForRecord === 'mobile_money' && { mpesaPhoneNumber: recipientAccountNumber }), // Store formatted local number
              };
              transaction.set(withdrawalRef, withdrawalDataToSet);
         });
@@ -210,7 +223,7 @@ export async function POST(req: Request) {
         const transferPayload = {
             source: "balance",
             amount: amountInKobo,
-            recipient: recipientCode, // recipientCode is guaranteed string here
+            recipient: recipientCode, 
             currency: 'KES',
             reason: `Uza Bidhaa Payout - ${withdrawalId.substring(0,8)}`,
             reference: paystackTransferReference
