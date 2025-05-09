@@ -23,18 +23,17 @@ export interface UserProfile {
   mpesaLastUpdatedAt?: ApiTimestamp;
 
   // --- Paystack Payout Specific Fields ---
-  mpesaPhoneNumber?: string | null; // For M-Pesa payouts (can be used by Paystack or Intasend)
-  bankName?: string | null;         // For bank payouts via Paystack
-  bankAccountNumber?: string | null;// For bank payouts via Paystack
-  bankCode?: string | null;         // Paystack specific bank code
-  paystackRecipientCode?: string | null; // Store Paystack's recipient code
-  lastVerifiedMpesa?: string | null; // To track if Paystack recipient (Mpesa) needs update
-  lastVerifiedBankAcc?: string | null;// To track if Paystack recipient (Bank) needs update
-  lastVerifiedBankCode?: string | null;// To track if Paystack recipient (Bank) needs update
-  // ------------------------------------
+  mpesaPhoneNumber?: string | null; 
+  bankName?: string | null;        
+  bankAccountNumber?: string | null;
+  bankCode?: string | null;        
+  paystackRecipientCode?: string | null; 
+  lastVerifiedMpesa?: string | null; 
+  lastVerifiedBankAcc?: string | null;
+  lastVerifiedBankCode?: string | null;
 
-  availableBalance?: number; // Store as number (e.g., 1000.50)
-  isSuspended?: boolean; // For admin to suspend user accounts
+  availableBalance?: number; 
+  isSuspended?: boolean; 
 }
 
 export interface Item {
@@ -54,16 +53,35 @@ export interface Item {
   updatedAt: ApiTimestamp;
 }
 
+export type NotificationType = 
+  'new_message' | 
+  'item_listed' | 
+  'payment_received' | 
+  'payment_released' | 
+  'unusual_activity' | 
+  'item_sold' | 
+  'kyc_approved' | 
+  'kyc_rejected' | 
+  'message_approved' | 
+  'funds_available' | 
+  'withdrawal_initiated' | 
+  'withdrawal_completed' | 
+  'withdrawal_failed' | 
+  'admin_action' | 
+  'dispute_filed' | // Added for when a user files a dispute
+  'new_dispute_admin'; // Added for notifying admin of a new dispute
+
 export interface Notification {
   id: string;
   userId: string;
-  type: 'new_message' | 'item_listed' | 'payment_received' | 'payment_released' | 'unusual_activity' | 'item_sold' | 'kyc_approved' | 'kyc_rejected' | 'message_approved' | 'funds_available' | 'withdrawal_initiated' | 'withdrawal_completed' | 'withdrawal_failed' | 'admin_action'; // Added admin_action
+  type: NotificationType;
   message: string;
   relatedItemId?: string | null;
   relatedPaymentId?: string | null;
   relatedMessageId?: string | null;
   relatedUserId?: string | null;
   relatedWithdrawalId?: string | null;
+  relatedDisputeId?: string | null; // Optional: link to a dispute record
   isRead: boolean;
   createdAt: ApiTimestamp;
   readAt?: ApiTimestamp;
@@ -75,85 +93,71 @@ export interface Payment {
   itemId: string;
   buyerId: string;
   sellerId: string;
-  amount: number; // Amount buyer paid (in KES or your primary currency)
+  amount: number; 
   currency: string;
   status: 'initiated' | 'paid_to_platform' | 'released_to_seller_balance' | 'failed' | 'cancelled' | 'refunded' | 'disputed' | 'refund_pending' | 'admin_review';
   
-  // --- Gateway Specific Fields ---
-  paymentGateway?: 'intasend' | 'paystack' | string; // To identify the gateway used
-
-  // Intasend specific (keep for historical data or if you might switch back/support both)
+  paymentGateway?: 'intasend' | 'paystack' | string; 
   intasendInvoiceId?: string | null;
   intasendTrackingId?: string | null;
-
-  // Paystack specific
-  gatewayTransactionId?: string | null;   // Paystack's transaction ID (from charge.success)
-  paystackReference?: string; // Renamed from gatewayReference and made non-optional for new payments
+  gatewayTransactionId?: string | null;   
+  paystackReference?: string; 
   paystackAuthorizationUrl?: string;
   paystackAccessCode?: string;
-  // -------------------------------
-
-  failureReason?: string | null; // General failure reason, can be from Paystack or internal
-  createdAt: ApiTimestamp; // Timestamp of when the payment was initiated/created
+  failureReason?: string | null; 
+  createdAt: ApiTimestamp; 
   updatedAt: ApiTimestamp;
 
   // Fields for dispute management
-  isDisputed?: boolean; // True if a dispute has been raised for this payment
-  disputeReason?: string | null; // Reason for the dispute
-  disputeSubmittedAt?: ApiTimestamp | null; // When the dispute was submitted
+  isDisputed?: boolean; 
+  disputeReason?: string | null; 
+  disputeSubmittedAt?: ApiTimestamp | null; 
+  disputeFiledBy?: string | null; // ID of the user (buyer/seller) who filed the dispute
+  // disputeResolvedAt?: ApiTimestamp | null;
+  // disputeResolution?: string | null;
 }
 
 export interface Earning {
-    id: string; // Firestore document ID
-    userId: string; // Seller's user ID
-    amount: number; // Net amount earned by seller after fees
-    relatedPaymentId: string; // Link back to the originating Payment doc
-    relatedItemId: string; // Link back to the Item doc
-    status: 'available' | 'withdrawal_pending' | 'withdrawn'; // Status of this specific earning
-    createdAt: ApiTimestamp; // When the earning was made available
-    withdrawalId?: string | null; // Link to the withdrawal transaction if applicable
+    id: string; 
+    userId: string; 
+    amount: number; 
+    relatedPaymentId: string; 
+    relatedItemId: string; 
+    status: 'available' | 'withdrawal_pending' | 'withdrawn'; 
+    createdAt: ApiTimestamp; 
+    withdrawalId?: string | null; 
 }
 
 export interface Withdrawal {
-    id: string; // Your internal ID for the withdrawal request
-    userId: string; // Seller's user ID
-    amount: number; // Amount requested for withdrawal (in KES or your primary currency)
-    status: 'pending_approval' | 'pending_gateway' | 'processing' | 'completed' | 'failed'; // Added pending_gateway & pending_approval
-    
-    // --- Payout Method Details ---
-    payoutMethod?: 'mobile_money' | 'bank_account' | string; // e.g., 'mpesa', 'paystack_bank'
-    payoutDetailsMasked?: string; // e.g., "MTN-****123" or "058-****5678"
-    mpesaPhoneNumber?: string | null; // Store the Mpesa number used for THIS withdrawal (Paystack or Intasend)
-
-    // --- Gateway Specific Fields for this Withdrawal ---
-    paymentGateway?: 'intasend' | 'paystack' | string; // Which gateway processed this withdrawal
-
-    // Intasend specific (keep for historical data or if you might switch back/support both)
+    id: string; 
+    userId: string; 
+    amount: number; 
+    status: 'pending_approval' | 'pending_gateway' | 'processing' | 'completed' | 'failed'; 
+    payoutMethod?: 'mobile_money' | 'bank_account' | string; 
+    payoutDetailsMasked?: string; 
+    mpesaPhoneNumber?: string | null; 
+    paymentGateway?: 'intasend' | 'paystack' | string; 
     intasendTransferId?: string | null;
-
-    // Paystack specific
-    paystackRecipientCode?: string | null;      // Recipient code used for this transfer
-    paystackTransferReference?: string | null; // Your unique reference sent to Paystack for this transfer
-    paystackTransferCode?: string | null;      // Paystack's ID for the transfer attempt
-    // --------------------------------------
-
-    failureReason?: string | null; // Reason if the withdrawal failed
+    paystackRecipientCode?: string | null;      
+    paystackTransferReference?: string | null; 
+    paystackTransferCode?: string | null;      
+    failureReason?: string | null; 
     requestedAt: ApiTimestamp;
-    updatedAt?: ApiTimestamp; // When the withdrawal record was last updated
-    completedAt?: ApiTimestamp; // When the withdrawal was successfully completed
+    updatedAt?: ApiTimestamp; 
+    completedAt?: ApiTimestamp; 
 }
 
 export interface AdminPlatformFeeWithdrawal {
-    id: string; // Firestore document ID for this withdrawal record
-    adminUserId: string; // ID of the admin who initiated the withdrawal
-    amount: number; // Amount withdrawn
-    currency: string; // e.g., KES
+    id: string; 
+    adminUserId: string; 
+    amount: number; 
+    currency: string; 
     status: 'pending_gateway' | 'processing' | 'completed' | 'failed';
     payoutMethod: 'mpesa' | 'bank_account';
     destinationDetails: {
         accountName?: string | null; 
-        accountNumber: string; // M-Pesa phone or Bank account number
-        bankCode?: string | null; // Corrected: Allow null
+        accountNumber: string; 
+        bankCode?: string | null; 
         bankName?: string | null; 
     };
     paymentGateway: 'paystack';
@@ -165,8 +169,27 @@ export interface AdminPlatformFeeWithdrawal {
     completedAt?: ApiTimestamp;
 }
 
+// --- Dispute Management Types ---
+export type DisputeStatus = 'open' | 'pending_admin' | 'pending_buyer_response' | 'pending_seller_response' | 'resolved_refund' | 'resolved_release' | 'closed_other';
 
-// Message, ParticipantData, Conversation remain unchanged from your provided code
+export interface DisputeRecord {
+    id: string; // Dispute ID (matches the one from the API route)
+    paymentId: string;
+    itemId: string;
+    filedByUserId: string; // User who initiated the dispute
+    otherPartyUserId: string; // The other user involved in the transaction
+    reason: string; // Initial reason from the user
+    description: string; // Detailed description from the user
+    status: DisputeStatus;
+    resolutionNotes?: string | null; // Admin notes on resolution
+    createdAt: ApiTimestamp;
+    updatedAt: ApiTimestamp;
+    resolvedAt?: ApiTimestamp | null;
+    // Optional: for communication related to this dispute
+    // messages: Array<{ senderId: string; text: string; timestamp: ApiTimestamp }>; 
+}
+// -------------------------------
+
 export interface Message {
   id: string;
   senderId: string;
@@ -200,19 +223,17 @@ export interface Conversation {
 }
 
 export interface PlatformSettings {
-    id?: string; // Typically 'platformFee' or similar
-    feePercentage: number; // Stored as a whole number, e.g., 10 for 10%
-    totalPlatformFees?: number; // Accumulated total fees collected
+    id?: string; 
+    feePercentage: number; 
+    totalPlatformFees?: number; 
     updatedAt?: ApiTimestamp;
 }
 
-// Represents a record of a single fee collected by the platform
 export interface PlatformFeeRecord {
-    id: string; // Firestore document ID
-    amount: number; // The amount of the fee collected
-    relatedPaymentId: string; // The payment this fee was associated with
-    relatedItemId: string; // The item the payment was for
-    sellerId: string; // The seller involved in the transaction
-    createdAt: ApiTimestamp; // When the fee was recorded (typically when payment released)
+    id: string; 
+    amount: number; 
+    relatedPaymentId: string; 
+    relatedItemId: string; 
+    sellerId: string; 
+    createdAt: ApiTimestamp; 
 }
-

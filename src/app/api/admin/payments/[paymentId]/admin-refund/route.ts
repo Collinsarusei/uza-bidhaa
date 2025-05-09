@@ -3,22 +3,25 @@
 
 import { NextResponse } from 'next/server';
 import { adminDb } from '@/lib/firebase-admin';
-import { FieldValue, Timestamp } from 'firebase-admin/firestore';
+import { FieldValue } from 'firebase-admin/firestore';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from '@/app/api/auth/[...nextauth]/route';
-import { Payment, Item } from '@/lib/types';
+import { Payment, Item, UserProfile } from '@/lib/types'; // Ensure all necessary types are imported
 import { createNotification } from '@/lib/notifications';
 
-// TODO: Import Paystack SDK or fetch for refund API calls
-
+// Role-based admin check
 async function isAdmin(userId: string | undefined): Promise<boolean> {
-    if (!userId) return false;
-    const adminUserEmail = process.env.ADMIN_EMAIL;
-    if (adminUserEmail) {
-        const session = await getServerSession(authOptions);
-        return session?.user?.email === adminUserEmail;
+    if (!userId || !adminDb) { 
+        console.error("isAdmin check failed: Missing userId or adminDb is null.");
+        return false;
     }
-    return !!userId; // Fallback, NOT SECURE for production
+    try {
+        const userDoc = await adminDb!.collection('users').doc(userId).get();
+        return userDoc.exists && userDoc.data()?.role === 'admin';
+    } catch (error) {
+        console.error("Error checking admin role for refund:", error);
+        return false;
+    }
 }
 
 interface RouteContext {
@@ -40,11 +43,11 @@ export async function POST(req: Request, context: RouteContext) {
     }
 
     const session = await getServerSession(authOptions);
-    if (!(await isAdmin(session?.user?.id))) {
+    if (!session?.user?.id || !(await isAdmin(session.user.id))) {
         console.warn(`Admin Refund ${paymentId}: Unauthorized attempt by user ${session?.user?.id}.`);
         return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
     }
-    const adminUserId = session?.user?.id;
+    const adminUserId = session.user.id; // For logging/audit if needed
     console.log(`Admin Refund ${paymentId}: Authenticated admin action by ${adminUserId}.`);
 
     try {
@@ -57,87 +60,91 @@ export async function POST(req: Request, context: RouteContext) {
             }
             const paymentData = paymentDoc.data() as Payment;
 
+            // Check if payment is in a state that can be refunded by admin
+            if (!['disputed', 'admin_review', 'paid_to_platform'].includes(paymentData.status)) {
+                throw new Error(`Cannot refund payment with status: ${paymentData.status}.`);
+            }
             if (paymentData.status === 'refunded') {
                 throw new Error('Payment has already been refunded.');
             }
-            // Allow refund from 'paid_to_platform', 'disputed', or 'admin_review'
-            if (!['paid_to_platform', 'disputed', 'admin_review'].includes(paymentData.status)) {
-                throw new Error(`Cannot refund payment with status: ${paymentData.status}.`);
-            }
 
-            // --- TODO: Actual Paystack Refund Logic ---
-            // 1. Check if paymentData.gatewayTransactionId exists (this is Paystack's transaction ID)
-            // 2. If yes, call Paystack's refund API.
-            //    const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
-            //    if (paymentData.gatewayTransactionId && PAYSTACK_SECRET_KEY) {
-            //      const refundResponse = await fetch(`https://api.paystack.co/refund`, {
-            //        method: 'POST',
-            //        headers: {
-            //          'Authorization': `Bearer ${PAYSTACK_SECRET_KEY}`,
-            //          'Content-Type': 'application/json',
-            //        },
-            //        body: JSON.stringify({
-            //          transaction: paymentData.gatewayTransactionId,
-            //          // amount: paymentData.amount * 100, // Optional: specify amount for partial refund
-            //          // currency: "KES",
-            //          // reason: "Admin initiated refund for disputed order."
-            //        })
-            //      });
-            //      const refundResult = await refundResponse.json();
-            //      if (!refundResponse.ok || !refundResult.status) {
-            //         console.error("Paystack Refund API Error:", refundResult);
-            //         throw new Error(`Paystack refund failed: ${refundResult.message || 'Unknown Paystack error'}`);
-            //      }
-            //      console.log(`Paystack refund initiated: ${refundResult.data?.status}`);
-            //    } else {
-            //      console.warn(`Admin Refund ${paymentId}: Cannot process Paystack refund automatically. Missing Paystack transaction ID or secret key.`);
-            //      // If automatic refund fails or isn't possible, admin might need to do it manually in Paystack dashboard.
-            //      // You might choose to proceed with DB update and notify admin, or throw error.
-            //    }
-            // --- End TODO ---
-            // For now, we assume manual refund or proceed with DB update only.
-
+            const buyerId = paymentData.buyerId;
+            const buyerRef = adminDb!.collection('users').doc(buyerId);
             const itemRef = adminDb!.collection('items').doc(paymentData.itemId);
+
+            // 1. Update Payment Status
             transaction.update(paymentRef, {
-                status: 'refunded', // Or 'refund_pending' if Paystack refund is async
+                status: 'refunded',
                 updatedAt: FieldValue.serverTimestamp(),
-                isDisputed: false, // Clear dispute flag
-                disputeReason: FieldValue.delete(),
+                isDisputed: false, // Clear dispute flag if it was set
+                disputeReason: FieldValue.delete(), // Clear dispute reason
+                disputeFiledBy: FieldValue.delete(),
+                disputeSubmittedAt: FieldValue.delete(),
+                // refundReasonAdmin: "Admin processed refund." // Optional: admin note for refund
             });
+
+            // 2. Update Item Status (e.g., back to available or a specific admin-managed state)
             transaction.update(itemRef, {
-                status: 'available', // Make item available again, or a specific 'refunded_item' status
+                status: 'available', // Or 'cancelled', 'admin_removed' etc., depending on policy
                 updatedAt: FieldValue.serverTimestamp(),
             });
 
-            console.log(`Admin Refund: Payment ${paymentId} status updated to refunded. Item ${paymentData.itemId} status updated.`);
-            return { success: true, sellerId: paymentData.sellerId, buyerId: paymentData.buyerId, amount: paymentData.amount, itemId: paymentData.itemId, itemTitle: (await transaction.get(itemRef)).data()?.title || 'Item' };
+            // 3. Credit Buyer's Internal Wallet/Balance
+            const buyerDoc = await transaction.get(buyerRef);
+            if (buyerDoc.exists) {
+                 transaction.update(buyerRef, {
+                     availableBalance: FieldValue.increment(paymentData.amount)
+                 });
+                 console.log(`Admin Refund: Credited KES ${paymentData.amount} to buyer ${buyerId} internal balance.`);
+            } else {
+                console.warn(`Admin Refund: Buyer profile ${buyerId} not found. Cannot credit internal balance.`);
+                // Decide if this should halt the transaction. For now, it proceeds but logs a warning.
+                // throw new Error(`Buyer profile ${buyerId} not found. Cannot credit internal balance.`); 
+            }
+            
+            // Note: The actual financial refund (Paystack to buyer's card/bank) 
+            // still needs to be done MANUALLY by the admin in the Paystack dashboard.
+            return { 
+                success: true, 
+                buyerId: paymentData.buyerId,
+                sellerId: paymentData.sellerId, 
+                amountRefunded: paymentData.amount, 
+                itemId: paymentData.itemId,
+                itemTitle: paymentData.itemTitle || 'Item' // Ensure itemTitle is available
+            };
         });
 
         if (result?.success) {
+            console.log(`Admin Refund: Payment ${paymentId} processed for refund to buyer ${result.buyerId}.`);
+            // Send notifications
             try {
                 await createNotification({
                     userId: result.buyerId,
-                    type: 'admin_action', // Or a specific 'payment_refunded' type
-                    message: `Admin has processed a refund of KES ${result.amount} for your order of "${result.itemTitle}".`,
+                    type: 'admin_action', // Consider a more specific 'refund_processed' type
+                    message: `Admin has processed a refund of KES ${result.amountRefunded.toLocaleString()} for your order of "${result.itemTitle}". The amount has been credited to your platform balance. The financial refund from Paystack will be processed separately. `,
                     relatedItemId: result.itemId,
                     relatedPaymentId: paymentId,
                 });
                 await createNotification({
                     userId: result.sellerId,
-                    type: 'admin_action',
-                    message: `Admin has processed a refund to the buyer for item "${result.itemTitle}".`,
+                    type: 'admin_action', // Consider 'order_refunded'
+                    message: `Admin has processed a refund to the buyer for item "${result.itemTitle}". Payment ID: ${paymentId}. Your listing may be re-activated or reviewed. `,
                     relatedItemId: result.itemId,
                     relatedPaymentId: paymentId,
                 });
             } catch (notifyError) {
                 console.error(`Admin Refund ${paymentId}: Failed to send notifications:`, notifyError);
             }
-            return NextResponse.json({ message: 'Payment refunded successfully (DB update). Actual fund transfer via Paystack may need manual action or API integration.' }, { status: 200 });
+            return NextResponse.json({ message: 'Refund processed successfully. Buyer balance updated. Remember to process financial refund via Paystack.' }, { status: 200 });
         }
         throw new Error('Transaction failed to return expected result.');
 
     } catch (error: any) {
         console.error(`--- API POST /api/admin/payments/${paymentId}/admin-refund FAILED --- Error:`, error);
-        return NextResponse.json({ message: error.message || 'Failed to refund payment.' }, { status: 500 });
+        const status = error.message?.startsWith('Forbidden') ? 403 :
+                       error.message?.includes('not found') ? 404 :
+                       error.message?.includes('already been refunded') ? 409 : // Conflict for already refunded
+                       400; // Default bad request
+        return NextResponse.json({ message: error.message || 'Failed to process refund.' }, { status });
     }
 }

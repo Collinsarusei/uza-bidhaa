@@ -4,7 +4,7 @@ import './globals.css';
 import { Toaster } from "@/components/ui/toaster";
 import NextAuthSessionProvider from "@/components/providers/session-provider";
 import { NotificationProvider } from "@/components/providers/notification-provider"; 
-// import { AdminFeesProvider } from "@/components/providers/admin-fees-provider"; // Example for future admin context
+import { Footer } from "@/components/layout/footer"; // Import the Footer
 
 const geistSans = Geist({
   variable: '--font-geist-sans',
@@ -27,13 +27,14 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+    <html lang="en" className="h-full">
+      <body className={`${geistSans.variable} ${geistMono.variable} antialiased flex flex-col min-h-screen`}>
         <NextAuthSessionProvider>
           <NotificationProvider>
-            {/* <AdminFeesProvider> Example for future context */}
+            <div className="flex-grow"> {/* Main content wrapper */}
               {children} 
-            {/* </AdminFeesProvider> */}
+            </div>
+            <Footer /> {/* Add Footer here */}
             <Toaster />
           </NotificationProvider>
         </NextAuthSessionProvider>

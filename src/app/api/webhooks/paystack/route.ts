@@ -60,7 +60,7 @@ async function handleChargeSuccess(payload: any) {
                 updatedAt: FieldValue.serverTimestamp(),
             });
             transaction.update(itemRef, {
-                status: 'paid_escrow', 
+                status: 'paid_on_hold', 
                 updatedAt: FieldValue.serverTimestamp()
             });
         });
