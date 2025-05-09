@@ -231,16 +231,7 @@ export default function HomePage() {
         </div> */}
       </main>
 
-      {/* Footer */}
-       <footer className="bg-black text-white p-6 md:py-8 w-full border-t border-gray-700 mt-auto"> {/* Added mt-auto */} 
-        <div className="container mx-auto flex flex-col md:flex-row items-center justify-center gap-4">
-           <p className="text-xs">© {new Date().getFullYear()} Uza Bidhaa Marketplace. All rights reserved.</p>
-           <nav className="flex gap-4">
-             <Link href="/terms" className="text-xs hover:underline hover:text-gray-300 underline-offset-4" prefetch={false}>Terms</Link>
-             <Link href="/privacy" className="text-xs hover:underline hover:text-gray-300 underline-offset-4" prefetch={false}>Privacy</Link>
-           </nav>
-         </div>
-       </footer>
+      {/* Removed the duplicate footer that was here */}
     </div>
   );
 }

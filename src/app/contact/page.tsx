@@ -48,74 +48,77 @@ export default function ContactFaqPage() {
   const { data: session } = useSession();
 
   return (
-    <div className="container mx-auto max-w-3xl p-4 md:p-8">
-      <div className="mb-8 text-center">
-        <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-gray-100 sm:text-4xl">
-          Contact Us & FAQs
-        </h1>
-        <p className="mt-4 text-lg text-muted-foreground">
-          Have questions or need assistance? We're here to help!
-        </p>
-      </div>
-
-      {session && (
-        <div className="mb-6 flex justify-center">
-          <Link href="/dashboard" passHref>
-            <Button variant="outline">
-              <Icons.arrowLeft className="mr-2 h-4 w-4" /> Back to Dashboard
-            </Button>
-          </Link>
+    // Applied a slightly off-white background for less brightness
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 py-6 md:py-12">
+      <div className="container mx-auto max-w-3xl px-4 md:px-8">
+        <div className="mb-8 text-center">
+          <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-gray-100 sm:text-4xl">
+            Contact Us & FAQs
+          </h1>
+          <p className="mt-4 text-lg text-muted-foreground">
+            Have questions or need assistance? We're here to help!
+          </p>
         </div>
-      )}
 
-      <div className="mb-12 rounded-lg border bg-card p-6 shadow-sm">
-        <h2 className="mb-4 text-2xl font-semibold text-gray-800 dark:text-gray-200">Get in Touch</h2>
-        <div className="space-y-4">
-          <div className="flex items-center space-x-3">
-            <Mail className="h-6 w-6 text-primary" />
-            <div>
-              <p className="font-medium">Email Support</p>
-              <a href="mailto:uzabidhaa@gmail.com" className="text-primary hover:underline">
-                uzabidhaa@gmail.com
-              </a>
+        {session && (
+          <div className="mb-6 flex justify-center">
+            <Link href="/dashboard" passHref>
+              <Button variant="outline">
+                <Icons.arrowLeft className="mr-2 h-4 w-4" /> Back to Dashboard
+              </Button>
+            </Link>
+          </div>
+        )}
+
+        <div className="mb-12 rounded-lg border bg-card p-6 shadow-sm dark:border-slate-700">
+          <h2 className="mb-4 text-2xl font-semibold text-gray-800 dark:text-gray-200">Get in Touch</h2>
+          <div className="space-y-4">
+            <div className="flex items-center space-x-3">
+              <Mail className="h-6 w-6 text-primary" />
+              <div>
+                <p className="font-medium text-gray-700 dark:text-gray-300">Email Support</p>
+                <a href="mailto:uzabidhaa@gmail.com" className="text-primary hover:underline">
+                  uzabidhaa@gmail.com
+                </a>
+              </div>
+            </div>
+            <div className="flex items-center space-x-3">
+              <MessageCircle className="h-6 w-6 text-primary" /> 
+              <div>
+                <p className="font-medium text-gray-700 dark:text-gray-300">WhatsApp Support</p>
+                <a 
+                  href="https://wa.me/254743299688" 
+                  target="_blank" 
+                  rel="noopener noreferrer" 
+                  className="text-primary hover:underline"
+                >
+                  +254 743 299688 (Click to Chat)
+                </a>
+              </div>
             </div>
           </div>
-          <div className="flex items-center space-x-3">
-            <MessageCircle className="h-6 w-6 text-primary" /> 
-            <div>
-              <p className="font-medium">WhatsApp Support</p>
-              <a 
-                href="https://wa.me/254743299688" 
-                target="_blank" 
-                rel="noopener noreferrer" 
-                className="text-primary hover:underline"
-              >
-                +254 743 299688 (Click to Chat)
-              </a>
-            </div>
-          </div>
+          <p className="mt-4 text-sm text-muted-foreground">
+            We typically respond within 24 business hours.
+          </p>
         </div>
-        <p className="mt-4 text-sm text-muted-foreground">
-          We typically respond within 24 business hours.
-        </p>
-      </div>
 
-      <div>
-        <h2 className="mb-6 text-center text-2xl font-semibold text-gray-800 dark:text-gray-200">
-          Frequently Asked Questions
-        </h2>
-        <Accordion type="single" collapsible className="w-full">
-          {faqItems.map((item, index) => (
-            <AccordionItem value={`item-${index + 1}`} key={index}>
-              <AccordionTrigger className="text-left hover:no-underline">
-                {item.question}
-              </AccordionTrigger>
-              <AccordionContent className="text-muted-foreground">
-                {item.answer}
-              </AccordionContent>
-            </AccordionItem>
-          ))}
-        </Accordion>
+        <div>
+          <h2 className="mb-6 text-center text-2xl font-semibold text-gray-800 dark:text-gray-200">
+            Frequently Asked Questions
+          </h2>
+          <Accordion type="single" collapsible className="w-full">
+            {faqItems.map((item, index) => (
+              <AccordionItem value={`item-${index + 1}`} key={index} className="border-b dark:border-slate-700">
+                <AccordionTrigger className="text-left hover:no-underline text-gray-700 dark:text-gray-300">
+                  {item.question}
+                </AccordionTrigger>
+                <AccordionContent className="text-muted-foreground dark:text-slate-400">
+                  {item.answer}
+                </AccordionContent>
+              </AccordionItem>
+            ))}
+          </Accordion>
+        </div>
       </div>
     </div>
   );
