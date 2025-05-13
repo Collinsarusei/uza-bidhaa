@@ -5,6 +5,7 @@ import { authOptions } from '../auth/[...nextauth]/route';
 import { adminDb } from '@/lib/firebase-admin'; 
 import { FieldValue } from 'firebase-admin/firestore';
 import { createNotification } from '@/lib/notifications';
+import { v4 as uuidv4 } from 'uuid'; // Ensure uuid is imported
 
 if (!adminDb) {
      console.error("FATAL ERROR: Firebase Admin DB not initialized.");
@@ -15,6 +16,9 @@ const generateConversationId = (userId1: string, userId2: string, itemId: string
     const sortedIds = [userId1, userId2].sort();
     return `${sortedIds[0]}_${sortedIds[1]}_item_${itemId}`;
 };
+
+const SYSTEM_MESSAGE_SENDER_ID = "system_warning";
+const CHAT_PAYMENT_WARNING_MESSAGE = "For your safety, ensure all payments are made through the Uza Bidhaa platform. We are not liable for any losses incurred from off-platform payments or direct M-Pesa transfers arranged via chat.";
 
 export async function POST(req: Request) {
     console.log("API POST /api/messages: Received request");
@@ -49,17 +53,18 @@ export async function POST(req: Request) {
         const conversationId = generateConversationId(senderId, recipientId, itemId);
         const conversationRef = conversationsCollection.doc(conversationId);
         const currentTimestamp = FieldValue.serverTimestamp();
+        const userMessageId = uuidv4(); // Generate ID for user message
 
-        const messageData = {
+        const userMessageData = {
+            id: userMessageId,
             senderId: senderId,
             text: text.trim(),
             timestamp: currentTimestamp,
         };
         
-        // --- Fetch recipient data if creating conversation --- 
         let recipientName = 'User';
         let recipientAvatar = null;
-        const convDocSnapshot = await conversationRef.get(); // Check existence before transaction
+        const convDocSnapshot = await conversationRef.get();
         if (!convDocSnapshot.exists) {
             try {
                 const recipientUserDoc = await adminDb.collection('users').doc(recipientId).get();
@@ -68,13 +73,10 @@ export async function POST(req: Request) {
                     recipientName = recipientData?.name || recipientData?.username || 'User';
                     recipientAvatar = recipientData?.profilePictureUrl || null;
                 }
-                 console.log(`API Messages: Fetched recipient (${recipientId}) data for new conversation.`);
             } catch (fetchError) {
                  console.error(`API Messages: Failed to fetch recipient (${recipientId}) data:`, fetchError);
-                 // Proceed without recipient data if fetch fails
             }
         }
-        // -------------------------------------------------
 
         const initialConversationData = {
             participantIds: [senderId, recipientId],
@@ -82,15 +84,15 @@ export async function POST(req: Request) {
             itemTitle: itemTitle,
             itemImageUrl: itemImageUrl || null,
             createdAt: currentTimestamp,
-            approved: false,
+            approved: false, 
             initiatorId: senderId,
-            lastMessageTimestamp: currentTimestamp,
+            lastMessageTimestamp: currentTimestamp, 
             lastMessageSnippet: text.trim().substring(0, 100),
             participantsData: {
                  [senderId]: { name: senderName, avatar: senderAvatar },
-                 // Add recipient data if fetched
                  [recipientId]: { name: recipientName, avatar: recipientAvatar }, 
              },
+             hasShownPaymentWarning: true 
         };
 
         const updateConversationData = {
@@ -98,28 +100,39 @@ export async function POST(req: Request) {
              lastMessageSnippet: text.trim().substring(0, 100),
              [`participantsData.${senderId}.name`]: senderName,
              [`participantsData.${senderId}.avatar`]: senderAvatar,
-             // Potentially update recipient data here too if it might change
-             // [`participantsData.${recipientId}.name`]: recipientName, 
-             // [`participantsData.${recipientId}.avatar`]: recipientAvatar,
+        };
+        
+        const systemMessageId = uuidv4(); // Explicitly generate ID for system message
+        const systemWarningMessageData = {
+            id: systemMessageId,
+            senderId: SYSTEM_MESSAGE_SENDER_ID,
+            text: CHAT_PAYMENT_WARNING_MESSAGE,
+            timestamp: currentTimestamp, 
+            isSystemMessage: true 
         };
 
         await adminDb.runTransaction(async (transaction) => {
-             // Re-get inside transaction for consistency
              const convDoc = await transaction.get(conversationRef);
              const messagesCollectionRef = conversationRef.collection('messages');
-             const newMessageRef = messagesCollectionRef.doc();
+             const userNewMessageRef = messagesCollectionRef.doc(userMessageId); // Use userMessageId
 
              if (!convDoc.exists) {
-                  console.log(`API Messages: Creating new conversation ${conversationId} (approved: false)`);
-                  // Use initial data which includes fetched recipient info
-                  transaction.set(conversationRef, initialConversationData);
+                  console.log(`API Messages: Creating new conversation ${conversationId}`);
+                  transaction.set(conversationRef, {
+                      ...initialConversationData,
+                      lastMessageTimestamp: currentTimestamp, 
+                      lastMessageSnippet: userMessageData.text.substring(0, 100)
+                  });
+                  const systemMessageRef = messagesCollectionRef.doc(systemMessageId); // Use systemMessageId
+                  transaction.set(systemMessageRef, systemWarningMessageData);
+                  transaction.set(userNewMessageRef, userMessageData);
+                  console.log(`API Messages: System warning and first user message added to new conversation ${conversationId}`);
              } else {
                  console.log(`API Messages: Updating existing conversation ${conversationId}`);
-                 // Use update data
                  transaction.update(conversationRef, updateConversationData);
+                 transaction.set(userNewMessageRef, userMessageData);
+                 console.log(`API Messages: User message added to existing conversation ${conversationId}`);
              }
-             transaction.set(newMessageRef, messageData);
-             console.log(`API Messages: Message added to conversation ${conversationId}`);
         });
 
         try {
@@ -131,9 +144,9 @@ export async function POST(req: Request) {
                      shouldNotify = true;
                  } else {
                      const messagesSnapshot = await conversationRef.collection('messages').limit(2).get();
-                     if (messagesSnapshot.size === 1) { 
+                     if (messagesSnapshot.docs.some(doc => doc.data().senderId === senderId)) { 
                          shouldNotify = true;
-                         console.log(`API Messages: Notifying recipient for first message in unapproved conversation ${conversationId}`);
+                         console.log(`API Messages: Notifying recipient for first user message in unapproved conversation ${conversationId}`);
                      }
                  }
             }
@@ -219,10 +232,8 @@ export async function GET(req: Request) {
         });
 
         console.log(`API Messages GET: Found ${messages.length} messages for conversation ${conversationId}`);
-        // Return full conversation data along with messages
         return NextResponse.json({ 
             messages: messages, 
-            // Convert conversation timestamps before sending
             conversation: {
                 ...conversationData,
                 createdAt: conversationData.createdAt?.toDate ? conversationData.createdAt.toDate().toISOString() : null,

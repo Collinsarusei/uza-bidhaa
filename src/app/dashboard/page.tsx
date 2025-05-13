@@ -36,6 +36,7 @@ import { NotificationsContent } from "@/components/notifications-content";
 import { useRouter } from 'next/navigation';
 import { useNotifications } from "@/components/providers/notification-provider"; 
 import { useToast } from "@/hooks/use-toast";
+import { formatDistanceToNow, parseISO } from 'date-fns'; // Import for relative time
 
 // --- Main Content Component --- 
 function DashboardContent() {
@@ -110,7 +111,8 @@ function DashboardContent() {
 
   const handleOpenNotifications = () => {
       if (unreadCount > 0) {
-          markAllAsRead(); 
+          // Call context markAllAsRead which calls the API
+          contextMarkAllAsRead(); 
       }
       setIsNotificationsSheetOpen(true);
   };
@@ -163,7 +165,7 @@ function DashboardContent() {
                     <Link href="/messages" passHref>
                        <Button variant="ghost" size="icon"><Icons.mail className="h-5 w-5" /></Button>
                     </Link>
-                    <Button variant="ghost" size="icon" className="relative" onClick={() => router.push('/notifications')}>
+                    <Button variant="ghost" size="icon" className="relative" onClick={handleOpenNotifications}>
                          <Icons.bell className="h-5 w-5" />
                          {unreadCount > 0 && <Badge variant="destructive" className="absolute -top-1 -right-1 h-4 w-4 justify-center rounded-full p-0.5 text-xs">{unreadCount > 9 ? '9+' : unreadCount}</Badge>}
                      </Button>
@@ -317,54 +319,65 @@ function DashboardContent() {
      </div>
   );
 
-  const renderItemCard = (item: Item) => (
-    <Card key={item.id} className="flex flex-col overflow-hidden hover:shadow-lg transition-shadow duration-200 ease-in-out">
-      <CardHeader className="p-0">
-        <Link href={`/item/${item.id}`} passHref className="block">
-             {item.mediaUrls && item.mediaUrls.length > 0 ? (
-               <img src={item.mediaUrls[0]} alt={item.title} className="aspect-video w-full object-cover" />
-             ) : (
-               <div className="aspect-video w-full bg-secondary flex items-center justify-center text-muted-foreground">No Image</div>
-             )}
-         </Link>
-      </CardHeader>
-      <CardContent className="flex-grow p-4 space-y-1">
-         <Link href={`/item/${item.id}`} passHref><CardTitle className="text-lg hover:underline">{item.title}</CardTitle></Link>
-         <CardDescription className="text-sm text-muted-foreground">{item.location}</CardDescription>
-         <p className="pt-1 text-lg font-semibold">KES {item.price.toLocaleString()}</p>
-          <Badge
-            variant={item.status === 'sold' ? 'destructive' : item.status === 'available' ? 'default' : 'secondary'}
-            className="mt-1"
-          >
-            {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
-          </Badge>
-      </CardContent>
-      <CardFooter className="p-4 flex flex-col gap-2">
-         <Link href={`/item/${item.id}`} passHref className="w-full">
-             <Button variant="outline" className="w-full hover:bg-accent hover:text-accent-foreground transition-colors">View Details</Button>
-         </Link>
-        {session?.user && session.user.id !== item.sellerId ? (
-             <Button 
-                 className="w-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-0" 
-                 onClick={() => handleOpenMessageSheet(item.sellerId, item.id, item.title, item.mediaUrls?.[0] ?? null)}
-             >
-                 <Icons.mail className="mr-2 h-4 w-4" /> Message Seller
-             </Button>
-        ) : !session?.user ? (
-            <TooltipProvider>
-                <Tooltip>
-                    <TooltipTrigger asChild>
-                        <Button className="w-full" disabled> <Icons.mail className="mr-2 h-4 w-4" /> Message Seller</Button>
-                    </TooltipTrigger>
-                    <TooltipContent><p>Log in to message the seller.</p></TooltipContent>
-                </Tooltip>
-            </TooltipProvider>
-        ) : (
-             <Button className="w-full" disabled>Your Listing</Button>
-        )}
-      </CardFooter>
-    </Card>
-  );
+  const renderItemCard = (item: Item) => {
+    let timeSinceListed = 'Date unavailable';
+    if (item.createdAt) {
+        try {
+            timeSinceListed = formatDistanceToNow(parseISO(item.createdAt), { addSuffix: true });
+        } catch (e) {
+            console.warn("Error formatting time since listed for item:", item.id, e);
+        }
+    }
+    return (
+        <Card key={item.id} className="flex flex-col overflow-hidden hover:shadow-lg transition-shadow duration-200 ease-in-out">
+        <CardHeader className="p-0">
+            <Link href={`/item/${item.id}`} passHref className="block">
+                {item.mediaUrls && item.mediaUrls.length > 0 ? (
+                <img src={item.mediaUrls[0]} alt={item.title} className="aspect-video w-full object-cover" />
+                ) : (
+                <div className="aspect-video w-full bg-secondary flex items-center justify-center text-muted-foreground">No Image</div>
+                )}
+            </Link>
+        </CardHeader>
+        <CardContent className="flex-grow p-4 space-y-1">
+            <Link href={`/item/${item.id}`} passHref><CardTitle className="text-lg hover:underline">{item.title}</CardTitle></Link>
+            <CardDescription className="text-sm text-muted-foreground">{item.location}</CardDescription>
+            <p className="pt-1 text-lg font-semibold">KES {item.price.toLocaleString()}</p>
+            <Badge
+                variant={item.status === 'sold' ? 'destructive' : item.status === 'available' ? 'default' : 'secondary'}
+                className="mt-1"
+            >
+                {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
+            </Badge>
+            <p className="text-xs text-muted-foreground pt-1">Listed: {timeSinceListed}</p> {/* Display time since listed */}
+        </CardContent>
+        <CardFooter className="p-4 flex flex-col gap-2">
+            <Link href={`/item/${item.id}`} passHref className="w-full">
+                <Button variant="outline" className="w-full hover:bg-accent hover:text-accent-foreground transition-colors">View Details</Button>
+            </Link>
+            {session?.user && session.user.id !== item.sellerId ? (
+                <Button 
+                    className="w-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-0" 
+                    onClick={() => handleOpenMessageSheet(item.sellerId, item.id, item.title, item.mediaUrls?.[0] ?? null)}
+                >
+                    <Icons.mail className="mr-2 h-4 w-4" /> Message Seller
+                </Button>
+            ) : !session?.user ? (
+                <TooltipProvider>
+                    <Tooltip>
+                        <TooltipTrigger asChild>
+                            <Button className="w-full" disabled> <Icons.mail className="mr-2 h-4 w-4" /> Message Seller</Button>
+                        </TooltipTrigger>
+                        <TooltipContent><p>Log in to message the seller.</p></TooltipContent>
+                    </Tooltip>
+                </TooltipProvider>
+            ) : (
+                <Button className="w-full" disabled>Your Listing</Button>
+            )}
+        </CardFooter>
+        </Card>
+    );
+  }
 
   const renderLoadingSkeletons = () => (
      Array.from({ length: 6 }).map((_, index) => (
@@ -388,7 +401,6 @@ function DashboardContent() {
 
   if (status === "loading" || (status === "authenticated" && isLoadingItems)) {
     return (
-        // Applied background color to the main container for dashboard pages
         <div className="min-h-screen bg-slate-50 dark:bg-slate-900">
             <div className="container mx-auto p-4 md:p-6">
                 {renderHeader()} 
@@ -409,7 +421,6 @@ function DashboardContent() {
   }
 
   return (
-    // Applied background color to the main container for dashboard pages
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900">
       <div className="container mx-auto p-4 md:p-6">
         {renderHeader()}
@@ -427,11 +438,11 @@ function DashboardContent() {
           </div>
         )}
         {!error && !isLoadingItems && searchTerm && filteredItems.length === 0 && (
-             <div className="text-center text-muted-foreground mt-10">
-                  <p>No items found matching "{searchTerm}".</p>
-             </div>
+           <div className="text-center text-muted-foreground mt-10">
+                <p>No items found matching "{searchTerm}".</p>
+           </div>
         )}
-        {!error && !isLoadingItems && !searchTerm && items.length === 0 && status !== 'loading' && (
+        {!error && !isLoadingItems && !searchTerm && items.length === 0 && (
           <div className="text-center text-muted-foreground mt-10">
              {session?.user ? (
                 <p>No items from other sellers available yet. Start by listing your own!</p>

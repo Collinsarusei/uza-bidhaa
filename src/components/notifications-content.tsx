@@ -6,7 +6,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from "@/components/ui/skeleton";
 import { Icons } from "@/components/icons";
 import { Badge } from '@/components/ui/badge';
-import { formatDistanceToNow, parseISO } from 'date-fns'; // Import parseISO
+import { formatDistanceToNow, parseISO, isValid } from 'date-fns'; // Import isValid
 import type { Notification as NotificationType } from '@/lib/types';
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
@@ -19,7 +19,7 @@ export function NotificationsContent() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
-  const { markAllAsRead: contextMarkAllAsRead } = useNotifications(); 
+  // Removed contextMarkAllAsRead as it's called from the dashboard page opening the sheet
 
   useEffect(() => {
     const fetchNotifications = async () => {
@@ -53,32 +53,23 @@ export function NotificationsContent() {
   }, [session, status]);
 
   const handleNotificationClick = useCallback(async (notificationId: string) => {
-      console.log(`handleNotificationClick: Clicked notification ${notificationId}`);
       const clickedNotification = notifications.find(n => n.id === notificationId);
-      
-      if (!clickedNotification) {
-          console.warn(`handleNotificationClick: Notification ${notificationId} not found in state.`);
-          return;
-      }
+      if (!clickedNotification) return;
 
       if (!clickedNotification.isRead) {
-          console.log(`handleNotificationClick: Marking ${notificationId} as read.`);
           setNotifications(prev => 
               prev.map(n => n.id === notificationId ? { ...n, isRead: true } : n)
           );
-
           try {
               const response = await fetch('/api/notifications/mark-one-read', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ notificationId })
               });
-
               if (!response.ok) {
                   const result = await response.json().catch(() => ({}));
                   throw new Error(result.message || 'API Error');
               }
-              console.log(`handleNotificationClick: API call successful for ${notificationId}`);
           } catch (err) {
               console.error("Mark one read API Error:", err);
               toast({ title: "Error", description: "Could not update notification status.", variant: "destructive" });
@@ -86,9 +77,8 @@ export function NotificationsContent() {
                   prev.map(n => n.id === notificationId ? { ...n, isRead: false } : n)
               );
           }
-      } else {
-          console.log(`handleNotificationClick: Notification ${notificationId} is already read.`);
       }
+      // Potentially navigate based on notification type/link here if you add such a feature
   }, [notifications, toast]);
 
   const getIconForType = (type: NotificationType['type']) => {
@@ -101,27 +91,43 @@ export function NotificationsContent() {
         case 'unusual_activity': return <Icons.shield className="h-5 w-5 text-red-500" />;
         case 'kyc_approved': return <Icons.check className="h-5 w-5 text-green-500" />;
         case 'kyc_rejected': return <Icons.x className="h-5 w-5 text-red-500" />;
+        case 'admin_action': return <Icons.shieldAlert className="h-5 w-5 text-orange-500" />;
+        case 'dispute_filed': return <Icons.alertTriangle className="h-5 w-5 text-red-600" />;
+        case 'new_dispute_admin': return <Icons.alertTriangle className="h-5 w-5 text-red-700 font-bold" />;
+        case 'withdrawal_initiated': return <Icons.loader2 className="h-5 w-5 text-blue-500 animate-spin" />;
+        case 'withdrawal_completed': return <Icons.check className="h-5 w-5 text-green-500" />;
+        case 'withdrawal_failed': return <Icons.x className="h-5 w-5 text-red-500" />;
         default: return <Icons.bell className="h-5 w-5 text-gray-500" />;
     }
   };
 
   const renderNotification = (notification: NotificationType) => {
     let createdAtDate: Date | null = null;
-    // --- FIX: Only check for string type, as that's what API provides --- 
+    let displayTime = 'Date unavailable';
+
     if (typeof notification.createdAt === 'string') {
         try {
             createdAtDate = parseISO(notification.createdAt);
-            if (isNaN(createdAtDate.getTime())) createdAtDate = null; 
-        } catch (e) { console.error("Error parsing timestamp string:", e); }
+            if (isValid(createdAtDate)) { // Check if the parsed date is valid
+                displayTime = formatDistanceToNow(createdAtDate, { addSuffix: true });
+            } else {
+                console.warn("Parsed invalid date for notification:", notification.id, notification.createdAt);
+            }
+        } catch (e) { 
+            console.error("Error parsing notification timestamp string:", notification.id, notification.createdAt, e);
+        }
+    } else if (notification.createdAt === null || notification.createdAt === undefined) {
+        // Handled by initial displayTime value
+    } else {
+        console.warn("Unexpected type for notification.createdAt:", typeof notification.createdAt, notification.id);
     }
-    // --- End FIX ---
 
     return (
         <Card 
             key={notification.id}
             className={cn(
-                "mb-2 shadow-sm cursor-pointer transition-colors hover:bg-muted/50", 
-                notification.isRead ? "bg-card/50 opacity-75" : "bg-card border-l-4 border-primary"
+                "mb-2 shadow-sm cursor-pointer transition-colors hover:bg-muted/50 dark:hover:bg-slate-700/50", 
+                notification.isRead ? "bg-card/50 opacity-75 dark:bg-slate-800/50 dark:border-slate-700" : "bg-card border-l-4 border-primary dark:bg-slate-800 dark:border-primary"
             )}
             onClick={() => handleNotificationClick(notification.id)}
         >
@@ -132,12 +138,12 @@ export function NotificationsContent() {
                 <div className="flex-grow">
                 <p className={cn(
                     "text-sm leading-snug", 
-                    !notification.isRead ? "font-medium text-foreground" : "text-muted-foreground"
+                    !notification.isRead ? "font-medium text-foreground dark:text-gray-100" : "text-muted-foreground dark:text-slate-400"
                 )}>
                     {notification.message}
                 </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                    {createdAtDate ? formatDistanceToNow(createdAtDate, { addSuffix: true }) : 'Date unavailable'}
+                <p className="text-xs text-muted-foreground dark:text-slate-500 mt-1">
+                    {displayTime}
                 </p>
                 </div>
             </CardContent>
@@ -147,12 +153,12 @@ export function NotificationsContent() {
 
   const renderLoadingSkeletons = () => (
     Array.from({ length: 5 }).map((_, index) => (
-      <Card key={index} className="mb-2 shadow-sm">
+      <Card key={index} className="mb-2 shadow-sm dark:bg-slate-800 dark:border-slate-700">
         <CardContent className="p-3 flex items-start space-x-3">
-          <Skeleton className="h-5 w-5 rounded-full flex-shrink-0 mt-0.5" />
+          <Skeleton className="h-5 w-5 rounded-full flex-shrink-0 mt-0.5 bg-slate-200 dark:bg-slate-700" />
           <div className="flex-grow space-y-1.5">
-            <Skeleton className="h-4 w-4/5" />
-            <Skeleton className="h-3 w-1/3" />
+            <Skeleton className="h-4 w-4/5 bg-slate-200 dark:bg-slate-700" />
+            <Skeleton className="h-3 w-1/3 bg-slate-200 dark:bg-slate-700" />
           </div>
         </CardContent>
       </Card>
@@ -165,8 +171,8 @@ export function NotificationsContent() {
 
   if (error) {
     return (
-      <Card className="border-destructive bg-destructive/10 m-1">
-        <CardContent className="p-4 text-center text-destructive">
+      <Card className="border-destructive bg-destructive/10 m-1 dark:bg-red-900/30 dark:border-red-700">
+        <CardContent className="p-4 text-center text-destructive dark:text-red-400">
            <Icons.alertTriangle className="h-8 w-8 mx-auto mb-2" />
            <p className="font-semibold">Error</p>
            <p className="text-sm">{error}</p>
@@ -177,9 +183,9 @@ export function NotificationsContent() {
 
   if (notifications.length === 0) {
     return (
-      <Card className="border-none shadow-none m-1">
-        <CardContent className="p-6 text-center text-muted-foreground">
-          <Icons.bellOff className="h-10 w-10 mx-auto mb-3 text-gray-400" />
+      <Card className="border-none shadow-none m-1 dark:bg-slate-800 dark:border-slate-700">
+        <CardContent className="p-6 text-center text-muted-foreground dark:text-slate-400">
+          <Icons.bellOff className="h-10 w-10 mx-auto mb-3 text-gray-400 dark:text-slate-500" />
           <p>No notifications yet.</p>
         </CardContent>
       </Card>

@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox"; // Import Checkbox
 import { useToast } from "@/hooks/use-toast";
 import { Icons } from "@/components/icons";
 import { auth } from "@/lib/firebase"; 
@@ -31,8 +32,9 @@ export default function RegisterPage() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [phoneNumber, setPhoneNumber] = useState("");
-  const [username, setUsername] = useState(""); // Keep state name as username for input binding
+  const [username, setUsername] = useState("");
   const [otp, setOtp] = useState("");
+  const [agreedToTerms, setAgreedToTerms] = useState(false); // State for checkbox
   
   const [isLoading, setIsLoading] = useState(false);
   const [isSendingOtp, setIsSendingOtp] = useState(false);
@@ -46,7 +48,6 @@ export default function RegisterPage() {
   const togglePasswordVisibility = () => setShowPassword(prev => !prev);
   const toggleConfirmPasswordVisibility = () => setShowConfirmPassword(prev => !prev);
 
-  // --- Setup reCAPTCHA --- 
    useEffect(() => {
        if (!auth) return; 
        if (typeof window !== 'undefined' && !window.recaptchaVerifier) {
@@ -64,24 +65,19 @@ export default function RegisterPage() {
             } else { console.error("'recaptcha-container' missing!"); setError("Captcha init failed."); }
         }
    }, [auth, toast]);
-   // -----------------------
 
-  // --- Phone Number Formatting Helper ---
   const formatPhoneNumberForBackend = (num: string): string | null => {
     const trimmedNum = num.trim();
     if (trimmedNum.startsWith('07') || trimmedNum.startsWith('01')) {
       return `+254${trimmedNum.substring(1)}`;
     }
-    // Basic check if it already looks like E.164 for +254
     if (trimmedNum.startsWith('+254') && trimmedNum.length >= 13) { 
       return trimmedNum;
     }
     console.warn("Phone number might not be in expected Kenyan format for backend conversion:", trimmedNum);
-    return null; // Returning null to indicate formatting failed
+    return null; 
   };
-  // ----------------------------------
 
-  // --- Handle Send OTP --- 
   const handleSendOtp = async () => {
       setError(null);
       if (!phoneNumber.trim()) { setError("Phone number needed."); return; }
@@ -104,18 +100,16 @@ export default function RegisterPage() {
           toast({ title: "OTP Sent", description: "Check phone for code." });
       } catch (error: any) {
           console.error("OTP Send Error:", error);
-          let message = error.message || "Failed to send OTP."; // Default message
-          // --- Improved error messages --- 
+          let message = error.message || "Failed to send OTP."; 
           if (error.message.includes('reCAPTCHA')) {
                 message = "Captcha verification failed. Please try again.";
           } else if (error.code === 'auth/invalid-phone-number') {
                message = "The phone number format is invalid. Please use 07.. or 01...";
           } else if (error.code === 'auth/too-many-requests') {
-                message = "Too many OTP requests sent to this number. Please wait a while before trying again."; // More user-friendly message
+                message = "Too many OTP requests sent to this number. Please wait a while before trying again.";
           } else {
-                 message = "An unexpected error occurred while sending OTP. Please try again."; // Generic fallback
+                 message = "An unexpected error occurred while sending OTP. Please try again.";
           }
-          // ---------------------------------
           setError(message); toast({ title: "OTP Send Failed", description: message, variant: "destructive" });
            try { 
                if (window.recaptchaVerifier && window.grecaptcha && window.recaptchaWidgetId !== undefined) {
@@ -126,15 +120,18 @@ export default function RegisterPage() {
             }
       } finally { setIsSendingOtp(false); }
   };
-  // -----------------------
 
-  // --- Handle Register ---
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault(); setError(null);
     if (!email.trim() || !password || !confirmPassword || !username.trim()) { setError("Fill required fields."); return; }
     if (password !== confirmPassword) { setError("Passwords don't match."); return; }
     if (!showOtpInput || !otp.trim()) { setError("Enter OTP."); return; }
     if (!confirmationResult) { setError("Request new OTP."); return; }
+    if (!agreedToTerms) { // Check if terms are agreed
+        setError("You must agree to the Terms and Conditions to register.");
+        toast({ title: "Agreement Required", description: "Please agree to the Terms & Conditions.", variant: "destructive" });
+        return;
+    }
 
     const formattedPhoneNumberForBackend = formatPhoneNumberForBackend(phoneNumber);
     if (!formattedPhoneNumberForBackend) {
@@ -154,7 +151,8 @@ export default function RegisterPage() {
             name: username.trim(), 
             email: email.trim(),
             password, 
-            phoneNumber: formattedPhoneNumberForBackend
+            phoneNumber: formattedPhoneNumberForBackend,
+            agreedToTerms: agreedToTerms // Send to backend
         };
 
         console.log("Calling backend register API with:", registrationData);
@@ -177,13 +175,12 @@ export default function RegisterPage() {
          if (error.code === 'auth/invalid-verification-code') message = "Invalid OTP code.";
          else if (error.code === 'auth/code-expired') { message = "OTP expired."; setShowOtpInput(false); setConfirmationResult(null); }
          else if (message.startsWith("Registration failed:")) { /* Keep backend message */ }
-         else if (message.startsWith("Invalid input data")) { message = "Registration failed. Please check your input."; } // Catch Zod errors from backend
+         else if (message.startsWith("Invalid input data")) { message = "Registration failed. Please check your input."; }
 
         setError(message); toast({ title: "Registration Failed", description: message, variant: "destructive" });
         setIsLoading(false); setIsVerifyingOtp(false); 
     } 
   };
-  // ---------------------
 
   return (
     <div className="flex justify-center items-center min-h-screen bg-gray-100 dark:bg-gray-900 px-4">
@@ -219,7 +216,6 @@ export default function RegisterPage() {
                  </div>
             )}
 
-            {/* Password Field with Toggle */} 
             <div className="grid gap-1.5 relative">
               <Label htmlFor="password">Password <span className="text-red-500">*</span></Label>
               <Input 
@@ -230,21 +226,20 @@ export default function RegisterPage() {
                   onChange={(e) => setPassword(e.target.value)} 
                   required 
                   disabled={isLoading} 
-                  className="pr-10" // Add padding for the icon
+                  className="pr-10" 
               />
               <Button 
                  type="button"
                  variant="ghost"
                  size="icon"
                  onClick={togglePasswordVisibility}
-                 className="absolute right-1 top-[25px] h-7 w-7" // Positioning
+                 className="absolute right-1 top-[25px] h-7 w-7"
                  aria-label={showPassword ? "Hide password" : "Show password"}
               >
                  {showPassword ? <Icons.eyeOff className="h-4 w-4"/> : <Icons.eye className="h-4 w-4"/>}
               </Button>
             </div>
 
-            {/* Confirm Password Field with Toggle */} 
             <div className="grid gap-1.5 relative">
               <Label htmlFor="confirm-password">Confirm Password <span className="text-red-500">*</span></Label>
               <Input 
@@ -255,23 +250,43 @@ export default function RegisterPage() {
                   onChange={(e) => setConfirmPassword(e.target.value)} 
                   required 
                   disabled={isLoading} 
-                  className="pr-10" // Add padding for the icon
+                  className="pr-10"
               />
                <Button 
                  type="button"
                  variant="ghost"
                  size="icon"
                  onClick={toggleConfirmPasswordVisibility}
-                 className="absolute right-1 top-[25px] h-7 w-7" // Positioning
+                 className="absolute right-1 top-[25px] h-7 w-7"
                  aria-label={showConfirmPassword ? "Hide password" : "Show password"}
               >
                  {showConfirmPassword ? <Icons.eyeOff className="h-4 w-4"/> : <Icons.eye className="h-4 w-4"/>}
               </Button>
             </div>
 
+            {/* Terms and Conditions Checkbox */}
+            <div className="flex items-center space-x-2 mt-2">
+                <Checkbox 
+                    id="terms"
+                    checked={agreedToTerms}
+                    onCheckedChange={(checked) => setAgreedToTerms(checked as boolean)}
+                    disabled={isLoading}
+                />
+                <Label htmlFor="terms" className="text-sm font-normal leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                    I agree to the Uza Bidhaa 
+                    <Link href="/terms" className="font-medium text-primary hover:underline underline-offset-4 ml-1" target="_blank" rel="noopener noreferrer">
+                        Terms & Conditions
+                    </Link>
+                     {" and "}
+                    <Link href="/privacy" className="font-medium text-primary hover:underline underline-offset-4 ml-1" target="_blank" rel="noopener noreferrer">
+                        Privacy Policy
+                    </Link>.
+                </Label>
+            </div>
+
           </CardContent>
           <CardFooter className="flex flex-col gap-4">
-            <Button type="submit" className="w-full" disabled={isLoading || !showOtpInput || isVerifyingOtp}>
+            <Button type="submit" className="w-full" disabled={isLoading || !showOtpInput || isVerifyingOtp || !agreedToTerms}>
                 {(isLoading || isVerifyingOtp) && <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />}
                 {isVerifyingOtp ? 'Verifying OTP...' : isLoading ? 'Registering...' : 'Register'}
             </Button>
@@ -286,14 +301,12 @@ export default function RegisterPage() {
   );
 }
 
-// Declare global types
 declare global {
     interface Window {
         recaptchaVerifier?: RecaptchaVerifier;
         recaptchaWidgetId?: number;
         grecaptcha?: {
              reset: (widgetId?: number) => void;
-             // Add other grecaptcha methods if needed
         };
     }
 }
