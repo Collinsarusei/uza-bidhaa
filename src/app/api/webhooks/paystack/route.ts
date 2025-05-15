@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 import { adminDb } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import crypto from 'crypto';
-import { Payment, UserProfile, Item, Withdrawal, AdminPlatformFeeWithdrawal } from '@/lib/types'; // Added Withdrawal, AdminPlatformFeeWithdrawal
+import { Payment, UserProfile, Item, Withdrawal, AdminPlatformFeeWithdrawal } from '@/lib/types';
 import { createNotification } from '@/lib/notifications';
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
@@ -12,14 +12,12 @@ if (!PAYSTACK_SECRET_KEY) {
     console.error("FATAL: Paystack Secret Key not set in environment variables.");
 }
 
-// --- Helper: Process Charge Success Event ---
 async function handleChargeSuccess(payload: any) {
     console.log("Paystack Webhook: Processing charge.success event...", payload);
     
     const paymentId = payload?.data?.metadata?.payment_id; 
     const paystackReference = payload?.data?.reference;
     const paystackTransactionId = payload?.data?.id; 
-    const amountPaidKobo = payload?.data?.amount;
     const paymentStatus = payload?.data?.status;
 
     if (!paymentId || !adminDb) {
@@ -54,23 +52,56 @@ async function handleChargeSuccess(payload: any) {
 
         await adminDb.runTransaction(async (transaction) => {
             const itemRef = adminDb!.collection('items').doc(paymentData.itemId);
+            const itemDoc = await transaction.get(itemRef);
+            
+            let currentItemStatus: Item['status'] = 'available';
+            let currentItemQuantity: number = 1; // Default if not found or no quantity
+
+            if(itemDoc.exists) {
+                const itemData = itemDoc.data() as Item;
+                currentItemStatus = itemData.status;
+                currentItemQuantity = itemData.quantity !== undefined ? itemData.quantity : 1;
+            }
+
             transaction.update(paymentRef, {
                 status: 'paid_to_platform',
                 gatewayTransactionId: paystackTransactionId ? paystackTransactionId.toString() : null, 
                 updatedAt: FieldValue.serverTimestamp(),
             });
-            transaction.update(itemRef, {
-                status: 'paid_on_hold', 
-                updatedAt: FieldValue.serverTimestamp()
-            });
+
+            // Logic for item status based on quantity and current status
+            if (currentItemStatus === 'available') {
+                if (currentItemQuantity === 1) {
+                    // This is the last unit, so mark as paid_escrow
+                    transaction.update(itemRef, {
+                        status: 'paid_escrow', 
+                        updatedAt: FieldValue.serverTimestamp()
+                    });
+                    console.log(`Charge Success: Item ${paymentData.itemId} (last unit) status updated to paid_escrow. Payment ${paymentId} to paid_to_platform.`);
+                } else {
+                    // Quantity > 1, item remains available. No status change needed here.
+                    // Quantity itself is not decremented here.
+                    console.log(`Charge Success: Item ${paymentData.itemId} has quantity > 1. Status remains '${currentItemStatus}'. Payment ${paymentId} to paid_to_platform.`);
+                }
+            } else {
+                // Item not 'available' (e.g., disputed, or already in paid_escrow from a previous transaction attempt)
+                // Do not change item status further in this case from webhook.
+                console.log(`Charge Success: Item ${paymentData.itemId} status is '${currentItemStatus}'. Not changing item status. Payment ${paymentId} to paid_to_platform.`);
+            }
         });
-        console.log(`Charge Success: Updated payment ${paymentId} to paid_to_platform and item ${paymentData.itemId} to paid_escrow. Paystack Ref: ${paystackReference}`);
 
         try {
             await createNotification({
                 userId: paymentData.sellerId,
-                type: 'item_sold',
-                message: `Your item "${paymentData.itemTitle || 'Item'}" has been sold and payment is secured. Prepare for delivery/handover.`,
+                type: 'payment_received',
+                message: `Payment secured for "${paymentData.itemTitle || 'Item'}". Prepare for delivery/handover once buyer confirms receipt or admin releases.`,
+                relatedItemId: paymentData.itemId,
+                relatedPaymentId: paymentId,
+            });
+             await createNotification({
+                userId: paymentData.buyerId,
+                type: 'payment_received',
+                message: `Your payment for "${paymentData.itemTitle || 'Item'}" has been successfully processed and is held securely. Item Seller ID: ${paymentData.sellerId.substring(0,6)}`,
                 relatedItemId: paymentData.itemId,
                 relatedPaymentId: paymentId,
             });
@@ -83,17 +114,16 @@ async function handleChargeSuccess(payload: any) {
     }
 }
 
-// --- Helper: Process Transfer Success Event ---
 async function handleTransferSuccess(payload: any) {
     console.log("Paystack Webhook: Processing transfer.success event...", payload);
-    const metadata = payload?.data?.recipient?.metadata; // Check metadata in recipient object first
+    const metadata = payload?.data?.recipient?.metadata;
     const transferData = payload?.data;
     
     const withdrawalId = metadata?.withdrawal_id || metadata?.admin_withdrawal_id;
     const userId = metadata?.user_id;
     const adminUserId = metadata?.admin_user_id;
     const paystackTransferCode = transferData?.transfer_code;
-    const amount = transferData?.amount / 100; // Convert from kobo
+    const amount = transferData?.amount / 100;
 
     if (!adminDb) {
         console.error("Transfer Success Error: DB not initialized.");
@@ -109,32 +139,29 @@ async function handleTransferSuccess(payload: any) {
         let notificationUserId: string | null = null;
         let notificationMessage = ``;
 
-        // Determine if it's a user or admin withdrawal
         if (userId) {
             withdrawalRef = adminDb.collection('users').doc(userId).collection('withdrawals').doc(withdrawalId);
             notificationUserId = userId;
             notificationMessage = `Your withdrawal of KES ${amount?.toLocaleString()} has been successfully completed.`;
-            console.log(`Transfer Success: Identified as user withdrawal ${withdrawalId} for user ${userId}.`);
+            console.log(`Transfer Success: User withdrawal ${withdrawalId} for user ${userId}.`);
         } else if (adminUserId) {
             withdrawalRef = adminDb.collection('adminFeeWithdrawals').doc(withdrawalId);
-            notificationUserId = adminUserId; // Notify the admin who initiated it
+            notificationUserId = adminUserId; 
             notificationMessage = `Admin withdrawal of KES ${amount?.toLocaleString()} completed successfully.`;
-            console.log(`Transfer Success: Identified as admin fee withdrawal ${withdrawalId} by admin ${adminUserId}.`);
+            console.log(`Transfer Success: Admin fee withdrawal ${withdrawalId} by admin ${adminUserId}.`);
         } else {
-            console.warn(`Transfer Success Ignored: Could not determine user type (user/admin) for withdrawal ${withdrawalId}. Metadata:`, metadata);
+            console.warn(`Transfer Success Ignored: Could not determine user type for withdrawal ${withdrawalId}.`);
             return;
         }
 
-        // Update withdrawal status
         await withdrawalRef.update({
             status: 'completed',
             paystackTransferCode: paystackTransferCode,
             updatedAt: FieldValue.serverTimestamp(),
             completedAt: FieldValue.serverTimestamp()
         });
-        console.log(`Transfer Success: Updated withdrawal record ${withdrawalId} to completed.`);
+        console.log(`Transfer Success: Updated withdrawal ${withdrawalId} to completed.`);
 
-        // Send notification if applicable
         if (notificationUserId) {
             try {
                 await createNotification({
@@ -144,7 +171,7 @@ async function handleTransferSuccess(payload: any) {
                     relatedWithdrawalId: withdrawalId 
                 });
             } catch (notifyError) {
-                console.error(`Transfer Success: Failed to send notification for withdrawal ${withdrawalId}:`, notifyError);
+                console.error(`Transfer Success: Notification error for withdrawal ${withdrawalId}:`, notifyError);
             }
         }
     } catch (error) {
@@ -152,25 +179,24 @@ async function handleTransferSuccess(payload: any) {
     }
 }
 
-// --- Helper: Process Transfer Failed Event ---
 async function handleTransferFailed(payload: any) {
     console.log("Paystack Webhook: Processing transfer.failed event...", payload);
-    const metadata = payload?.data?.recipient?.metadata; // Check metadata in recipient object first
+    const metadata = payload?.data?.recipient?.metadata;
     const transferData = payload?.data;
     
     const withdrawalId = metadata?.withdrawal_id || metadata?.admin_withdrawal_id;
     const userId = metadata?.user_id;
     const adminUserId = metadata?.admin_user_id;
     const paystackTransferCode = transferData?.transfer_code;
-    const failureReason = transferData?.failure_reason || "Transfer failed without specific reason from Paystack";
-    const amount = transferData?.amount / 100; // Convert from kobo
+    const failureReason = transferData?.failure_reason || "Transfer failed (Paystack)";
+    const amount = transferData?.amount / 100;
 
     if (!adminDb) {
         console.error("Transfer Failed Error: DB not initialized.");
         return;
     }
     if (!withdrawalId) {
-        console.warn("Transfer Failed Ignored: withdrawal_id or admin_withdrawal_id not found in webhook metadata.", metadata);
+        console.warn("Transfer Failed Ignored: withdrawal_id or admin_withdrawal_id not found.", metadata);
         return;
     }
 
@@ -180,36 +206,31 @@ async function handleTransferFailed(payload: any) {
         let settingsRef: FirebaseFirestore.DocumentReference | null = null;
         let notificationUserId: string | null = null;
         let notificationMessage = ``;
-        let shouldRevertBalance = true; // Safety flag, might disable based on error reason
 
-        // Determine if it's a user or admin withdrawal
         if (userId) {
             withdrawalRef = adminDb.collection('users').doc(userId).collection('withdrawals').doc(withdrawalId);
             userRef = adminDb.collection('users').doc(userId);
             notificationUserId = userId;
             notificationMessage = `Your withdrawal of KES ${amount?.toLocaleString()} failed. Reason: ${failureReason}`;
-            console.log(`Transfer Failed: Identified as user withdrawal ${withdrawalId} for user ${userId}. Reason: ${failureReason}`);
+            console.log(`Transfer Failed: User withdrawal ${withdrawalId} for ${userId}. Reason: ${failureReason}`);
         } else if (adminUserId) {
             withdrawalRef = adminDb.collection('adminFeeWithdrawals').doc(withdrawalId);
             settingsRef = adminDb.collection('settings').doc('platformFee');
-            notificationUserId = adminUserId; // Notify the admin
+            notificationUserId = adminUserId;
             notificationMessage = `Admin withdrawal of KES ${amount?.toLocaleString()} failed. Reason: ${failureReason}`;
-             console.log(`Transfer Failed: Identified as admin fee withdrawal ${withdrawalId} by admin ${adminUserId}. Reason: ${failureReason}`);
+             console.log(`Transfer Failed: Admin fee withdrawal ${withdrawalId} by ${adminUserId}. Reason: ${failureReason}`);
         } else {
-            console.warn(`Transfer Failed Ignored: Could not determine user type (user/admin) for withdrawal ${withdrawalId}. Metadata:`, metadata);
+            console.warn(`Transfer Failed Ignored: Could not determine user type for withdrawal ${withdrawalId}.`);
             return;
         }
         
-        // Check if withdrawal already failed/completed to avoid double processing/reverting
         const withdrawalDoc = await withdrawalRef.get();
         if (withdrawalDoc.exists && (withdrawalDoc.data()?.status === 'failed' || withdrawalDoc.data()?.status === 'completed')) {
-            console.log(`Transfer Failed Ignored: Withdrawal ${withdrawalId} already in terminal state (${withdrawalDoc.data()?.status}).`);
+            console.log(`Transfer Failed Ignored: Withdrawal ${withdrawalId} already in terminal state.`);
             return;
         }
 
-        // --- Transaction to update status and potentially revert balance ---
         await adminDb.runTransaction(async (transaction) => {
-            // Update withdrawal status
             transaction.update(withdrawalRef!, {
                 status: 'failed',
                 failureReason: failureReason,
@@ -217,24 +238,18 @@ async function handleTransferFailed(payload: any) {
                 updatedAt: FieldValue.serverTimestamp(),
             });
 
-            // Revert balance (Use with caution - ensure idempotency)
-            if (shouldRevertBalance && amount > 0) { 
+            if (amount > 0) { 
                 if (userRef) {
-                    transaction.update(userRef, { 
-                        availableBalance: FieldValue.increment(amount)
-                    });
+                    transaction.update(userRef, { availableBalance: FieldValue.increment(amount) });
                     console.log(`Transfer Failed: Reverted KES ${amount} to user ${userId} balance.`);
                 } else if (settingsRef) {
-                    transaction.update(settingsRef, { 
-                         totalPlatformFees: FieldValue.increment(amount)
-                    });
+                    transaction.update(settingsRef, { totalPlatformFees: FieldValue.increment(amount) });
                      console.log(`Transfer Failed: Reverted KES ${amount} to totalPlatformFees.`);
                 }
             }
         });
-         console.log(`Transfer Failed: Updated withdrawal record ${withdrawalId} to failed.`);
+         console.log(`Transfer Failed: Updated withdrawal ${withdrawalId} to failed.`);
 
-        // Send notification if applicable
         if (notificationUserId) {
             try {
                 await createNotification({
@@ -244,7 +259,7 @@ async function handleTransferFailed(payload: any) {
                     relatedWithdrawalId: withdrawalId 
                 });
             } catch (notifyError) {
-                console.error(`Transfer Failed: Failed to send notification for withdrawal ${withdrawalId}:`, notifyError);
+                console.error(`Transfer Failed: Notification error for withdrawal ${withdrawalId}:`, notifyError);
             }
         }
     } catch (error) {
@@ -252,19 +267,16 @@ async function handleTransferFailed(payload: any) {
     }
 }
 
-// --- Helper: Process Transfer Reversed Event ---
 async function handleTransferReversed(payload: any) {
-     console.warn("Paystack Webhook: Processing transfer.reversed event (Logic similar to failed, needs implementation)...", payload);
-      // Similar logic to handleTransferFailed, potentially reverting balance and updating status.
-      // Important to ensure idempotency to avoid double-reverting.
+     console.warn("Paystack Webhook: transfer.reversed event received. Logic similar to transfer.failed.", payload);
+     // For now, reuse handleTransferFailed logic as the outcome (reverting funds) is similar.
+     await handleTransferFailed(payload); 
 }
 
-
-// --- Main POST Handler ---
 export async function POST(req: Request) {
     console.log("--- API POST /api/webhooks/paystack START ---");
 
-    if (!PAYSTACK_SECRET_KEY || !adminDb) { // Also check adminDb
+    if (!PAYSTACK_SECRET_KEY || !adminDb) {
         console.error("Webhook Error: Paystack Secret Key or DB not initialized.");
         return NextResponse.json({ message: 'Server configuration error.' }, { status: 500 });
     }
@@ -277,14 +289,14 @@ export async function POST(req: Request) {
                        .digest('hex');
 
     if (hash !== signature) {
-        console.warn("Paystack Webhook Handler: Invalid signature.");
+        console.warn("Paystack Webhook: Invalid signature.");
         return NextResponse.json({ message: 'Invalid signature' }, { status: 401 });
     }
-    console.log("Paystack Webhook Handler: Signature verified.");
+    console.log("Paystack Webhook: Signature verified.");
 
     const payload = JSON.parse(bodyText);
     const eventType = payload.event;
-    console.log(`Paystack Webhook Handler: Processing event type: ${eventType}`);
+    console.log(`Paystack Webhook: Processing event: ${eventType}`);
 
     try {
         switch (eventType) {
@@ -301,7 +313,7 @@ export async function POST(req: Request) {
                  await handleTransferReversed(payload);
                  break;
             default:
-                console.log(`Paystack Webhook Handler: Unhandled event type: ${eventType}`);
+                console.log(`Paystack Webhook: Unhandled event: ${eventType}`);
         }
         
         console.log(`--- API POST /api/webhooks/paystack SUCCESS --- Event '${eventType}' processed.`);
@@ -313,7 +325,6 @@ export async function POST(req: Request) {
     }
 }
 
-// --- GET Handler (Method Not Allowed) ---
 export async function GET(req: Request) {
     console.log("--- API GET /api/webhooks/paystack Received (Not Allowed) ---");
     return NextResponse.json({ message: "Webhook endpoint expects POST requests." }, { status: 405 });

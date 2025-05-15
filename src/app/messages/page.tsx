@@ -15,7 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Icons } from "@/components/icons";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Conversation, Message, ParticipantData } from '@/lib/types'; // Ensure ApiTimestamp is defined here if used, otherwise remove alias
+import { Conversation, Message, ParticipantData } from '@/lib/types'; 
 import { formatDistanceToNow, parseISO } from 'date-fns';
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
@@ -51,11 +51,9 @@ export default function MessagesPage() {
   const isMobile = useIsMobile();
   const router = useRouter();
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  // const [isChatSheetOpen, setIsChatSheetOpen] = useState(false); // Sheet logic removed for simplicity
 
   const currentUserId = session?.user?.id;
 
-  // --- Fetch All Conversations List ---
   const fetchConversations = useCallback(async () => {
     if (status === 'authenticated' && currentUserId) {
       setIsLoadingConversations(true);
@@ -82,8 +80,6 @@ export default function MessagesPage() {
     fetchConversations();
   }, [fetchConversations]);
 
-
-  // --- Categorize Conversations Dynamically using useMemo ---
   const categorizedConversations = useMemo(() => {
     const inbox: Conversation[] = [];
     const incoming: Conversation[] = [];
@@ -99,40 +95,35 @@ export default function MessagesPage() {
         }
     });
 
-    // ** FIX: Safer sorting with null checks **
     const getTimeValue = (timestamp: string | null, fallbackTimestamp: string | null = null): number => {
-        const timestampToParse = timestamp ?? fallbackTimestamp; // Use primary, then fallback
-        if (timestampToParse && typeof timestampToParse === 'string') { // Ensure it's a string
+        const timestampToParse = timestamp ?? fallbackTimestamp;
+        if (timestampToParse && typeof timestampToParse === 'string') { 
             try {
                 return parseISO(timestampToParse).getTime();
             } catch (e) {
                  console.warn(`Sorting: Could not parse timestamp "${timestampToParse}"`, e);
-                return 0; // Return 0 or a very old date on parse error
+                return 0; 
             }
         }
-        return 0; // Return 0 or a very old date if no timestamp available
+        return 0; 
     };
 
     inbox.sort((a, b) => {
-        // Prefer lastMessageTimestamp, fallback to createdAt
         const timeA = getTimeValue(a.lastMessageTimestamp, a.createdAt);
         const timeB = getTimeValue(b.lastMessageTimestamp, b.createdAt);
-        return timeB - timeA; // Descending order (newest first)
+        return timeB - timeA;
     });
 
     incoming.sort((a, b) => {
-        // Incoming requests are usually sorted by creation time
         const timeA = getTimeValue(a.createdAt);
         const timeB = getTimeValue(b.createdAt);
-        return timeB - timeA; // Descending order (newest first)
+        return timeB - timeA;
     });
 
     return { inbox, incoming };
 
   }, [allConversations, currentUserId]);
 
-
-  // --- Fetch Messages ---
   const fetchMessagesForConversation = useCallback(async (conversationId: string | null) => {
       if (!conversationId) {
          setMessages([]);
@@ -147,12 +138,11 @@ export default function MessagesPage() {
           throw new Error(errData.message || `HTTP error! status: ${response.status}`);
         }
         const data = await response.json();
-        // Ensure messages are sorted correctly by timestamp
         const sortedMessages = (data.messages || []).sort((a: Message, b: Message) => {
             try {
                  const timeA = a.timestamp ? parseISO(a.timestamp).getTime() : 0;
                  const timeB = b.timestamp ? parseISO(b.timestamp).getTime() : 0;
-                 return timeA - timeB; // Ascending order for chat history
+                 return timeA - timeB; 
             } catch (e) {
                 console.error("Error parsing message timestamp during sort:", a.timestamp, b.timestamp, e);
                 return 0;
@@ -171,7 +161,7 @@ export default function MessagesPage() {
       } finally {
         setIsLoadingMessages(false);
       }
-    }, []); // Empty dependency array as conversationId is passed directly
+    }, []); 
 
   useEffect(() => {
       fetchMessagesForConversation(selectedConversation?.id ?? null);
@@ -186,12 +176,10 @@ export default function MessagesPage() {
   const handleSelectConversation = (conv: Conversation) => {
        console.log("Selecting conversation:", conv);
        setSelectedConversation(conv);
-       // if (isMobile) { setIsChatSheetOpen(true); } // Sheet logic removed
    };
 
 
-  // --- Handle Sending Message ---
-  const handleSendMessage = async (e?: React.FormEvent | React.KeyboardEvent) => { // Allow KeyboardEvent
+  const handleSendMessage = async (e?: React.FormEvent | React.KeyboardEvent) => { 
     e?.preventDefault();
     if (!newMessage.trim() || !selectedConversation?.id || !currentUserId || isSending) return;
 
@@ -202,7 +190,6 @@ export default function MessagesPage() {
     }
 
     const itemIdToSend = selectedConversation.itemId;
-    console.log("Attempting to send message for item ID:", itemIdToSend, "Conv:", selectedConversation);
     if (!itemIdToSend) {
          toast({ title: "Error", description: "Cannot send message: Item details missing for this conversation.", variant: "destructive" });
          console.error("Missing itemId in selectedConversation for sending message:", selectedConversation);
@@ -241,8 +228,6 @@ export default function MessagesPage() {
       }
 
       await fetchMessagesForConversation(selectedConversation.id);
-      // Optionally refetch conversations if snippet/timestamp update is critical immediately
-      // await fetchConversations();
 
     } catch (err) {
       const message = err instanceof Error ? err.message : 'An unknown error occurred.';
@@ -250,16 +235,15 @@ export default function MessagesPage() {
       console.error("handleSendMessage Error:", err);
       toast({ title: "Send Error", description: message, variant: "destructive" });
       setMessages(prev => prev.filter(msg => msg.id !== tempMessageId));
-      setNewMessage(messageText); // Put text back
+      setNewMessage(messageText); 
     } finally {
       setIsSending(false);
     }
   };
 
 
-  // --- Handle Approving Conversation ---
   const handleApprove = async (conversationId: string) => {
-    if (isApproving) return; // Prevent double clicks
+    if (isApproving) return; 
     setIsApproving(conversationId);
     setError(null);
     try {
@@ -276,20 +260,19 @@ export default function MessagesPage() {
 
       if (approvedConvIndex > -1) {
           const updatedConversations = [...allConversations];
-          // Ensure we merge potentially updated data from server if needed later
           updatedConversations[approvedConvIndex] = { ...updatedConversations[approvedConvIndex], approved: true };
           approvedConvData = updatedConversations[approvedConvIndex];
           setAllConversations(updatedConversations);
       } else {
-          await fetchConversations(); // Refetch if not found locally
+          await fetchConversations(); 
           approvedConvData = allConversations.find(c => c.id === conversationId && c.approved === true) ?? null;
       }
 
       if (approvedConvData) {
-          handleSelectConversation(approvedConvData); // Select the updated conversation
+          handleSelectConversation(approvedConvData); 
           setActiveTab('inbox');
           toast({ title: "Conversation Approved", description: "Moved to Inbox." });
-          await fetchMessagesForConversation(approvedConvData.id); // Fetch messages AFTER selection
+          await fetchMessagesForConversation(approvedConvData.id); 
       } else {
             toast({ title: "Approval Completed", description: "Please refresh if needed." });
             await fetchConversations();
@@ -304,7 +287,6 @@ export default function MessagesPage() {
     }
   };
 
-  // --- Helpers & Renders ---
   const getParticipantData = (conversation: Conversation | null, userId: string): ParticipantData => {
         if (!conversation?.participantsData?.[userId]) {
             const name = userId === currentUserId ? session?.user?.name : 'User';
@@ -317,7 +299,6 @@ export default function MessagesPage() {
   const formatTimestamp = (timestamp: string | null): string => {
       if (!timestamp) return '';
      try {
-         // Ensure the input is a string before parsing
          if (typeof timestamp === 'string') {
             return formatDistanceToNow(parseISO(timestamp), { addSuffix: true });
          }
@@ -351,7 +332,7 @@ export default function MessagesPage() {
         const otherUserId = conv.participantIds.find(id => id !== currentUserId) || 'unknown';
         const otherParticipant = getParticipantData(conv, otherUserId);
         const isSelected = selectedConversation?.id === conv.id;
-        const hasUnread = false; // Placeholder
+        const hasUnread = false; 
 
         return (
             <div
@@ -411,10 +392,9 @@ export default function MessagesPage() {
       }
 
        const isInitiator = conversation.initiatorId === currentUserId;
-       // Handle legacy convos where approved/initiator might be undefined
        const isLegacy = conversation.approved === undefined && conversation.initiatorId === undefined;
        const canChat = conversation.approved || isInitiator || isLegacy;
-       const showApprovalMessage = !conversation.approved && !isInitiator && !isLegacy; // Needs approval by current user
+       const showApprovalMessage = !conversation.approved && !isInitiator && !isLegacy; 
 
       const otherUserId = conversation.participantIds.find(id => id !== currentUserId) || 'unknown';
       const otherParticipant = getParticipantData(conversation, otherUserId);
@@ -425,7 +405,6 @@ export default function MessagesPage() {
 
         return (
              <div className="flex-1 flex flex-col h-full bg-background">
-                {/* Header */}
                 <div className="p-3 border-b flex items-center space-x-3 sticky top-0 bg-background z-10 flex-shrink-0">
                      <Avatar className="h-9 w-9 border">
                         <AvatarImage src={otherParticipant.avatar ?? undefined} alt={otherParticipant.name ?? 'User avatar'} />
@@ -446,8 +425,23 @@ export default function MessagesPage() {
                        )}
                 </div>
 
-                {/* Message Area */}
                  <div className="flex-1 overflow-y-auto p-4 space-y-4" style={{ scrollBehavior: 'smooth' }}>
+                    {/* Platform Safety Message */}
+                    <div className="bg-yellow-100 dark:bg-yellow-700 dark:text-yellow-100 border-l-4 border-yellow-500 dark:border-yellow-400 text-yellow-700 p-4 my-4 rounded-md shadow-sm">
+                        <div className="flex">
+                            <div className="flex-shrink-0">
+                                <Icons.alertTriangle className="h-5 w-5 text-yellow-500 dark:text-yellow-300" />
+                            </div>
+                            <div className="ml-3">
+                                <p className="text-sm font-medium">Important Security Notice</p>
+                                <p className="text-sm">
+                                For your safety, ensure all payments are made through the Uza Bidhaa platform. 
+                                We are not liable for any losses incurred from off-platform payments or direct M-Pesa transfers arranged via chat.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
                       {isLoadingMessages && !messages.length && (
                          <div className="space-y-3">
                              {Array.from({ length: 5 }).map((_, i) => renderMessageSkeleton())}
@@ -489,7 +483,6 @@ export default function MessagesPage() {
                       <div ref={messagesEndRef} />
                  </div>
 
-                 {/* Input Area / Approval Message */}
                  <div className="border-t p-3 bg-background mt-auto sticky bottom-0 flex-shrink-0">
                     {canChat ? (
                          <form onSubmit={handleSendMessage} className="flex items-center space-x-2">
@@ -502,7 +495,7 @@ export default function MessagesPage() {
                                  onKeyDown={(e) => {
                                      if (e.key === 'Enter' && !e.shiftKey) {
                                          e.preventDefault();
-                                         handleSendMessage(e); // Pass event for consistency, though not strictly needed now
+                                         handleSendMessage(e); 
                                      }
                                  }}
                                  disabled={isSending || isLoadingMessages}
@@ -512,7 +505,7 @@ export default function MessagesPage() {
                                  <span className="sr-only">Send</span>
                              </Button>
                          </form>
-                     ) : showApprovalMessage ? ( // Current user needs to approve
+                     ) : showApprovalMessage ? ( 
                         <div className="text-center text-sm text-muted-foreground py-2">
                             Waiting for you to approve this message request.
                             <Button
@@ -526,7 +519,7 @@ export default function MessagesPage() {
                                 Approve Now
                             </Button>
                         </div>
-                     ) : ( // Initiator is waiting
+                     ) : ( 
                          <div className="text-center text-sm text-muted-foreground py-2">
                              Waiting for the seller to approve your message.
                          </div>
@@ -536,33 +529,28 @@ export default function MessagesPage() {
         );
     };
 
-
-  // --- Main Render ---
     if (status === 'loading') {
          return (
-           <div className="flex h-[calc(100vh-theme(spacing.16))] border-t">
+           <div className="flex h-[calc(100vh-theme(spacing.16))] border-t bg-slate-50 dark:bg-slate-900">
                 <div className="w-full md:w-1/3 lg:w-1/4 border-r"><Skeleton className="h-full w-full"/></div>
                 <div className="hidden md:flex flex-1"><Skeleton className="h-full w-full"/></div>
            </div>
        );
   }
   if (status === 'unauthenticated') {
-       return <div className="p-6 text-center">Please <Link href="/login" className="underline">log in</Link> to view messages.</div>;
+       return <div className="p-6 text-center bg-slate-50 dark:bg-slate-900 min-h-screen">Please <Link href="/login" className="underline">log in</Link> to view messages.</div>;
   }
    if (error && !isLoadingConversations && !allConversations.length) {
-       return <div className="p-6 text-center text-destructive">Error loading conversations: {error}</div>;
+       return <div className="p-6 text-center text-destructive bg-slate-50 dark:bg-slate-900 min-h-screen">Error loading conversations: {error}</div>;
    }
 
 
   return (
-    // Adjust height calculation for mobile nav if needed
-    <div className={cn("flex h-[calc(100vh-theme(spacing.16))] border-t", isMobile && "h-[calc(100vh-var(--mobile-nav-height,4rem))] border-none")} >
-      {/* Conversation List Panel */}
-      <div className={cn("w-full md:w-1/3 lg:w-1/4 border-r flex flex-col bg-background",
-                      isMobile && selectedConversation && "hidden" // Hide list on mobile when chat is selected
+    <div className={cn("flex h-[calc(100vh-theme(spacing.16))] border-t bg-slate-50 dark:bg-slate-900", isMobile && "h-[calc(100vh-var(--mobile-nav-height,4rem))] border-none")} >
+      <div className={cn("w-full md:w-1/3 lg:w-1/4 border-r flex flex-col bg-card dark:bg-slate-800", /* Adjusted for contrast */
+                      isMobile && selectedConversation && "hidden" 
                       )}
         >
-          {/* Tabs */}
           <div className="flex border-b flex-shrink-0">
               <Button
                   variant="ghost"
@@ -579,7 +567,6 @@ export default function MessagesPage() {
                  Requests ({categorizedConversations.incoming.length})
               </Button>
           </div>
-          {/* Conversation List */}
           <div className="flex-1 overflow-y-auto">
                {isLoadingConversations && (
                    <div className="p-3 space-y-2">
@@ -602,14 +589,12 @@ export default function MessagesPage() {
           </div>
       </div>
 
-      {/* Desktop Chat Area */}
       <div className={cn("hidden md:flex flex-1 flex-col",
                    selectedConversation ? "" : "items-center justify-center"
                    )}>
          {renderChatAreaContent(selectedConversation)}
       </div>
 
-      {/* Mobile Chat Area (Conditional Rendering) */}
        {isMobile && selectedConversation && (
             <div className="w-full flex flex-1 flex-col h-full">
                 {renderChatAreaContent(selectedConversation)}

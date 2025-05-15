@@ -94,12 +94,17 @@ export async function POST(request: Request) {
         const body = await request.json();
         console.log("API: Received item data for creation:", body);
 
-        const requiredFields = ['title', 'description', 'price', 'category', 'location'];
-        const missingFields = requiredFields.filter(field => !(field in body) || !body[field]);
+        const requiredFields = ['title', 'description', 'price', 'category', 'location', 'quantity']; // Added quantity
+        const missingFields = requiredFields.filter(field => !(field in body) || body[field] === undefined || body[field] === null || body[field] === '');
 
         if (missingFields.length > 0) {
             console.log(`API Create Item: Missing required fields: ${missingFields.join(', ')}`);
             return NextResponse.json({ message: `Missing required fields: ${missingFields.join(', ')}` }, { status: 400 });
+        }
+        
+        const quantity = parseInt(body.quantity);
+        if (isNaN(quantity) || quantity <= 0) {
+            return NextResponse.json({ message: 'Invalid quantity. Must be a number greater than 0.'}, { status: 400 });
         }
 
         const itemId = uuidv4();
@@ -110,6 +115,7 @@ export async function POST(request: Request) {
             description: body.description,
             category: body.category,
             price: parseFloat(body.price) || 0,
+            quantity: quantity, // Save parsed quantity
             location: body.location,
             offersDelivery: body.offersDelivery ?? false,
             acceptsInstallments: body.acceptsInstallments ?? false,
@@ -121,19 +127,18 @@ export async function POST(request: Request) {
          };
 
         await itemsCollection.doc(itemId).set(newItemData);
-        console.log(`API: Created new item in Firestore with ID: ${itemId} by seller: ${sellerId}`);
+        console.log(`API: Created new item in Firestore with ID: ${itemId} by seller: ${sellerId} with quantity: ${quantity}`);
 
         // --- Create Notification for Seller --- 
         try {
             await createNotification({
                 userId: sellerId,
                 type: 'item_listed',
-                message: `Your item "${body.title}" has been successfully listed!`,
+                message: `Your item "${body.title}" (x${quantity}) has been successfully listed!`,
                 relatedItemId: itemId,
             });
         } catch (notificationError) {
              console.error("Failed to create notification after listing item:", notificationError);
-             // Decide if this failure should affect the API response
         }
         // --- End Notification --- 
 

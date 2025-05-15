@@ -1,133 +1,107 @@
 // src/app/api/admin/disputes/route.ts
-'use server';
-
 import { NextResponse } from 'next/server';
-import { adminDb } from '@/lib/firebase-admin';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from '@/app/api/auth/[...nextauth]/route';
-import { Payment, Item, UserProfile } from '@/lib/types';
-import { Timestamp } from 'firebase-admin/firestore';
+import { adminDb } from '@/lib/firebase-admin';
+import { DisputeRecord, Payment, Item, UserProfile } from '@/lib/types';
+
+interface DisplayDispute extends DisputeRecord {
+    paymentDetails?: Payment;
+    itemDetails?: Item;
+    filedByUser?: Partial<Pick<UserProfile, 'name' | 'email'> >;
+    otherPartyUser?: Partial<Pick<UserProfile, 'name' | 'email'> >;
+}
 
 async function isAdmin(userId: string | undefined): Promise<boolean> {
-    if (!userId) return false;
-    if (!adminDb) {
-        console.error("isAdmin check failed: adminDb is null.");
-        return false;
-    }
+    if (!userId || !adminDb) return false;
     try {
-        const userDoc = await adminDb!.collection('users').doc(userId).get();
+        const userDoc = await adminDb.collection('users').doc(userId).get();
         return userDoc.exists && userDoc.data()?.role === 'admin';
     } catch (error) {
-        console.error("Error checking admin role:", error);
+        console.error("Error checking admin role in /api/admin/disputes:", error);
         return false;
     }
 }
 
-const safeTimestampToString = (timestamp: any): string | null => {
-    if (timestamp instanceof Timestamp) {
-        try { return timestamp.toDate().toISOString(); } catch { return null; }
-    }
-    if (timestamp instanceof Date) {
-         try { return timestamp.toISOString(); } catch { return null; }
-    }
-    if (typeof timestamp === 'string') {
-         try {
-             if (new Date(timestamp).toISOString() === timestamp) return timestamp;
-         } catch { /* ignore */ }
-    }
-    return null;
-};
-
-export async function GET() {
+export async function GET(request: Request) {
     console.log("--- API GET /api/admin/disputes START ---");
 
     if (!adminDb) {
-        console.error("API Admin Disputes GET Error: Firebase Admin DB not initialized.");
+        console.error("API /admin/disputes: Firebase Admin DB not initialized.");
         return NextResponse.json({ message: 'Server configuration error.' }, { status: 500 });
     }
 
     const session = await getServerSession(authOptions);
-    if (!(await isAdmin(session?.user?.id))) {
-        console.warn("API Admin Disputes GET: Unauthorized attempt.");
+    if (!session?.user?.id || !(await isAdmin(session.user.id))) {
+        console.warn("API /admin/disputes: Unauthorized or non-admin attempt.");
         return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
     }
+    console.log(`API /admin/disputes: Authorized admin ${session.user.id} fetching disputes.`);
 
     try {
-        const sevenDaysAgo = new Date();
-        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-        const sevenDaysAgoTimestamp = Timestamp.fromDate(sevenDaysAgo);
+        const disputesRef = adminDb.collection('disputes');
+        // Fetch all disputes, or filter by status like 'pending_admin' on the client or here
+        // For simplicity, fetching all and client can filter, or add a query param for status
+        const querySnapshot = await disputesRef.orderBy('createdAt', 'desc').get();
 
-        const paymentsRef = adminDb!.collection('payments'); // Added !
-        
-        // Query for payments that are 'paid_to_platform' AND older than 7 days
-        const overdueQuery = paymentsRef
-            .where('status', '==', 'paid_to_platform')
-            .where('createdAt', '<=', sevenDaysAgoTimestamp); // createdAt should be a Timestamp
+        if (querySnapshot.empty) {
+            console.log("API /admin/disputes: No disputes found.");
+            return NextResponse.json([], { status: 200 });
+        }
 
-        // Query for payments explicitly marked as 'isDisputed'
-        const disputedQuery = paymentsRef.where('isDisputed', '==', true);
+        const enrichedDisputes: DisplayDispute[] = [];
 
-        const [overdueSnapshot, disputedSnapshot] = await Promise.all([
-            overdueQuery.get(),
-            disputedQuery.get()
-        ]);
+        for (const doc of querySnapshot.docs) {
+            const disputeData = doc.data() as DisputeRecord;
+            let displayDispute: DisplayDispute = { ...disputeData, id: doc.id };
 
-        const paymentsMap = new Map<string, Payment & { itemDetails?: Partial<Item>, buyerName?: string, sellerName?: string }>();
-
-        const processSnapshot = async (snapshot: FirebaseFirestore.QuerySnapshot) => {
-            for (const doc of snapshot.docs) {
-                if (paymentsMap.has(doc.id)) continue; // Avoid duplicates if a payment is both overdue and disputed
-
-                const paymentData = doc.data() as Payment;
-                let itemDetails: Partial<Item> | null = null;
-                let buyerName: string | undefined;
-                let sellerName: string | undefined;
-
-                if (paymentData.itemId) {
-                    const itemDoc = await adminDb!.collection('items').doc(paymentData.itemId).get(); // Added !
-                    if (itemDoc.exists) {
-                        const item = itemDoc.data() as Item;
-                        itemDetails = { title: item.title, mediaUrls: item.mediaUrls, price: item.price };
+            try {
+                // Fetch Payment Details
+                if (disputeData.paymentId) {
+                    const paymentDoc = await adminDb.collection('payments').doc(disputeData.paymentId).get();
+                    if (paymentDoc.exists) {
+                        displayDispute.paymentDetails = { id: paymentDoc.id, ...paymentDoc.data() } as Payment;
                     }
                 }
-                if (paymentData.buyerId) {
-                    const buyerDoc = await adminDb!.collection('users').doc(paymentData.buyerId).get(); // Added !
-                    if (buyerDoc.exists) buyerName = (buyerDoc.data() as UserProfile).name;
+
+                // Fetch Item Details
+                if (disputeData.itemId) {
+                    const itemDoc = await adminDb.collection('items').doc(disputeData.itemId).get();
+                    if (itemDoc.exists) {
+                        displayDispute.itemDetails = { id: itemDoc.id, ...itemDoc.data() } as Item;
+                    }
                 }
-                if (paymentData.sellerId) {
-                    const sellerDoc = await adminDb!.collection('users').doc(paymentData.sellerId).get(); // Added !
-                    if (sellerDoc.exists) sellerName = (sellerDoc.data() as UserProfile).name;
+
+                // Fetch Filed By User Details
+                if (disputeData.filedByUserId) {
+                    const filedByUserDoc = await adminDb.collection('users').doc(disputeData.filedByUserId).get();
+                    if (filedByUserDoc.exists) {
+                        const userData = filedByUserDoc.data() as UserProfile;
+                        displayDispute.filedByUser = { name: userData.name, email: userData.email };
+                    }
                 }
-                
-                paymentsMap.set(doc.id, {
-                    ...paymentData,
-                    id: doc.id,
-                    createdAt: safeTimestampToString(paymentData.createdAt),
-                    updatedAt: safeTimestampToString(paymentData.updatedAt),
-                    disputeSubmittedAt: safeTimestampToString(paymentData.disputeSubmittedAt),
-                    itemDetails: itemDetails ?? undefined,
-                    buyerName,
-                    sellerName,
-                });
+
+                // Fetch Other Party User Details
+                if (disputeData.otherPartyUserId) {
+                    const otherPartyUserDoc = await adminDb.collection('users').doc(disputeData.otherPartyUserId).get();
+                    if (otherPartyUserDoc.exists) {
+                        const userData = otherPartyUserDoc.data() as UserProfile;
+                        displayDispute.otherPartyUser = { name: userData.name, email: userData.email };
+                    }
+                }
+                enrichedDisputes.push(displayDispute);
+            } catch (enrichError) {
+                console.error(`API /admin/disputes: Error enriching dispute ${disputeData.id}:`, enrichError);
+                // Push dispute even if some enrichment fails, client can handle missing details
+                enrichedDisputes.push(displayDispute); 
             }
-        };
-
-        await processSnapshot(overdueSnapshot);
-        await processSnapshot(disputedSnapshot);
+        }
         
-        const combinedPayments = Array.from(paymentsMap.values())
-            .sort((a, b) => {
-                const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-                const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-                return timeA - timeB; // Oldest first
-            });
-
-
-        console.log(`API Admin Disputes GET: Found ${combinedPayments.length} payments for review.`);
-        return NextResponse.json(combinedPayments, { status: 200 });
+        console.log(`API /admin/disputes: Found and enriched ${enrichedDisputes.length} disputes.`);
+        return NextResponse.json(enrichedDisputes, { status: 200 });
 
     } catch (error: any) {
         console.error("--- API GET /api/admin/disputes FAILED --- Error:", error);
-        return NextResponse.json({ message: 'Failed to fetch payments for review', error: error.message }, { status: 500 });
+        return NextResponse.json({ message: 'Failed to fetch disputes.', error: error.message }, { status: 500 });
     }
 }

@@ -2,29 +2,26 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from '../../auth/[...nextauth]/route';
-import { adminDb } from '@/lib/firebase-admin'; // adminDb can be null
-import { FieldValue, Timestamp } from 'firebase-admin/firestore';
+import { adminDb } from '@/lib/firebase-admin'; 
+import { FieldValue } from 'firebase-admin/firestore';
 import * as z from 'zod';
 import { createNotification } from '@/lib/notifications';
-import { Earning, Payment, PlatformSettings, PlatformFeeRecord, Item } from '@/lib/types'; // Import Item type
+import { Earning, Payment, PlatformSettings, PlatformFeeRecord, Item } from '@/lib/types'; 
 import { v4 as uuidv4 } from 'uuid';
 
-// --- Zod Schema --- 
 const confirmSchema = z.object({
     paymentId: z.string().min(1, "Payment ID is required"),
 });
 
-// --- Default Platform Fee --- 
-const DEFAULT_PLATFORM_FEE_PERCENTAGE = 0.10; // 10%
+const DEFAULT_PLATFORM_FEE_PERCENTAGE = 0.10; 
 
-// --- Platform Fee Calculation (Async) --- 
 async function getPlatformFeePercentage(): Promise<number> {
     if (!adminDb) {
         console.warn("getPlatformFeePercentage: Firebase Admin DB not initialized. Using default fee.");
         return DEFAULT_PLATFORM_FEE_PERCENTAGE;
     }
     try {
-        const feeDocRef = adminDb!.collection('settings').doc('platformFee'); 
+        const feeDocRef = adminDb.collection('settings').doc('platformFee'); 
         const docSnap = await feeDocRef.get();
         if (docSnap.exists) {
             const feeSettings = docSnap.data() as PlatformSettings;
@@ -47,7 +44,6 @@ const calculateFee = async (amount: number): Promise<{ fee: number, netAmount: n
     return { fee, netAmount };
 };
 
-// --- POST Handler --- 
 export async function POST(req: Request) {
     console.log("--- API POST /api/payment/confirm-receipt START ---");
 
@@ -56,7 +52,6 @@ export async function POST(req: Request) {
         return NextResponse.json({ message: 'Server configuration error.' }, { status: 500 });
     }
 
-    // --- Authentication --- 
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) {
         console.warn("Confirm Receipt: Unauthorized attempt.");
@@ -66,7 +61,6 @@ export async function POST(req: Request) {
     console.log(`Confirm Receipt: Authenticated as buyer ${buyerId}`);
 
     try {
-        // --- Validation --- 
         let body;
         try { body = await req.json(); } catch { return NextResponse.json({ message: 'Invalid request body.' }, { status: 400 }); }
         
@@ -77,11 +71,10 @@ export async function POST(req: Request) {
         const { paymentId } = validation.data;
         console.log(`Confirm Receipt: Request for paymentId: ${paymentId}`);
 
-        // --- Firestore Transaction --- 
-        const paymentRef = adminDb!.collection('payments').doc(paymentId);
-        const platformFeeSettingsRef = adminDb!.collection('settings').doc('platformFee');
+        const paymentRef = adminDb.collection('payments').doc(paymentId);
+        const platformFeeSettingsRef = adminDb.collection('settings').doc('platformFee');
 
-        const result = await adminDb!.runTransaction(async (transaction) => {
+        const result = await adminDb.runTransaction(async (transaction) => {
             const paymentDoc = await transaction.get(paymentRef);
             if (!paymentDoc.exists) {
                  console.warn(`Confirm Receipt: Payment ${paymentId} not found.`);
@@ -89,7 +82,6 @@ export async function POST(req: Request) {
             }
             const paymentData = paymentDoc.data() as Payment;
 
-            // --- Authorization & Status Checks --- 
             if (paymentData.buyerId !== buyerId) {
                  console.warn(`Confirm Receipt: User ${buyerId} is not the buyer for payment ${paymentId}.`);
                 throw new Error('Forbidden: You are not the buyer for this order.');
@@ -105,12 +97,34 @@ export async function POST(req: Request) {
             const sellerId = paymentData.sellerId;
             if (!sellerId) throw new Error('Seller ID missing on payment record.');
             
-            const itemRef = adminDb!.collection('items').doc(paymentData.itemId); // Define itemRef
+            const itemRef = adminDb!.collection('items').doc(paymentData.itemId);
             const sellerRef = adminDb!.collection('users').doc(sellerId);
             const earningId = uuidv4();
             const earningRef = sellerRef.collection('earnings').doc(earningId);
             const platformFeeRecordId = uuidv4();
             const platformFeeRecordRef = adminDb!.collection('platformFees').doc(platformFeeRecordId);
+
+            // Get item to check quantity
+            const itemDoc = await transaction.get(itemRef);
+            if (!itemDoc.exists) {
+                throw new Error('Item related to payment not found.');
+            }
+            const itemData = itemDoc.data() as Item;
+            const currentQuantity = itemData.quantity !== undefined ? itemData.quantity : 1; // Default to 1 if undefined
+
+            // Update item quantity and status
+            const newQuantity = currentQuantity - 1;
+            let newItemStatus: Item['status'] = itemData.status;
+            if (newQuantity <= 0) {
+                newItemStatus = 'sold';
+            }
+
+            transaction.update(itemRef, {
+                quantity: newQuantity > 0 ? newQuantity : 0, // Ensure quantity doesn't go below 0
+                status: newItemStatus,
+                updatedAt: FieldValue.serverTimestamp(),
+            });
+            console.log(`Confirm Receipt: Item ${paymentData.itemId} quantity updated from ${currentQuantity} to ${newQuantity}. Status set to ${newItemStatus}.`);
 
             const earningData: Omit<Earning, 'id' | 'createdAt'> = {
                  userId: sellerId,
@@ -127,68 +141,50 @@ export async function POST(req: Request) {
                  sellerId: sellerId, 
              };
             
-            // 1. Update Payment Status
             transaction.update(paymentRef, {
                  status: 'released_to_seller_balance',
                  updatedAt: FieldValue.serverTimestamp(),
              });
-
-            // 2. Update Item Status to 'sold'
-            transaction.update(itemRef, {
-                status: 'sold',
-                updatedAt: FieldValue.serverTimestamp()
-            });
             
-            // 3. Create Earning Record for Seller
              transaction.set(earningRef, {
                  ...earningData,
                  id: earningId, 
                  createdAt: FieldValue.serverTimestamp(),
              });
 
-            // 4. Increment Seller's Available Balance
              transaction.update(sellerRef, {
                  availableBalance: FieldValue.increment(netAmount)
              });
 
-             // 5. Create Platform Fee Record
              transaction.set(platformFeeRecordRef, {
                  ...feeRecordData,
                  id: platformFeeRecordId, 
                  createdAt: FieldValue.serverTimestamp(),
              });
 
-             // 6. Increment Total Platform Fees in settings
              transaction.set(platformFeeSettingsRef, {
                  totalPlatformFees: FieldValue.increment(fee),
                  updatedAt: FieldValue.serverTimestamp() 
              }, { merge: true }); 
             
-            console.log(`Confirm Receipt: Updated item ${paymentData.itemId} to sold. Prepared updates for payment ${paymentId}.`);
-            return { success: true, sellerId, netAmount, itemId: paymentData.itemId, itemTitle: paymentData.itemTitle || 'Item' };
+            console.log(`Confirm Receipt: Updated item ${paymentData.itemId}. Prepared updates for payment ${paymentId}.`);
+            return { success: true, sellerId, netAmount, itemId: paymentData.itemId, itemTitle: itemData.title || 'Item' }; // Use itemData.title
         });
 
         if (result?.success) {
             console.log(`Confirm Receipt: Transaction successful for payment ${paymentId}.`);
             try {
-                let itemTitleToNotify = result.itemTitle; 
-                if (!itemTitleToNotify && result.itemId) { 
-                    const itemDoc = await adminDb!.collection('items').doc(result.itemId).get();
-                    if (itemDoc.exists) itemTitleToNotify = itemDoc.data()?.title || 'Item';
-                }
-
                  await createNotification({
                      userId: result.sellerId,
                      type: 'funds_available',
-                     message: `Funds (KES ${result.netAmount.toLocaleString()}) for "${itemTitleToNotify}" are now available in your earnings balance.`,
+                     message: `Funds (KES ${result.netAmount.toLocaleString()}) for "${result.itemTitle}" are now available in your earnings balance.`,
                      relatedItemId: result.itemId,
                      relatedPaymentId: paymentId,
                  });
-                 // Optionally, notify buyer of successful confirmation
                  await createNotification({
                     userId: buyerId,
-                    type: 'admin_action', // Or a new 'receipt_confirmed' type
-                    message: `You have successfully confirmed receipt for item "${itemTitleToNotify}".`,
+                    type: 'admin_action', 
+                    message: `You have successfully confirmed receipt for item "${result.itemTitle}".`,
                     relatedItemId: result.itemId,
                     relatedPaymentId: paymentId,
                 });
@@ -197,7 +193,7 @@ export async function POST(req: Request) {
                  console.error(`Confirm Receipt: Failed to send notification for payment ${paymentId}:`, notifyError);
             }
             console.log("--- API POST /api/payment/confirm-receipt SUCCESS ---");
-             return NextResponse.json({ message: 'Receipt confirmed and funds released to seller balance. Item marked as sold.' }, { status: 200 });
+             return NextResponse.json({ message: 'Receipt confirmed and funds released to seller balance. Item quantity updated.' }, { status: 200 });
         } else {
              console.warn(`Confirm Receipt: Transaction completed but didn't return expected success object for ${paymentId}. Result:`, result);
              return NextResponse.json({ message: 'Confirmation processed but with unexpected result.' }, { status: 200 });

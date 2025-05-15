@@ -64,6 +64,7 @@ export default function SellPage() {
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState("");
   const [price, setPrice] = useState("");
+  const [quantity, setQuantity] = useState("1"); // Added quantity state, default 1
   const [location, setLocation] = useState("");
   const [specificLocation, setSpecificLocation] = useState("");
   const [offersDelivery, setOffersDelivery] = useState(false);
@@ -123,15 +124,20 @@ export default function SellPage() {
     setUploadProgress(null);
 
     // 1. Validation
-    if (!title || !description || !category || !price || !location || !specificLocation.trim()) {
+    if (!title || !description || !category || !price || !location || !specificLocation.trim() || !quantity) {
         let missing = [];
         if (!title) missing.push("Title");
         if (!description) missing.push("Description");
         if (!category) missing.push("Category");
         if (!price) missing.push("Price");
+        if (!quantity) missing.push("Quantity");
         if (!location) missing.push("City/Major Town");
         if (!specificLocation.trim()) missing.push("Specific Location/Area");
         toast({ title: "Missing Required Fields", description: `Please provide: ${missing.join(', ')}.`, variant: "destructive" });
+        setIsLoading(false); return;
+    }
+    if (parseInt(quantity) <= 0) {
+        toast({ title: "Invalid Quantity", description: "Quantity must be at least 1.", variant: "destructive" });
         setIsLoading(false); return;
     }
     if (!mediaFiles || mediaFiles.length === 0) {
@@ -146,18 +152,10 @@ export default function SellPage() {
         const formData = new FormData();
         Array.from(mediaFiles).forEach(file => { formData.append('files', file); });
 
-        // --- Removed Simulated Progress --- 
-        // await new Promise(resolve => setTimeout(resolve, 300)); setUploadProgress(30); 
-
-        console.log("Uploading files..."); // Log before fetch
+        console.log("Uploading files..."); 
         const uploadResponse = await fetch('/api/upload', { method: 'POST', body: formData });
-        console.log("Upload fetch completed. Status:", uploadResponse.status); // Log after fetch
+        console.log("Upload fetch completed. Status:", uploadResponse.status); 
         
-        // --- Removed Simulated Progress --- 
-        // await new Promise(resolve => setTimeout(resolve, 700)); setUploadProgress(100);
-        // await new Promise(resolve => setTimeout(resolve, 200)); // Short delay after 100%
-
-        // Still set progress to 100 if fetch is OK, before processing result
         if (uploadResponse.ok) {
             setUploadProgress(100);
         }
@@ -167,7 +165,7 @@ export default function SellPage() {
         if (!uploadResult.urls || uploadResult.urls.length === 0) { throw new Error("Upload succeeded but no URLs returned."); }
         uploadedMediaUrls = uploadResult.urls;
         console.log("Files uploaded:", uploadedMediaUrls);
-        setUploadProgress(null); // Clear progress after success
+        setUploadProgress(null); 
 
     } catch (uploadError: any) {
         console.error("File upload error:", uploadError);
@@ -180,10 +178,12 @@ export default function SellPage() {
     const combinedLocation = `${location} - ${specificLocation.trim()}`;
     const itemData = {
       title, description, category,
-      price: parseFloat(price) || 0, location: combinedLocation,
+      price: parseFloat(price) || 0, 
+      quantity: parseInt(quantity) || 1, // Added quantity
+      location: combinedLocation,
       offersDelivery, acceptsInstallments,
       discountPercentage: discountPercentage ? parseInt(discountPercentage) : undefined,
-      mediaUrls: uploadedMediaUrls, // Use REAL URLs
+      mediaUrls: uploadedMediaUrls,
     };
 
     console.log("Submitting item data:", itemData);
@@ -192,7 +192,7 @@ export default function SellPage() {
       const responseData = await response.json();
       if (!response.ok) { throw new Error(responseData.message || `HTTP error! ${response.status}`); }
       toast({ title: "Success!", description: "Item listed successfully." });
-      router.push('/dashboard'); // Redirect after success
+      router.push('/dashboard'); 
     } catch (error) {
       console.error("Submit item error:", error);
       let msg = error instanceof Error ? error.message : "Listing creation failed.";
@@ -200,7 +200,6 @@ export default function SellPage() {
     } finally { setIsLoading(false); }
   };
 
-  // --- Loading/Auth States --- 
   if (status === 'loading' || isFetchingProfile) {
        return (
            <div className="flex justify-center items-center min-h-screen">
@@ -212,9 +211,7 @@ export default function SellPage() {
         router.replace('/auth'); 
         return null; 
     }
-  // -------------------------
 
-  // --- Component Render --- 
   return (
     <div className="flex justify-center items-start min-h-screen bg-gray-50 dark:bg-gray-900 py-8 px-4">
       <Card className="w-full max-w-2xl shadow-lg dark:bg-gray-800">
@@ -225,7 +222,6 @@ export default function SellPage() {
         <form onSubmit={handleSubmit}>
           <CardContent className="grid gap-5">
             
-            {/* --- Input Fields --- */}
             <div className="grid gap-1.5">
               <Label htmlFor="title">Item Title <span className="text-red-500">*</span></Label>
               <Input id="title" placeholder="e.g., Gently Used Sofa Set" value={title} onChange={(e) => setTitle(e.target.value)} required disabled={isLoading} />
@@ -234,32 +230,41 @@ export default function SellPage() {
               <Label htmlFor="description">Description <span className="text-red-500">*</span></Label>
               <Textarea id="description" placeholder="Describe condition, features, dimensions..." value={description} onChange={(e) => setDescription(e.target.value)} required disabled={isLoading} rows={4} />
             </div>
-            <div className="grid gap-1.5">
-              <Label htmlFor="category-select">Category <span className="text-red-500">*</span></Label>
-              <Select value={category} onValueChange={(value) => setCategory(value)} required disabled={isLoading}>
-                  <SelectTrigger id="category-select" className="w-full"><SelectValue placeholder="Select a category..." /></SelectTrigger>
-                  <SelectContent>{categories.map((cat) => (<SelectItem key={cat} value={cat}>{cat}</SelectItem>))}</SelectContent>
-              </Select>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid gap-1.5">
+                  <Label htmlFor="category-select">Category <span className="text-red-500">*</span></Label>
+                  <Select value={category} onValueChange={(value) => setCategory(value)} required disabled={isLoading}>
+                      <SelectTrigger id="category-select" className="w-full"><SelectValue placeholder="Select a category..." /></SelectTrigger>
+                      <SelectContent>{categories.map((cat) => (<SelectItem key={cat} value={cat}>{cat}</SelectItem>))}</SelectContent>
+                  </Select>
+                </div>
+                <div className="grid gap-1.5">
+                  <Label htmlFor="price">Price (KES) <span className="text-red-500">*</span></Label>
+                  <Input id="price" type="number" placeholder="e.g., 15000" value={price} onChange={(e) => setPrice(e.target.value)} required min="0" step="any" disabled={isLoading} />
+                </div>
             </div>
-            <div className="grid gap-1.5">
-              <Label htmlFor="price">Price (KES) <span className="text-red-500">*</span></Label>
-              <Input id="price" type="number" placeholder="e.g., 15000" value={price} onChange={(e) => setPrice(e.target.value)} required min="0" step="any" disabled={isLoading} />
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid gap-1.5">
+                    <Label htmlFor="quantity">Quantity Available <span className="text-red-500">*</span></Label>
+                    <Input id="quantity" type="number" placeholder="e.g., 1" value={quantity} onChange={(e) => setQuantity(e.target.value)} required min="1" step="1" disabled={isLoading} />
+                </div>
+                 <div className="grid gap-1.5">
+                    <Label htmlFor="location-select">City / Major Town <span className="text-red-500">*</span></Label>
+                    <Select value={location} onValueChange={(value) => setLocation(value)} required disabled={isLoading}>
+                        <SelectTrigger id="location-select" className="w-full"><SelectValue placeholder="Select city or major town..." /></SelectTrigger>
+                        <SelectContent>{kenyanLocations.map((loc) => (<SelectItem key={loc} value={loc}>{loc}</SelectItem>))}</SelectContent>
+                    </Select>
+                </div>
             </div>
-            <div className="grid gap-1.5">
-                <Label htmlFor="location-select">City / Major Town <span className="text-red-500">*</span></Label>
-                <Select value={location} onValueChange={(value) => setLocation(value)} required disabled={isLoading}>
-                    <SelectTrigger id="location-select" className="w-full"><SelectValue placeholder="Select city or major town..." /></SelectTrigger>
-                    <SelectContent>{kenyanLocations.map((loc) => (<SelectItem key={loc} value={loc}>{loc}</SelectItem>))}</SelectContent>
-                </Select>
-            </div>
+            
              <div className="grid gap-1.5">
                 <Label htmlFor="specific-location">Specific Location / Area <span className="text-red-500">*</span></Label>
                 <Input id="specific-location" placeholder="e.g., Roysambu, CBD" value={specificLocation} onChange={(e) => setSpecificLocation(e.target.value)} required disabled={isLoading} />
                 <p className="text-xs text-muted-foreground">Neighborhood, estate, or area within the selected city.</p>
              </div>
-             {/* --- End Input Fields --- */}
 
-            {/* --- Media Upload Section --- */} 
             <div className="grid gap-1.5 pt-4 border-t">
               <Label htmlFor="media">Photos / Videos <span className="text-red-500">*</span></Label>
               <Input
@@ -272,16 +277,12 @@ export default function SellPage() {
                 className="file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-primary file:text-primary-foreground hover:file:bg-primary/90"
               />
               <p className="text-xs text-muted-foreground">Max 5 files, 10MB each. Select at least one.</p>
-              {/* Upload Progress */}
               {uploadProgress !== null && (
                   <div className="space-y-1 pt-2">
                       <Label className="text-sm font-medium">Upload Progress</Label>
                       <Progress value={uploadProgress} className="w-full h-2" />
-                      {/* Show percentage only briefly at 100% before clearing */}
-                      {/* <p className="text-xs text-muted-foreground text-center">{uploadProgress}%</p> */}
                   </div>
               )}
-               {/* Previews */}
               {previewUrls.length > 0 && (
                  <div className="mt-2 grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
                      {previewUrls.map((url, index) => (
@@ -296,9 +297,7 @@ export default function SellPage() {
                   </div>
               )}
             </div>
-            {/* --- End Media Upload --- */}
 
-            {/* --- Optional Details --- */}
              <div className="border-t pt-4 mt-2">
                  <Label className="text-base font-semibold">Optional Details</Label>
                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-x-6 gap-y-4 mt-3">
@@ -316,9 +315,7 @@ export default function SellPage() {
                     </div>
                 </div>
              </div>
-             {/* --- End Optional Details --- */} 
 
-             {/* Display Server Error */}
              {serverError && (<p className="text-sm font-medium text-destructive text-center">{serverError}</p>)}
 
           </CardContent>

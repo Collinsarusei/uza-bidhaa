@@ -2,7 +2,7 @@
 
 import {
   AlertTriangle,
-  ArrowLeft, // Added for back buttons
+  ArrowLeft,
   ArrowRight,
   BellOff,
   Check,
@@ -21,7 +21,7 @@ import {
   Lock,
   LogOut,
   Mail,
-  Menu, // Added Menu icon
+  Menu,
   MessageSquare,
   Moon,
   Plus,
@@ -29,26 +29,31 @@ import {
   Search,
   Send,
   Server,
-  Settings, // Added Settings Icon
+  Settings,
   Share2,
   Shield,
-  ShieldAlert, // Added ShieldAlert
+  ShieldAlert,
   Sun,
   Tag,
   Trash,
   User,
-  Users, // Added Users
+  Users,
   X,
   Workflow,
   Image,
   Phone,
   Info,
   Key,
-  Inbox,
-  Bell,
+  Inbox,      // Was already here
+  Bell,       // Was already here
   Bot,
-  MapPin, // Added MapPin
-  LayoutGrid // Added LayoutGrid for Admin Dashboard
+  MapPin,
+  LayoutGrid,
+  Package,    // Added for packageSearch replacement
+  AlertCircle,// Added
+  DollarSign, // Added
+  Receipt,    // Added
+  Archive,    // Added as an alternative for listX if needed elsewhere
 } from "lucide-react";
 
 // Re-export all icons for easier import
@@ -73,7 +78,7 @@ export const Icons = {
   lock: Lock,
   logOut: LogOut,
   mail: Mail,
-  menu: Menu, // Added Menu icon export
+  menu: Menu,
   messageSquare: MessageSquare,
   moon: Moon,
   plus: Plus,
@@ -81,15 +86,15 @@ export const Icons = {
   search: Search,
   send: Send,
   server: Server,
-  settings: Settings, // Export Settings
+  settings: Settings,
   share2: Share2,
   shield: Shield,
-  shieldAlert: ShieldAlert, // Export ShieldAlert
+  shieldAlert: ShieldAlert,
   sun: Sun,
   tag: Tag,
   trash: Trash,
   user: User,
-  users: Users, // Export Users
+  users: Users,
   x: X,
   workflow: Workflow,
   image: Image,
@@ -100,7 +105,11 @@ export const Icons = {
   bell: Bell,
   bot: Bot,
   mapPin: MapPin,
-  layoutGrid: LayoutGrid, // Export LayoutGrid
-  // Add spinner alias for convenience if needed
+  layoutGrid: LayoutGrid,
+  package: Package,      // Added export
+  alertCircle: AlertCircle, // Added export
+  dollarSign: DollarSign, // Added export
+  receipt: Receipt,      // Added export
+  archive: Archive,        // Added export (used for listX replacement)
   spinner: Loader2,
 };

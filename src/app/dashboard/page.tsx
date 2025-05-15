@@ -36,7 +36,7 @@ import { NotificationsContent } from "@/components/notifications-content";
 import { useRouter } from 'next/navigation';
 import { useNotifications } from "@/components/providers/notification-provider"; 
 import { useToast } from "@/hooks/use-toast";
-import { formatDistanceToNow, parseISO } from 'date-fns'; // Import for relative time
+import { formatDistanceToNow, parseISO, isValid } from 'date-fns'; // Import isValid
 
 // --- Main Content Component --- 
 function DashboardContent() {
@@ -111,8 +111,7 @@ function DashboardContent() {
 
   const handleOpenNotifications = () => {
       if (unreadCount > 0) {
-          // Call context markAllAsRead which calls the API
-          contextMarkAllAsRead(); 
+          markAllAsRead(); 
       }
       setIsNotificationsSheetOpen(true);
   };
@@ -169,18 +168,31 @@ function DashboardContent() {
                          <Icons.bell className="h-5 w-5" />
                          {unreadCount > 0 && <Badge variant="destructive" className="absolute -top-1 -right-1 h-4 w-4 justify-center rounded-full p-0.5 text-xs">{unreadCount > 9 ? '9+' : unreadCount}</Badge>}
                      </Button>
+                     <Link href="/help-center" passHref>
+                        <Button variant="ghost" size="icon" className="hover:bg-accent p-2">
+                            <Icons.helpCircle className="h-5 w-5" />
+                        </Button>
+                    </Link>
                 </div>
              )}
 
-            <div className="hidden md:flex items-center gap-1"> 
+            <div className="hidden md:flex items-center gap-2"> 
                  {session?.user && (
                      <TooltipProvider><Tooltip><TooltipTrigger asChild>
-                         <Link href="/dashboard/my-orders" passHref><Button variant="link" size="sm" className="hover:text-primary transition-colors">My Orders</Button></Link>
+                         <Link href="/dashboard/my-orders" passHref>
+                           <Button variant="default" size="sm" className="bg-sky-500 hover:bg-sky-600 text-white transition-colors">
+                             My Orders
+                           </Button>
+                         </Link>
                      </TooltipTrigger><TooltipContent><p>View your purchases</p></TooltipContent></Tooltip></TooltipProvider>
                  )}
                  {session?.user && (
                      <TooltipProvider><Tooltip><TooltipTrigger asChild>
-                         <Link href="/dashboard/my-earnings" passHref><Button variant="link" size="sm" className="hover:text-primary transition-colors">My Earnings</Button></Link>
+                         <Link href="/dashboard/my-earnings" passHref>
+                           <Button variant="default" size="sm" className="bg-teal-500 hover:bg-teal-600 text-white transition-colors">
+                             My Earnings
+                           </Button>
+                         </Link>
                      </TooltipTrigger><TooltipContent><p>View your seller earnings</p></TooltipContent></Tooltip></TooltipProvider>
                  )}
                 {isAdminUser && (
@@ -192,12 +204,27 @@ function DashboardContent() {
                 
                  {session?.user && (
                     <TooltipProvider><Tooltip><TooltipTrigger asChild>
-                        <Link href="/dashboard/my-listings" passHref><Button variant="outline" size="default" className="hover:bg-accent hover:text-accent-foreground transition-colors">My Listings</Button></Link>
+                        <Link href="/dashboard/my-listings" passHref>
+                            <Button variant="default" size="default" className="bg-orange-500 hover:bg-orange-600 text-white transition-colors">
+                                My Listings
+                            </Button>
+                        </Link>
                     </TooltipTrigger><TooltipContent><p>View My Listings</p></TooltipContent></Tooltip></TooltipProvider>
                  )}
                  <TooltipProvider><Tooltip><TooltipTrigger asChild>
                     <Link href="/sell" passHref><Button size="default" className="bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"><Icons.plus className="mr-1 h-4 w-4" /> Sell</Button></Link>
                  </TooltipTrigger><TooltipContent><p>Sell an Item</p></TooltipContent></Tooltip></TooltipProvider>
+
+                 {session?.user && (
+                     <TooltipProvider><Tooltip><TooltipTrigger asChild>
+                        <Link href="/help-center" passHref>
+                            <Button variant="ghost" size="icon" className="hover:bg-accent p-2">
+                                <Icons.helpCircle className="h-5 w-5" />
+                            </Button>
+                        </Link>
+                     </TooltipTrigger><TooltipContent><p>Help Center</p></TooltipContent></Tooltip></TooltipProvider>
+                 )}
+                 {session?.user && <div className="h-6 w-px bg-border mx-1"></div>} 
 
                  {session?.user && (
                      <TooltipProvider><Tooltip><TooltipTrigger asChild>
@@ -236,7 +263,7 @@ function DashboardContent() {
                  )}
             </div>
             
-            {/* Mobile Nav Trigger (same as before) */}
+            {/* Mobile Nav Trigger */}
             <div className="md:hidden">
                 <Sheet open={isMobileNavOpen} onOpenChange={setIsMobileNavOpen}>
                     <SheetTrigger asChild>
@@ -254,14 +281,27 @@ function DashboardContent() {
                                  <>
                                      <Link href="/dashboard" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">Dashboard</Button></Link>
                                      <Link href="/sell" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">Sell Item</Button></Link>
-                                     <Link href="/dashboard/my-listings" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">My Listings</Button></Link>
-                                     <Link href="/dashboard/my-orders" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">My Orders</Button></Link>
-                                     <Link href="/dashboard/my-earnings" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">My Earnings</Button></Link>
+                                     <Link href="/dashboard/my-listings" passHref onClick={() => setIsMobileNavOpen(false)}>
+                                        <Button variant="default" className="w-full justify-start bg-orange-500 hover:bg-orange-600 text-white">
+                                            My Listings
+                                        </Button>
+                                     </Link>
+                                     <Link href="/dashboard/my-orders" passHref onClick={() => setIsMobileNavOpen(false)}>
+                                        <Button variant="default" className="w-full justify-start bg-sky-500 hover:bg-sky-600 text-white">
+                                            My Orders
+                                        </Button>
+                                     </Link>
+                                     <Link href="/dashboard/my-earnings" passHref onClick={() => setIsMobileNavOpen(false)}>
+                                        <Button variant="default" className="w-full justify-start bg-teal-500 hover:bg-teal-600 text-white">
+                                            My Earnings
+                                        </Button>
+                                     </Link>
                                      {isAdminUser && (
                                         <Link href="/admin" passHref onClick={() => setIsMobileNavOpen(false)}>
                                             <Button variant="ghost" className="w-full justify-start text-red-500 hover:text-red-600">Admin Panel</Button>
                                         </Link>
                                      )}
+                                     <Link href="/help-center" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">Help Center</Button></Link>
                                      <Link href="/profile" passHref onClick={() => setIsMobileNavOpen(false)}><Button variant="ghost" className="w-full justify-start">Profile</Button></Link>
                                      <Button variant="ghost" onClick={handleLogout} className="w-full justify-start text-red-600 hover:text-red-700">Logout</Button>
                                  </>
@@ -323,19 +363,37 @@ function DashboardContent() {
     let timeSinceListed = 'Date unavailable';
     if (item.createdAt) {
         try {
-            timeSinceListed = formatDistanceToNow(parseISO(item.createdAt), { addSuffix: true });
+            if (typeof item.createdAt === 'string') {
+                const parsedDate = parseISO(item.createdAt);
+                if (isValid(parsedDate)) { 
+                    timeSinceListed = formatDistanceToNow(parsedDate, { addSuffix: true });
+                } else {
+                    console.warn(`Error formatting time: Invalid date after parsing for item ${item.id}, createdAt: ${item.createdAt}`);
+                    timeSinceListed = 'Invalid date string'; 
+                }
+            } else {
+                console.warn(`Error formatting time: createdAt is not a string for item ${item.id}, type: ${typeof item.createdAt}, value: ${item.createdAt}`);
+                timeSinceListed = 'Date format error'; 
+            }
         } catch (e) {
-            console.warn("Error formatting time since listed for item:", item.id, e);
+            console.warn(`Error formatting time since listed for item (id: ${item.id}, createdAt: ${item.createdAt}):`, e);
         }
+    } else {
+        timeSinceListed = 'Date not provided'; 
     }
+
     return (
         <Card key={item.id} className="flex flex-col overflow-hidden hover:shadow-lg transition-shadow duration-200 ease-in-out">
         <CardHeader className="p-0">
-            <Link href={`/item/${item.id}`} passHref className="block">
+            <Link href={`/item/${item.id}`} passHref className="block relative w-full aspect-square"> {/* Changed to aspect-square */}
                 {item.mediaUrls && item.mediaUrls.length > 0 ? (
-                <img src={item.mediaUrls[0]} alt={item.title} className="aspect-video w-full object-cover" />
+                <img 
+                    src={item.mediaUrls[0]} 
+                    alt={item.title} 
+                    className="absolute h-full w-full object-cover" /* Ensure it covers the square */
+                />
                 ) : (
-                <div className="aspect-video w-full bg-secondary flex items-center justify-center text-muted-foreground">No Image</div>
+                <div className="absolute h-full w-full bg-secondary flex items-center justify-center text-muted-foreground">No Image</div>
                 )}
             </Link>
         </CardHeader>
@@ -343,13 +401,16 @@ function DashboardContent() {
             <Link href={`/item/${item.id}`} passHref><CardTitle className="text-lg hover:underline">{item.title}</CardTitle></Link>
             <CardDescription className="text-sm text-muted-foreground">{item.location}</CardDescription>
             <p className="pt-1 text-lg font-semibold">KES {item.price.toLocaleString()}</p>
+            {item.quantity !== undefined && item.quantity > 1 && (
+                <p className="text-xs text-green-600 dark:text-green-400">{item.quantity} available</p>
+            )}
             <Badge
                 variant={item.status === 'sold' ? 'destructive' : item.status === 'available' ? 'default' : 'secondary'}
                 className="mt-1"
             >
                 {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
             </Badge>
-            <p className="text-xs text-muted-foreground pt-1">Listed: {timeSinceListed}</p> {/* Display time since listed */}
+            <p className="text-xs text-muted-foreground pt-1">Listed: {timeSinceListed}</p> 
         </CardContent>
         <CardFooter className="p-4 flex flex-col gap-2">
             <Link href={`/item/${item.id}`} passHref className="w-full">
@@ -357,16 +418,20 @@ function DashboardContent() {
             </Link>
             {session?.user && session.user.id !== item.sellerId ? (
                 <Button 
-                    className="w-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-0" 
+                    className="w-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-0 px-3" 
                     onClick={() => handleOpenMessageSheet(item.sellerId, item.id, item.title, item.mediaUrls?.[0] ?? null)}
                 >
-                    <Icons.mail className="mr-2 h-4 w-4" /> Message Seller
+                    <Icons.mail className="mr-1.5 h-4 w-4 flex-shrink-0" /> 
+                    <span className="truncate">Message Seller</span>
                 </Button>
             ) : !session?.user ? (
                 <TooltipProvider>
                     <Tooltip>
                         <TooltipTrigger asChild>
-                            <Button className="w-full" disabled> <Icons.mail className="mr-2 h-4 w-4" /> Message Seller</Button>
+                            <Button className="w-full px-3" disabled> 
+                                <Icons.mail className="mr-1.5 h-4 w-4 flex-shrink-0" /> 
+                                <span className="truncate">Message Seller</span>
+                            </Button>
                         </TooltipTrigger>
                         <TooltipContent><p>Log in to message the seller.</p></TooltipContent>
                     </Tooltip>
@@ -382,8 +447,8 @@ function DashboardContent() {
   const renderLoadingSkeletons = () => (
      Array.from({ length: 6 }).map((_, index) => (
         <Card key={index} className="flex flex-col">
-             <CardHeader>
-                  <Skeleton className="aspect-video w-full rounded-b-none" />
+             <CardHeader className="p-0">
+                  <Skeleton className="aspect-square w-full rounded-b-none" /> {/* Changed to aspect-square */}
              </CardHeader>
              <CardContent className="p-4 space-y-2">
                  <Skeleton className="h-5 w-3/4" />

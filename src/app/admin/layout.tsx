@@ -9,7 +9,7 @@ import { cn } from '@/lib/utils';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { useEffect } from 'react';
-import React from 'react'; // Import React for React.cloneElement
+import React from 'react';
 
 export default function AdminLayout({
   children,
@@ -20,9 +20,7 @@ export default function AdminLayout({
   const { data: session, status } = useSession();
   const router = useRouter();
 
-  // Placeholder for admin check. Replace with actual role verification from Firestore.
-  // const isAdmin = session?.user?.role === 'admin'; // Example for role-based check
-  const isAdminUser = session?.user?.email === process.env.NEXT_PUBLIC_ADMIN_EMAIL; // Current check
+  const isAdminUser = session?.user?.email === process.env.NEXT_PUBLIC_ADMIN_EMAIL;
 
   useEffect(() => {
     if (status === 'loading') return;
@@ -47,10 +45,10 @@ export default function AdminLayout({
    }
 
   const navItems = [
-    { href: '/admin', label: 'Dashboard', icon: <Icons.layoutGrid /> }, // Changed from layoutDashboard
+    { href: '/admin', label: 'Dashboard', icon: <Icons.layoutGrid /> },
     { href: '/admin/fees', label: 'Fee % Setting', icon: <Icons.settings /> }, 
     { href: '/admin/platform-fees', label: 'Platform Fees Log', icon: <Icons.circleDollarSign /> }, 
-    { href: '/admin/withdraw-platform-fees', label: 'Withdraw Fees', icon: <Icons.send /> }, // Changed from downloadCloud
+    { href: '/admin/withdraw-platform-fees', label: 'Withdraw Fees', icon: <Icons.send /> },
     { href: '/admin/disputes', label: 'Dispute Management', icon: <Icons.shieldAlert /> },
     { href: '/admin/users', label: 'User Management', icon: <Icons.users /> },
   ];
@@ -59,9 +57,9 @@ export default function AdminLayout({
     <div className="flex min-h-screen">
       <aside className="w-64 bg-muted/50 p-4 border-r flex flex-col">
         <div className="mb-6">
-          <Link href="/dashboard" className="text-lg font-semibold flex items-center gap-2">
+          <Link href="/dashboard" className="text-lg font-semibold flex items-center gap-2 text-primary hover:underline">
             <Icons.arrowLeft className="h-5 w-5" />
-            Back to Site
+            Back to Main Site
           </Link>
         </div>
         <nav className="flex-grow">
@@ -85,9 +83,13 @@ export default function AdminLayout({
           </ul>
         </nav>
         <div className="mt-auto">
-             <Button variant="outline" className="w-full" onClick={() => router.push('/dashboard')}>
-                 <Icons.home className="mr-2 h-4 w-4" />
-                 Main Dashboard
+             <Button 
+                variant="default" 
+                className="w-full bg-orange-500 hover:bg-orange-600 text-white" 
+                onClick={() => router.push('/dashboard')}
+             >
+                 <Icons.layoutGrid className="mr-2 h-4 w-4" /> {/* Corrected Icon */}
+                 Back to Marketplace
              </Button>
         </div>
       </aside>

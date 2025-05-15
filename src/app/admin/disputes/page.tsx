@@ -1,7 +1,7 @@
 // src/app/admin/disputes/page.tsx
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react'; // Added useRef
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
@@ -24,12 +24,15 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import type { Payment, Item } from '@/lib/types';
+import type { Payment, Item, DisputeRecord, UserProfile } from '@/lib/types'; // Import DisputeRecord
+import { Link } from 'lucide-react';
 
-interface DisputedPayment extends Payment {
-    itemDetails?: Partial<Item>;
-    buyerName?: string;
-    sellerName?: string;
+// Updated interface to reflect fetching DisputeRecords primarily
+interface DisplayDispute extends DisputeRecord {
+    paymentDetails?: Payment;
+    itemDetails?: Item;
+    filedByUser?: Partial<UserProfile>;
+    otherPartyUser?: Partial<UserProfile>;
 }
 
 export default function AdminDisputesPage() {
@@ -37,22 +40,23 @@ export default function AdminDisputesPage() {
     const router = useRouter();
     const { toast } = useToast();
 
-    const [payments, setPayments] = useState<DisputedPayment[]>([]);
+    const [disputes, setDisputes] = useState<DisplayDispute[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
-    const [processingPaymentId, setProcessingPaymentId] = useState<string | null>(null);
+    const [processingDisputeId, setProcessingDisputeId] = useState<string | null>(null);
+    const actionTypeRef = useRef<'release' | 'refund' | null>(null); // Using useRef for action type
 
     useEffect(() => {
         if (status === 'authenticated') {
             setIsAuthorized(session?.user?.email === process.env.NEXT_PUBLIC_ADMIN_EMAIL);
         } else if (status === 'unauthenticated') {
             setIsAuthorized(false);
-            router.push('/auth');
+            router.push('/auth?callbackUrl=/admin/disputes');
         }
     }, [status, router, session]);
 
-    const fetchDisputedPayments = useCallback(async () => {
+    const fetchDisputes = useCallback(async () => {
         if (!isAuthorized) {
             setIsLoading(false);
             return;
@@ -60,7 +64,8 @@ export default function AdminDisputesPage() {
         setIsLoading(true);
         setError(null);
         try {
-            const response = await fetch('/api/admin/disputes');
+            // This API endpoint should now return enriched DisputeRecord data
+            const response = await fetch('/api/admin/disputes'); 
             if (!response.ok) {
                 const errData = await response.json().catch(() => ({}));
                  if (response.status === 401 || response.status === 403) {
@@ -70,10 +75,10 @@ export default function AdminDisputesPage() {
                  }
                 throw new Error(errData.message || `Failed to fetch disputes: ${response.status}`);
             }
-            const data = await response.json();
-            setPayments(data);
+            const data: DisplayDispute[] = await response.json();
+            setDisputes(data.filter(d => d.status === 'pending_admin')); // Only show pending admin review
         } catch (err) {
-            const message = err instanceof Error ? err.message : 'Could not load disputed payments.';
+            const message = err instanceof Error ? err.message : 'Could not load disputes.';
             setError(message);
         } finally {
             setIsLoading(false);
@@ -82,32 +87,41 @@ export default function AdminDisputesPage() {
 
     useEffect(() => {
         if (isAuthorized === true) {
-            fetchDisputedPayments();
+            fetchDisputes();
         } else if (isAuthorized === false && status === 'authenticated') {
              setError("You are not authorized to view this page.");
              setIsLoading(false);
         }
-    }, [isAuthorized, status, fetchDisputedPayments]);
+    }, [isAuthorized, status, fetchDisputes]);
 
 
-    const handleAdminAction = async (paymentId: string, action: 'release' | 'refund') => {
-        setProcessingPaymentId(paymentId);
+    const handleAdminAction = async (dispute: DisplayDispute, action: 'release' | 'refund') => {
+        if (!dispute.paymentId) {
+            toast({title: "Error", description: "Payment ID missing for this dispute.", variant: "destructive"});
+            return;
+        }
+        setProcessingDisputeId(dispute.id);
+        actionTypeRef.current = action;
+
         try {
-            const response = await fetch(`/api/admin/payments/${paymentId}/admin-${action}`, {
+            // These backend APIs should also update the DisputeRecord status
+            const response = await fetch(`/api/admin/payments/${dispute.paymentId}/admin-${action}`, {
                 method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ disputeId: dispute.id }) // Send disputeId for backend to update
             });
             const result = await response.json();
             if (!response.ok) {
                 throw new Error(result.message || `Failed to ${action} payment.`);
             }
-            toast({ title: "Success", description: `Payment ${action === 'release' ? 'released to seller' : 'refunded to buyer'}.` });
-            // Refresh data
-            fetchDisputedPayments();
+            toast({ title: "Success", description: `Payment ${action === 'release' ? 'released to seller' : 'refunded to buyer'}. Dispute record updated.` });
+            fetchDisputes(); // Refresh data
         } catch (err) {
             const message = err instanceof Error ? err.message : `Could not ${action} payment.`;
             toast({ title: "Action Error", description: message, variant: "destructive" });
         } finally {
-            setProcessingPaymentId(null);
+            setProcessingDisputeId(null);
+            actionTypeRef.current = null;
         }
     };
     
@@ -116,37 +130,40 @@ export default function AdminDisputesPage() {
         try {
             return format(parseISO(dateString), 'PPpp');
         } catch {
-            return 'Invalid Date';
+            return 'Invalid Date String'; // More specific error
         }
     };
 
-
     if (status === 'loading' || isAuthorized === null) {
         return (
-            <div className="space-y-4">
-                <Skeleton className="h-8 w-1/2" />
-                <Skeleton className="h-4 w-3/4 mb-4" />
-                <Card><CardHeader><Skeleton className="h-6 w-1/3" /></CardHeader><CardContent><Skeleton className="h-32 w-full" /></CardContent></Card>
+            <div className="container mx-auto p-6">
+                <Skeleton className="h-8 w-1/2 mb-2" />
+                <Skeleton className="h-4 w-3/4 mb-6" />
+                <Card><CardHeader><Skeleton className="h-6 w-1/3 mb-2" /></CardHeader><CardContent><Skeleton className="h-32 w-full" /></CardContent></Card>
             </div>
         );
     }
     
     if (!isAuthorized) {
          return (
-             <Alert variant="destructive">
-                 <Icons.alertTriangle className="h-4 w-4" />
-                 <AlertTitle>Access Denied</AlertTitle>
-                 <AlertDescription>You do not have permission to access this page.</AlertDescription>
-             </Alert>
+            <div className="container mx-auto p-6">
+                 <Alert variant="destructive">
+                     <Icons.alertTriangle className="h-4 w-4" />
+                     <AlertTitle>Access Denied</AlertTitle>
+                     <AlertDescription>You do not have permission to access this page.</AlertDescription>
+                 </Alert>
+            </div>
          );
     }
 
     return (
-        <div className="space-y-6">
-            <h1 className="text-3xl font-bold">Dispute Management</h1>
-            <p className="text-muted-foreground">
-                Review payments that are disputed or overdue for buyer confirmation (older than 7 days).
-            </p>
+        <div className="container mx-auto p-6 space-y-6">
+            <header>
+                <h1 className="text-3xl font-bold">Dispute Management</h1>
+                <p className="text-muted-foreground">
+                    Review and resolve pending disputes between buyers and sellers.
+                </p>
+            </header>
 
             {isLoading && (
                 <Card>
@@ -158,7 +175,7 @@ export default function AdminDisputesPage() {
             {error && (
                 <Alert variant="destructive">
                     <Icons.alertTriangle className="h-4 w-4" />
-                    <AlertTitle>Error</AlertTitle>
+                    <AlertTitle>Error Loading Disputes</AlertTitle>
                     <AlertDescription>{error}</AlertDescription>
                 </Alert>
             )}
@@ -166,101 +183,108 @@ export default function AdminDisputesPage() {
             {!isLoading && !error && (
                 <Card>
                     <CardHeader>
-                        <CardTitle>Payments Requiring Review</CardTitle>
+                        <CardTitle>Pending Disputes</CardTitle>
                         <CardDescription>
-                            Total: {payments.length} payment(s)
+                            Total: {disputes.length} dispute(s) requiring review.
                         </CardDescription>
                     </CardHeader>
                     <CardContent>
-                        {payments.length === 0 ? (
-                            <p className="text-muted-foreground">No payments currently require admin review.</p>
+                        {disputes.length === 0 ? (
+                            <p className="text-muted-foreground">No disputes currently require admin review.</p>
                         ) : (
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead>Item</TableHead>
-                                        <TableHead>Amount (KES)</TableHead>
-                                        <TableHead>Buyer</TableHead>
-                                        <TableHead>Seller</TableHead>
-                                        <TableHead>Paid On</TableHead>
-                                        <TableHead>Status</TableHead>
-                                        <TableHead>Actions</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {payments.map((payment) => (
-                                        <TableRow key={payment.id}>
-                                            <TableCell className="font-medium">
-                                                {payment.itemDetails?.title || payment.itemId.substring(0,8)}
-                                                {payment.isDisputed && <Badge variant="destructive" className="ml-2">Disputed</Badge>}
-                                            </TableCell>
-                                            <TableCell>{payment.amount.toLocaleString()}</TableCell>
-                                            <TableCell>{payment.buyerName || payment.buyerId.substring(0,8)}</TableCell>
-                                            <TableCell>{payment.sellerName || payment.sellerId.substring(0,8)}</TableCell>
-                                            <TableCell>{formatDate(payment.createdAt)}</TableCell>
-                                            <TableCell><Badge variant={payment.status === 'disputed' ? 'destructive' : 'secondary'}>{payment.status.replace(/_/g, ' ')}</Badge></TableCell>
-                                            <TableCell className="space-x-2">
-                                                <AlertDialog>
-                                                    <AlertDialogTrigger asChild>
-                                                        <Button 
-                                                            variant="outline" 
-                                                            size="sm"
-                                                            disabled={processingPaymentId === payment.id}
-                                                        >
-                                                            {processingPaymentId === payment.id && actionType.current === 'release' ? <Icons.spinner className="mr-2 h-4 w-4 animate-spin" /> : null}
-                                                            Release
-                                                        </Button>
-                                                    </AlertDialogTrigger>
-                                                    <AlertDialogContent>
-                                                        <AlertDialogHeader>
-                                                            <AlertDialogTitle>Release Funds to Seller?</AlertDialogTitle>
-                                                            <AlertDialogDescription>
-                                                                This will transfer KES {payment.amount.toLocaleString()} to {payment.sellerName || `seller ${payment.sellerId.substring(0,8)}`}'s balance for item "{payment.itemDetails?.title || payment.itemId.substring(0,8)}". This action cannot be undone.
-                                                            </AlertDialogDescription>
-                                                        </AlertDialogHeader>
-                                                        <AlertDialogFooter>
-                                                            <AlertDialogCancel disabled={processingPaymentId === payment.id}>Cancel</AlertDialogCancel>
-                                                            <AlertDialogAction onClick={() => {actionType.current = 'release'; handleAdminAction(payment.id, 'release')}} disabled={processingPaymentId === payment.id}>
-                                                                {processingPaymentId === payment.id && actionType.current === 'release' ? <Icons.spinner className="mr-2 h-4 w-4 animate-spin" /> : null}
-                                                                Confirm Release
-                                                            </AlertDialogAction>
-                                                        </AlertDialogFooter>
-                                                    </AlertDialogContent>
-                                                </AlertDialog>
-
-                                                <AlertDialog>
-                                                    <AlertDialogTrigger asChild>
-                                                        <Button 
-                                                            variant="destructive" 
-                                                            size="sm"
-                                                            disabled={processingPaymentId === payment.id}
-                                                        >
-                                                             {processingPaymentId === payment.id && actionType.current === 'refund' ? <Icons.spinner className="mr-2 h-4 w-4 animate-spin" /> : null}
-                                                            Refund
-                                                        </Button>
-                                                    </AlertDialogTrigger>
-                                                    <AlertDialogContent>
-                                                        <AlertDialogHeader>
-                                                            <AlertDialogTitle>Refund Payment to Buyer?</AlertDialogTitle>
-                                                            <AlertDialogDescription>
-                                                                This will mark KES {payment.amount.toLocaleString()} for item "{payment.itemDetails?.title || payment.itemId.substring(0,8)}" as refunded to {payment.buyerName || `buyer ${payment.buyerId.substring(0,8)}`}.
-                                                                You will need to manually process the financial refund via Paystack dashboard. This database action cannot be undone.
-                                                            </AlertDialogDescription>
-                                                        </AlertDialogHeader>
-                                                        <AlertDialogFooter>
-                                                            <AlertDialogCancel disabled={processingPaymentId === payment.id}>Cancel</AlertDialogCancel>
-                                                            <AlertDialogAction onClick={() => {actionType.current = 'refund'; handleAdminAction(payment.id, 'refund')}} disabled={processingPaymentId === payment.id} className="bg-destructive hover:bg-destructive/90 text-destructive-foreground">
-                                                                {processingPaymentId === payment.id && actionType.current === 'refund' ? <Icons.spinner className="mr-2 h-4 w-4 animate-spin" /> : null}
-                                                                Confirm Refund
-                                                            </AlertDialogAction>
-                                                        </AlertDialogFooter>
-                                                    </AlertDialogContent>
-                                                </AlertDialog>
-                                            </TableCell>
+                            <div className="overflow-x-auto">
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead className="min-w-[150px]">Item</TableHead>
+                                            <TableHead>Amount</TableHead>
+                                            <TableHead>Reason</TableHead>
+                                            <TableHead className="min-w-[200px]">Description</TableHead>
+                                            <TableHead>Filed By</TableHead>
+                                            <TableHead>Other Party</TableHead>
+                                            <TableHead>Disputed On</TableHead>
+                                            <TableHead className="text-right">Actions</TableHead>
                                         </TableRow>
-                                    ))}
-                                </TableBody>
-                            </Table>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {disputes.map((dispute) => (
+                                            <TableRow key={dispute.id}>
+                                                <TableCell className="font-medium">
+                                                    {dispute.itemDetails?.title || dispute.itemId.substring(0,8)}
+                                                    <Link href={`/item/${dispute.itemId}`} target="_blank" className="ml-1 text-xs text-blue-500 hover:underline"> <Icons.externalLink size={12}/> </Link>
+                                                </TableCell>
+                                                <TableCell>KES {dispute.paymentDetails?.amount.toLocaleString() || 'N/A'}</TableCell>
+                                                <TableCell>{dispute.reason.replace(/_/g, ' ')}</TableCell>
+                                                <TableCell className="text-xs max-w-xs truncate" title={dispute.description}>{dispute.description}</TableCell>
+                                                <TableCell>{dispute.filedByUser?.name || dispute.filedByUserId.substring(0,8)}</TableCell>
+                                                <TableCell>{dispute.otherPartyUser?.name || dispute.otherPartyUserId.substring(0,8)}</TableCell>
+                                                <TableCell>{formatDate(dispute.createdAt)}</TableCell>
+                                                <TableCell className="text-right space-x-2 whitespace-nowrap">
+                                                    <AlertDialog>
+                                                        <AlertDialogTrigger asChild>
+                                                            <Button 
+                                                                variant="outline" 
+                                                                size="sm"
+                                                                disabled={processingDisputeId === dispute.id}
+                                                            >
+                                                                {processingDisputeId === dispute.id && actionTypeRef.current === 'release' ? <Icons.spinner className="mr-2 h-4 w-4 animate-spin" /> : null}
+                                                                Release Funds
+                                                            </Button>
+                                                        </AlertDialogTrigger>
+                                                        <AlertDialogContent>
+                                                            <AlertDialogHeader>
+                                                                <AlertDialogTitle>Release Funds to Seller?</AlertDialogTitle>
+                                                                <AlertDialogDescription>
+                                                                    For dispute #{dispute.id.substring(0,6)} on item "{dispute.itemDetails?.title || 'N/A'}".<br/>
+                                                                    This will transfer KES {dispute.paymentDetails?.amount.toLocaleString()} to {dispute.otherPartyUser?.name || 'seller'}'s balance. This action also resolves the dispute.
+                                                                </AlertDialogDescription>
+                                                            </AlertDialogHeader>
+                                                            <AlertDialogFooter>
+                                                                <AlertDialogCancel disabled={processingDisputeId === dispute.id}>Cancel</AlertDialogCancel>
+                                                                <AlertDialogAction onClick={() => handleAdminAction(dispute, 'release')} disabled={processingDisputeId === dispute.id}>
+                                                                    {processingDisputeId === dispute.id && actionTypeRef.current === 'release' ? <Icons.spinner className="mr-2 h-4 w-4 animate-spin" /> : null}
+                                                                    Confirm Release
+                                                                </AlertDialogAction>
+                                                            </AlertDialogFooter>
+                                                        </AlertDialogContent>
+                                                    </AlertDialog>
+
+                                                    <AlertDialog>
+                                                        <AlertDialogTrigger asChild>
+                                                            <Button 
+                                                                variant="destructive" 
+                                                                size="sm"
+                                                                disabled={processingDisputeId === dispute.id}
+                                                            >
+                                                                {processingDisputeId === dispute.id && actionTypeRef.current === 'refund' ? <Icons.spinner className="mr-2 h-4 w-4 animate-spin" /> : null}
+                                                                Refund Buyer
+                                                            </Button>
+                                                        </AlertDialogTrigger>
+                                                        <AlertDialogContent>
+                                                            <AlertDialogHeader>
+                                                                <AlertDialogTitle>Refund Payment to Buyer?</AlertDialogTitle>
+                                                                <AlertDialogDescription>
+                                                                    For dispute #{dispute.id.substring(0,6)} on item "{dispute.itemDetails?.title || 'N/A'}".<br/>
+                                                                    This will mark KES {dispute.paymentDetails?.amount.toLocaleString()} as refunded to {dispute.filedByUser?.name || 'buyer'}. 
+                                                                    The financial refund must be processed manually via the payment gateway. This action also resolves the dispute.
+                                                                </AlertDialogDescription>
+                                                            </AlertDialogHeader>
+                                                            <AlertDialogFooter>
+                                                                <AlertDialogCancel disabled={processingDisputeId === dispute.id}>Cancel</AlertDialogCancel>
+                                                                <AlertDialogAction onClick={() => handleAdminAction(dispute, 'refund')} disabled={processingDisputeId === dispute.id} className="bg-destructive hover:bg-destructive/90 text-destructive-foreground">
+                                                                    {processingDisputeId === dispute.id && actionTypeRef.current === 'refund' ? <Icons.spinner className="mr-2 h-4 w-4 animate-spin" /> : null}
+                                                                    Confirm Refund
+                                                                </AlertDialogAction>
+                                                            </AlertDialogFooter>
+                                                        </AlertDialogContent>
+                                                    </AlertDialog>
+                                                    {/* Add button/link to view full dispute details page if needed */}
+                                                </TableCell>
+                                            </TableRow>
+                                        ))}
+                                    </TableBody>
+                                </Table>
+                            </div>
                         )}
                     </CardContent>
                 </Card>
@@ -269,7 +293,3 @@ export default function AdminDisputesPage() {
     );
 }
 
-// Helper ref to manage action type for spinner display in AlertDialog
-// This is a bit of a workaround for conditional spinner in a shared component instance.
-// In a more complex scenario, consider separate state or component composition.
-const actionType = { current: null as 'release' | 'refund' | null };
