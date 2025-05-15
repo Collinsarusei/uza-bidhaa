@@ -183,6 +183,7 @@ export interface DisputeRecord {
 }
 
 export interface Message {
+  isSystemMessage: boolean;
   id: string;
   senderId: string;
   text: string;
