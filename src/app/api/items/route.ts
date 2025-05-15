@@ -1,11 +1,33 @@
+// src/app/api/items/route.ts
 import { NextResponse } from 'next/server';
 import type { Item } from '@/lib/types';
 import { adminDb } from '@/lib/firebase-admin';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from '../auth/[...nextauth]/route';
-import { FieldValue } from 'firebase-admin/firestore';
+import { FieldValue, Timestamp as AdminTimestamp } from 'firebase-admin/firestore';
 import { v4 as uuidv4 } from 'uuid';
-import { createNotification } from '@/lib/notifications'; // Import the helper
+import { createNotification } from '@/lib/notifications';
+
+// Helper to safely convert Firestore Admin Timestamp to ISO string or return null
+const adminTimestampToISOStringOrNull = (timestamp: any): string | null => {
+    if (timestamp instanceof AdminTimestamp) {
+        try {
+            return timestamp.toDate().toISOString();
+        } catch (e) {
+            console.error("Error converting admin timestamp to ISO string:", e);
+            return null;
+        }
+    }
+    if (typeof timestamp === 'string') {
+        try {
+            if (new Date(timestamp).toISOString() === timestamp) {
+                return timestamp;
+            }
+        } catch (e) { /* ignore */ }
+    }
+    return null;
+};
+
 
 // GET /api/items - Fetch items from Firestore with optional filtering
 export async function GET(request: Request) {
@@ -30,27 +52,40 @@ export async function GET(request: Request) {
             if (!itemDoc.exists) {
                 return NextResponse.json({ message: "Item not found" }, { status: 404 });
             }
-            return NextResponse.json([itemDoc.data()], { status: 200 });
+            const itemData = itemDoc.data();
+            if (itemData) {
+                const processedItem = {
+                    ...itemData,
+                    id: itemDoc.id,
+                    createdAt: adminTimestampToISOStringOrNull(itemData.createdAt),
+                    updatedAt: adminTimestampToISOStringOrNull(itemData.updatedAt),
+                };
+                return NextResponse.json([processedItem], { status: 200 });
+            }
+            return NextResponse.json({ message: "Item data malformed" }, { status: 500 });
+
         } else if (sellerIdToInclude) {
             console.log(`API: Filtering items to include only seller ID: ${sellerIdToInclude}`);
-            // Firestore index needed: sellerId ASC, createdAt DESC
             query = query.where('sellerId', '==', sellerIdToInclude).orderBy('createdAt', 'desc');
         } else if (userIdToExclude) {
             console.log(`API: Filtering items to exclude user ID: ${userIdToExclude}`);
-            // Firestore index needed: status ASC, createdAt DESC
-            // Fetch available items NOT belonging to the user
             query = query.where('status', '==', 'available').orderBy('createdAt', 'desc');
-            // Filtering out the user's own items happens later in code
         } else {
              console.log(`API: Fetching all available items.`);
-             // Firestore index needed: status ASC, createdAt DESC
              query = query.where('status', '==', 'available').orderBy('createdAt', 'desc');
         }
 
         const snapshot = await query.get();
-        let itemsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Item[];
+        let itemsData = snapshot.docs.map(doc => {
+            const data = doc.data();
+            return {
+                id: doc.id,
+                ...data,
+                createdAt: adminTimestampToISOStringOrNull(data.createdAt),
+                updatedAt: adminTimestampToISOStringOrNull(data.updatedAt),
+            } as Item;
+        });
 
-        // Apply exclusion filter in code if needed (for homepage)
         if (userIdToExclude && !sellerIdToInclude && !itemIdToFetch) {
              itemsData = itemsData.filter(item => item.sellerId !== userIdToExclude);
              console.log(`API: Found ${itemsData.length} items after excluding user ID: ${userIdToExclude}.`);
@@ -62,7 +97,6 @@ export async function GET(request: Request) {
 
     } catch (error: any) {
         console.error("API Error fetching items:", error);
-        // Check for missing index error specifically
         if (error.code === 'FAILED_PRECONDITION' && error.message.includes('index')) {
             console.error("Firestore index missing for items query. Check required indexes based on query type (status/createdAt or sellerId/createdAt).");
             return NextResponse.json({ message: 'Database query failed. Index potentially missing.', details: error.message }, { status: 500 });
@@ -88,20 +122,18 @@ export async function POST(request: Request) {
     }
     const sellerId = session.user.id;
 
-    // --- TODO: Check KYC Status --- 
-
     try {
         const body = await request.json();
         console.log("API: Received item data for creation:", body);
 
-        const requiredFields = ['title', 'description', 'price', 'category', 'location', 'quantity']; // Added quantity
+        const requiredFields = ['title', 'description', 'price', 'category', 'location', 'quantity'];
         const missingFields = requiredFields.filter(field => !(field in body) || body[field] === undefined || body[field] === null || body[field] === '');
 
         if (missingFields.length > 0) {
             console.log(`API Create Item: Missing required fields: ${missingFields.join(', ')}`);
             return NextResponse.json({ message: `Missing required fields: ${missingFields.join(', ')}` }, { status: 400 });
         }
-        
+
         const quantity = parseInt(body.quantity);
         if (isNaN(quantity) || quantity <= 0) {
             return NextResponse.json({ message: 'Invalid quantity. Must be a number greater than 0.'}, { status: 400 });
@@ -115,13 +147,13 @@ export async function POST(request: Request) {
             description: body.description,
             category: body.category,
             price: parseFloat(body.price) || 0,
-            quantity: quantity, // Save parsed quantity
+            quantity: quantity,
             location: body.location,
             offersDelivery: body.offersDelivery ?? false,
             acceptsInstallments: body.acceptsInstallments ?? false,
             discountPercentage: body.discountPercentage ?? null,
             mediaUrls: body.mediaUrls ?? [],
-            status: 'available', // Initial status
+            status: 'available',
             createdAt: FieldValue.serverTimestamp(),
             updatedAt: FieldValue.serverTimestamp(),
          };
@@ -129,7 +161,6 @@ export async function POST(request: Request) {
         await itemsCollection.doc(itemId).set(newItemData);
         console.log(`API: Created new item in Firestore with ID: ${itemId} by seller: ${sellerId} with quantity: ${quantity}`);
 
-        // --- Create Notification for Seller --- 
         try {
             await createNotification({
                 userId: sellerId,
@@ -140,16 +171,22 @@ export async function POST(request: Request) {
         } catch (notificationError) {
              console.error("Failed to create notification after listing item:", notificationError);
         }
-        // --- End Notification --- 
 
         const createdDoc = await itemsCollection.doc(itemId).get();
         const responseData = createdDoc.data();
 
-        return NextResponse.json(responseData, { status: 201 });
+        if (responseData) {
+            const processedResponse = {
+                ...responseData,
+                createdAt: adminTimestampToISOStringOrNull(responseData.createdAt),
+                updatedAt: adminTimestampToISOStringOrNull(responseData.updatedAt),
+            };
+            return NextResponse.json(processedResponse, { status: 201 });
+        }
+        return NextResponse.json({ message: "Failed to retrieve created item data"}, { status: 500});
 
     } catch (error: any) {
         console.error("API Error creating item:", error);
         return NextResponse.json({ message: 'Failed to create item', error: error.message }, { status: 500 });
     }
 }
-

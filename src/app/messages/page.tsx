@@ -35,7 +35,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation'; // Not used, but kept from original
 
 // Firebase imports for real-time updates
-import { adminDb } from '@/lib/firebase-admin'; // Adjust path if your firebase init is elsewhere
+import {adminDb} from '@/lib/firebase-admin'; // Adjust path if your firebase init is elsewhere
 import { collection, query, orderBy, onSnapshot, doc, Timestamp as FirestoreTimestamp } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 

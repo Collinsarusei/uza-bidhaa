@@ -1,10 +1,32 @@
+// src/app/api/notifications/route.ts
 import { NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
-import { authOptions } from '../auth/[...nextauth]/route'; // Adjust path if needed
+import { authOptions } from '../auth/[...nextauth]/route';
 import { adminDb } from '@/lib/firebase-admin';
-import { Notification } from '@/lib/types'; // Assuming Notification type is defined in types.ts
+import { Notification } from '@/lib/types';
+import { Timestamp as AdminTimestamp } from 'firebase-admin/firestore'; // Import AdminTimestamp
 
-const notificationsCollection = adminDb.collection('notifications');
+const notificationsCollection = adminDb!.collection('notifications');
+
+// Helper to safely convert Firestore Admin Timestamp to ISO string or return null
+const adminTimestampToISOStringOrNull = (timestamp: any): string | null => {
+    if (timestamp instanceof AdminTimestamp) {
+        try {
+            return timestamp.toDate().toISOString();
+        } catch (e) {
+            console.error("Error converting admin timestamp to ISO string:", e);
+            return null;
+        }
+    }
+    if (typeof timestamp === 'string') {
+        try {
+            if (new Date(timestamp).toISOString() === timestamp) {
+                return timestamp;
+            }
+        } catch (e) { /* ignore */ }
+    }
+    return null;
+};
 
 // GET /api/notifications - Fetch notifications for the authenticated user
 export async function GET(request: Request) {
@@ -18,24 +40,27 @@ export async function GET(request: Request) {
     const userId = session.user.id;
 
     try {
-        // Query notifications for the current user, order by most recent
         const query = notificationsCollection
             .where('userId', '==', userId)
             .orderBy('createdAt', 'desc');
 
         const snapshot = await query.get();
 
-        const notificationsData = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-        })) as Notification[];
+        const notificationsData = snapshot.docs.map(doc => {
+            const data = doc.data();
+            return {
+                id: doc.id,
+                ...data,
+                createdAt: adminTimestampToISOStringOrNull(data.createdAt),
+                readAt: adminTimestampToISOStringOrNull(data.readAt),
+            } as Notification;
+        });
 
         console.log(`API: Found ${notificationsData.length} notifications for user ${userId}`);
         return NextResponse.json(notificationsData);
 
     } catch (error: any) {
         console.error("API Error fetching notifications:", error);
-        // Check for missing index error specifically
         if (error.code === 'FAILED_PRECONDITION' && error.message.includes('index')) {
              console.error("Firestore index missing for notifications query. Please create an index on 'userId' (ascending) and 'createdAt' (descending) in the 'notifications' collection.");
             return NextResponse.json({ message: 'Database query failed. Index potentially missing.', details: error.message }, { status: 500 });
@@ -43,18 +68,3 @@ export async function GET(request: Request) {
         return NextResponse.json({ message: 'Failed to fetch notifications', error: error.message }, { status: 500 });
     }
 }
-
-// --- TODO (Future Implementation) ---
-
-// POST /api/notifications - Potentially for manually creating notifications (less common)
-
-// PUT /api/notifications/{id} - To mark a specific notification as read
-// export async function PUT(request: Request, { params }: { params: { id: string } }) {
-//     const notificationId = params.id;
-//     // ... logic to update readStatus for notificationId ...
-// }
-
-// PUT /api/notifications/mark-all-read - To mark all user notifications as read
-// export async function PUT(request: Request) { // Needs a more specific route or body parameter
-//     // ... logic to update readStatus for all user notifications ...
-// }

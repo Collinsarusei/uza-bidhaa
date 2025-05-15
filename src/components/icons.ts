@@ -5,7 +5,7 @@ import {
   ArrowLeft,
   ArrowRight,
   BellOff,
-  Check,
+  Check,  // <<< --- ADD THIS LINE --- <<<
   ChevronsUpDown,
   Circle,
   CircleDollarSign,
@@ -54,9 +54,13 @@ import {
   DollarSign, // Added
   Receipt,    // Added
   Archive,    // Added as an alternative for listX if needed elsewhere
+  // LucideIcon type can be imported if you want to type the Icons object explicitly
+  // type LucideIcon as LucideIconType // example, if needed
 } from "lucide-react";
 
 // Re-export all icons for easier import
+// If you want to type this object, you can do:
+// export const Icons: { [key: string]: LucideIconType } = {
 export const Icons = {
   alertTriangle: AlertTriangle,
   arrowLeft: ArrowLeft,
@@ -106,10 +110,16 @@ export const Icons = {
   bot: Bot,
   mapPin: MapPin,
   layoutGrid: LayoutGrid,
-  package: Package,      // Added export
-  alertCircle: AlertCircle, // Added export
-  dollarSign: DollarSign, // Added export
-  receipt: Receipt,      // Added export
-  archive: Archive,        // Added export (used for listX replacement)
-  spinner: Loader2,
+  package: Package,
+  alertCircle: AlertCircle,
+  dollarSign: DollarSign,
+  receipt: Receipt,
+  archive: Archive,
+  spinner: Loader2, // spinner is often an alias for Loader2
+  // Ensure the key here matches how you use it in your components, e.g., Icons.CheckAll or Icons.checkAll
+  // If you used Icons.CheckAll in NotificationsPage, then the key should be CheckAll: CheckAll
+  // If you used Icons.checkAll, then the key should be checkAll: CheckAll
+  // Lucide exports are typically camelCase like `checkAll`
+  // To match your usage `Icons.CheckAll`, the key should be `CheckAll`
+
 };
