@@ -6,9 +6,9 @@ import prisma from '@/lib/prisma';
 
 export async function POST(
     req: Request,
-    context: { params: { conversationId: string } }
+    { params }: { params: { conversationId: string } }
 ) {
-    const { conversationId } = context.params;
+    const { conversationId } = params;
     console.log(`--- API POST /api/conversations/${conversationId}/mark-as-read (Prisma) START ---`);
 
     const session = await getServerSession(authOptions);
