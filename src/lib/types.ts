@@ -1,33 +1,50 @@
 // src/lib/types.ts
-import { Timestamp } from 'firebase-admin/firestore';
+
+import { PaymentStatus } from '@prisma/client';
 
 export type ApiTimestamp = string | null;
 
-export interface UserProfile {
-  lastVerifiedPayoutMethod: string;
+// --- Enums (matching Prisma string values) ---
+export type UserRoleType = 'USER' | 'ADMIN';
+export type UserStatusType = 'ACTIVE' | 'SUSPENDED' | 'BANNED';
+export type ItemStatusType = 'AVAILABLE' | 'PENDING_PAYMENT' | 'PAID_ESCROW' | 'SOLD' | 'DELISTED' | 'DISPUTED';
+export type PaymentStatusType = 'INITIATED' | 'PENDING_CONFIRMATION' | 'SUCCESSFUL_ESCROW' | 'RELEASED_TO_SELLER' | 'REFUNDED_TO_BUYER' | 'FAILED' | 'CANCELLED' | 'DISPUTED';
+export type DisputeStatusType = 'PENDING_BUYER' | 'PENDING_SELLER' | 'PENDING_ADMIN' | 'RESOLVED_REFUND' | 'RESOLVED_RELEASE_PAYMENT' | 'CLOSED';
+export type UserWithdrawalStatusType = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+export type AdminFeeWithdrawalStatusType = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+export type EarningStatusType = 'AVAILABLE' // Add more if needed, e.g., REVERSED
+
+// --- Main Data Structures ---
+
+export interface UserProfile { // For general user profile display, often from /api/user/me
   id: string;
-  name: string;
-  username?: string;
-  email: string;
-  phoneNumber: string;
+  name: string | null;
+  email: string | null;
+  image?: string | null; // Was profilePictureUrl, maps to Prisma 'image'
+  phoneNumber: string | null;
   location?: string | null;
-  profilePictureUrl?: string | null;
-  createdAt: ApiTimestamp;
-  updatedAt: ApiTimestamp;
-  nameLastUpdatedAt?: ApiTimestamp;
-  usernameLastUpdatedAt?: ApiTimestamp;
-  locationLastUpdatedAt?: ApiTimestamp;
-  mpesaLastUpdatedAt?: ApiTimestamp;
   mpesaPhoneNumber?: string | null;
+  
+  role?: UserRoleType;
+  status?: UserStatusType;
+  kycVerified?: boolean;
+  phoneVerified?: boolean;
+  availableBalance?: number | string; // Prisma Decimal becomes number, then potentially string in JSON
+
+  // Payout related fields from Prisma User model
+  paystackRecipientCode?: string | null;
+  lastVerifiedPayoutMethod?: string | null; 
+  lastVerifiedMpesa?: string | null; 
+  lastVerifiedBankAcc?: string | null; 
+  lastVerifiedBankCode?: string | null; 
   bankName?: string | null;
   bankAccountNumber?: string | null;
   bankCode?: string | null;
-  paystackRecipientCode?: string | null;
-  lastVerifiedMpesa?: string | null;
-  lastVerifiedBankAcc?: string | null;
-  lastVerifiedBankCode?: string | null;
-  availableBalance?: number;
-  isSuspended?: boolean;
+
+  createdAt: ApiTimestamp;
+  updatedAt: ApiTimestamp;
+  nameLastUpdatedAt?: ApiTimestamp;
+  // Add other LastUpdatedAt fields if implemented with cooldowns (e.g., locationLastUpdatedAt)
 }
 
 export interface Item {
@@ -35,137 +52,210 @@ export interface Item {
   sellerId: string;
   title: string;
   description: string;
+  price: number | string; // Prisma Decimal
   category: string;
-  price: number;
-  location: string;
+  location?: string | null;
+  quantity: number;
+  status: ItemStatusType;
+  mediaUrls: string[];
   offersDelivery: boolean;
   acceptsInstallments: boolean;
-  discountPercentage?: number | null;
-  mediaUrls: string[];
-  quantity?: number;
-  status: 'available' | 'pending' | 'paid_escrow' | 'releasing' | 'released' | 'release_failed' | 'payout_initiated' | 'payout_failed' | 'failed' | 'cancelled' | 'sold' | 'disputed' | 'under_review';
+  discountPercentage?: number | null; // Prisma Float
   createdAt: ApiTimestamp;
   updatedAt: ApiTimestamp;
-}
-
-export type NotificationType = 
-  'new_message' | 
-  'item_listed' | 
-  'payment_received' | 
-  'payment_released' | 
-  'unusual_activity' | 
-  'item_sold' | 
-  'kyc_approved' | 
-  'kyc_rejected' | 
-  'message_approved' | 
-  'funds_available' | 
-  'withdrawal_initiated' | 
-  'withdrawal_completed' | 
-  'withdrawal_failed' | 
-  'admin_action' | 
-  'dispute_filed' | 
-  'new_dispute_admin';
-
-export interface Notification {
-  id: string;
-  userId: string;
-  type: NotificationType;
-  message: string;
-  relatedItemId?: string | null;
-  relatedPaymentId?: string | null;
-  relatedMessageId?: string | null;
-  relatedUserId?: string | null;
-  relatedWithdrawalId?: string | null;
-  relatedDisputeId?: string | null;
-  isRead: boolean;
-  createdAt: ApiTimestamp;
-  readAt?: ApiTimestamp;
+  seller?: Partial<UserProfile>; // Optional: if seller details are embedded
+  // For API responses that include item counts from user profile:
+  _count?: {
+    items?: number;
+    paymentsAsBuyer?: number;
+    paymentsAsSeller?: number;
+    disputesFiled?: number;
+  }
 }
 
 export interface Payment {
-  itemTitle: string; // Consider making optional if itemDetails is always fetched
   id: string;
   itemId: string;
   buyerId: string;
   sellerId: string;
-  amount: number;
+  amount: number | string; // Prisma Decimal
+  platformFeeCharged?: number | string | null; // Prisma Decimal
   currency: string;
-  status: 'initiated' | 'paid_to_platform' | 'released_to_seller_balance' | 'failed' | 'cancelled' | 'refunded' | 'disputed' | 'refund_pending' | 'admin_review';
-  paymentGateway?: 'intasend' | 'paystack' | string;
-  intasendInvoiceId?: string | null;
-  intasendTrackingId?: string | null;
+  status: PaymentStatusType;
+  paymentGateway: string;
   gatewayTransactionId?: string | null;
-  paystackReference?: string;
-  paystackAuthorizationUrl?: string;
-  paystackAccessCode?: string;
+  paystackReference?: string | null;
+  paystackAccessCode?: string | null;
+  paystackAuthorizationUrl?: string | null;
   failureReason?: string | null;
+  activeDisputeId?: string | null;
   createdAt: ApiTimestamp;
   updatedAt: ApiTimestamp;
-  isDisputed?: boolean;
-  disputeReason?: string | null;
-  disputeSubmittedAt?: ApiTimestamp | null;
-  disputeFiledBy?: string | null;
-  disputeId?: string | null; // Added to link payment to a specific dispute record
+  itemTitle?: string | null;
+  item?: Partial<Pick<Item, 'id' | 'title' | 'mediaUrls'>>; // Often included in order lists
 }
 
-// Interface for displaying orders, often Payments augmented with Item details
-export interface OrderDisplayItem extends Payment {
-    itemDetails?: Partial<Item>; // Partial to allow for cases where details might be minimal or missing
+export interface ConversationParticipantInfo {
+    userId: string;
+    lastReadAt: ApiTimestamp;
+    // user details can be added if needed by client
+}
+
+export interface Conversation {
+  id: string;
+  itemId: string;
+  initiatorId: string;
+  approved: boolean;
+  approvedAt?: ApiTimestamp;
+  createdAt: ApiTimestamp;
+  lastMessageSnippet?: string | null;
+  lastMessageTimestamp?: ApiTimestamp;
+  hasShownPaymentWarning: boolean;
+  itemTitle?: string | null;
+  itemImageUrl?: string | null;
+
+  // From API responses, these are often enriched:
+  participants?: Partial<UserProfile>[]; // Basic info of participants
+  item?: Partial<Pick<Item, 'id' | 'title' | 'mediaUrls' | 'sellerId'>>;
+  unread?: boolean; // Calculated field for current user
+  lastMessageSenderId?: string | null;
+  participantsInfo?: ConversationParticipantInfo[]; // Raw participant info for read status
+}
+
+export interface Message {
+  id: string;
+  conversationId: string;
+  senderId: string;
+  content: string;
+  isSystemMessage?: boolean | null;
+  createdAt: ApiTimestamp;
+  sender?: Partial<Pick<UserProfile, 'id' | 'name' | 'image'>>; // Often included
+}
+
+export interface Dispute {
+  id: string;
+  itemId: string;
+  paymentId: string;
+  filedByUserId: string;
+  otherPartyUserId: string;
+  reason: string;
+  description: string;
+  status: DisputeStatusType;
+  resolutionNotes?: string | null;
+  resolvedAt?: ApiTimestamp;
+  createdAt: ApiTimestamp;
+  updatedAt: ApiTimestamp;
+
+  // Enriched data often included for admin views:
+  paymentDetails?: Partial<Payment>; 
+  itemDetails?: Partial<Item>;
+  filedByUserPublic?: Partial<Pick<UserProfile, 'id' | 'name' | 'email'>>;
+  otherPartyUserPublic?: Partial<Pick<UserProfile, 'id' | 'name' | 'email'>>;
+}
+
+export interface FeeRule {
+  id: string;
+  name: string;
+  description?: string | null;
+  minAmount: number | string; // Prisma Decimal
+  maxAmount?: number | string | null; // Prisma Decimal
+  feePercentage: number | string; // Prisma Decimal
+  isActive: boolean;
+  priority: number;
+  createdAt: ApiTimestamp;
+  updatedAt: ApiTimestamp;
+}
+
+export interface PlatformSettingData { // Renamed from PlatformSettings to avoid conflict if it was a class
+  id: string;
+  defaultFeePercentage: number | string; // Prisma Decimal
+  totalPlatformFees: number | string; // Prisma Decimal
+  updatedAt: ApiTimestamp;
+}
+
+export interface PlatformFee {
+  id: string;
+  relatedPaymentId: string;
+  relatedItemId: string;
+  sellerId: string;
+  amount: number | string; // Prisma Decimal
+  appliedFeePercentage?: number | string | null; // Prisma Decimal
+  appliedFeeRuleId?: string | null;
+  createdAt: ApiTimestamp;
+  // Enriched data for admin views:
+  payment?: Partial<Pick<Payment, 'id' | 'amount' | 'createdAt'>>;
+  item?: Partial<Pick<Item, 'id' | 'title'>>;
+  seller?: Partial<Pick<UserProfile, 'id' | 'name' | 'email'>>;
+  appliedFeeRule?: Partial<Pick<FeeRule, 'id' | 'name' | 'feePercentage'>>;
+}
+
+export interface UserWithdrawal {
+  id: string;
+  userId: string;
+  amount: number | string; // Prisma Decimal
+  currency: string;
+  status: UserWithdrawalStatusType;
+  payoutMethod?: string | null;
+  payoutDetailsMasked?: string | null;
+  initiatedAt: ApiTimestamp;
+  updatedAt: ApiTimestamp;
+  completedAt?: ApiTimestamp;
+  failureReason?: string | null;
+  paymentGateway: string;
+  paystackTransferCode?: string | null;
+  paystackRecipientCode?: string | null;
+  paystackTransferReference?: string | null;
+}
+
+export interface AdminFeeWithdrawal {
+  id: string;
+  adminUserId: string;
+  amount: number | string; // Prisma Decimal
+  currency: string;
+  initiatedAt: ApiTimestamp;
+  updatedAt: ApiTimestamp;
+  paymentGateway: string;
+  payoutMethod: string;
+  status: AdminFeeWithdrawalStatusType;
+  completedAt?: ApiTimestamp;
+  failureReason?: string | null;
+  paystackRecipientCode?: string | null;
+  paystackTransferCode?: string | null;
+  paystackTransferReference?: string | null;
 }
 
 export interface Earning {
-    id: string;
-    userId: string;
-    amount: number;
-    relatedPaymentId: string;
-    relatedItemId: string;
-    status: 'available' | 'withdrawal_pending' | 'withdrawn';
-    createdAt: ApiTimestamp;
-    withdrawalId?: string | null;
+  id: string;
+  userId: string;
+  amount: number | string; // Prisma Decimal (net amount for seller)
+  relatedPaymentId: string;
+  relatedItemId: string;
+  itemTitleSnapshot?: string | null;
+  status: EarningStatusType;
+  createdAt: ApiTimestamp;
+  updatedAt: ApiTimestamp;
+  // Optional: include partial payment or item details if needed by frontend
+  // payment?: Partial<Pick<Payment, 'id' | 'amount'>>;
+  // item?: Partial<Pick<Item, 'id' | 'title'>>;
 }
 
-export interface Withdrawal {
-    id: string;
-    userId: string;
-    amount: number;
-    status: 'pending_approval' | 'pending_gateway' | 'processing' | 'completed' | 'failed';
-    payoutMethod?: 'mobile_money' | 'bank_account' | string;
-    payoutDetailsMasked?: string;
-    mpesaPhoneNumber?: string | null;
-    paymentGateway?: 'intasend' | 'paystack' | string;
-    intasendTransferId?: string | null;
-    paystackRecipientCode?: string | null;
-    paystackTransferReference?: string | null;
-    paystackTransferCode?: string | null;
-    failureReason?: string | null;
-    requestedAt: ApiTimestamp;
-    updatedAt?: ApiTimestamp;
-    completedAt?: ApiTimestamp;
+export interface Notification {
+  id: string;
+  userId: string;
+  type: string;
+  message: string;
+  relatedItemId?: string | null;
+  relatedMessageId?: string | null;
+  relatedUserId?: string | null;
+  isRead: boolean;
+  createdAt: string | null;
+  readAt: string | null;
 }
 
-export interface AdminPlatformFeeWithdrawal {
-    id: string;
-    adminUserId: string;
-    amount: number;
-    currency: string;
-    status: 'pending_gateway' | 'processing' | 'completed' | 'failed';
-    payoutMethod: 'mpesa' | 'bank_account';
-    destinationDetails: {
-        accountName?: string | null;
-        accountNumber: string;
-        bankCode?: string | null;
-        bankName?: string | null;
-    };
-    paymentGateway: 'paystack';
-    paystackTransferReference?: string;
-    paystackTransferCode?: string;
-    failureReason?: string | null;
-    initiatedAt: ApiTimestamp;
-    updatedAt: ApiTimestamp;
-    completedAt?: ApiTimestamp;
+export interface OrderDisplayItem extends Omit<Payment, 'status'> {
+    status: PaymentStatus;
+    itemDetails?: Partial<Item>;
 }
-
-export type DisputeStatus = 'open' | 'pending_admin' | 'pending_buyer_response' | 'pending_seller_response' | 'resolved_refund' | 'resolved_release' | 'closed_other';
 
 export interface DisputeRecord {
     id: string;
@@ -175,54 +265,44 @@ export interface DisputeRecord {
     otherPartyUserId: string;
     reason: string;
     description: string;
-    status: DisputeStatus;
-    resolutionNotes?: string | null;
-    createdAt: ApiTimestamp;
-    updatedAt: ApiTimestamp;
-    resolvedAt?: ApiTimestamp | null;
-}
-
-export interface Message {
-  isSystemMessage: boolean;
-  id: string;
-  senderId: string;
-  text: string;
-  timestamp: ApiTimestamp;
-}
-
-export interface ParticipantData {
-    name?: string | null;
-    avatar?: string | null;
-}
-
-export interface Conversation {
-    id: string;
-    participantIds: string[];
-    itemId: string;
-    itemTitle?: string | null;
-    itemImageUrl?: string | null;
-    createdAt: ApiTimestamp;
-    lastMessageTimestamp: ApiTimestamp;
-    lastMessageSnippet?: string | null;
-    approved: boolean;
-    initiatorId: string;
-    approvedAt?: ApiTimestamp;
-    participantsData?: { [userId: string]: ParticipantData; };
-    readStatus?: { [userId:string]: ApiTimestamp; };
-}
-
-export interface PlatformSettings {
-    id?: string;
-    feePercentage: number;
-    totalPlatformFees?: number;
-    updatedAt?: ApiTimestamp;
+    status: 'PENDING_ADMIN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED';
+    createdAt: string;
+    updatedAt: string;
 }
 
 export interface PlatformFeeRecord {
     id: string;
-    amount: number;
     relatedPaymentId: string;
     relatedItemId: string;
     sellerId: string;
-    createdAt: ApiTimestamp;
+    amount: number;
+    appliedFeePercentage: number;
+    appliedFeeRuleId: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+    payment?: {
+        id: string;
+        amount: number;
+        createdAt: Date;
+        item?: {
+            id: string;
+            title: string;
+        };
+    };
+    item?: {
+        id: string;
+        title: string;
+    };
+    seller?: {
+        id: string;
+        name: string | null;
+        email: string | null;
+    };
+    appliedFeeRule?: {
+        id: string;
+        name: string;
+        feePercentage: number;
+    };
 }
+
+// You might have more types, e.g., for API request bodies or specific UI components.

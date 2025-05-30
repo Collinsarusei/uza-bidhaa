@@ -2,206 +2,175 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from '../../auth/[...nextauth]/route';
-import { adminDb } from '@/lib/firebase-admin'; 
-import { FieldValue } from 'firebase-admin/firestore';
+import prisma from '@/lib/prisma';
 import * as z from 'zod';
 import { createNotification } from '@/lib/notifications';
-import { Earning, Payment, PlatformSettings, PlatformFeeRecord, Item } from '@/lib/types'; 
-import { v4 as uuidv4 } from 'uuid';
+import { Prisma } from '@prisma/client';
+import { Decimal } from '@prisma/client/runtime/library';
 
 const confirmSchema = z.object({
     paymentId: z.string().min(1, "Payment ID is required"),
 });
 
-const DEFAULT_PLATFORM_FEE_PERCENTAGE = 0.10; 
-
-async function getPlatformFeePercentage(): Promise<number> {
-    if (!adminDb) {
-        console.warn("getPlatformFeePercentage: Firebase Admin DB not initialized. Using default fee.");
-        return DEFAULT_PLATFORM_FEE_PERCENTAGE;
-    }
-    try {
-        const feeDocRef = adminDb.collection('settings').doc('platformFee'); 
-        const docSnap = await feeDocRef.get();
-        if (docSnap.exists) {
-            const feeSettings = docSnap.data() as PlatformSettings;
-            if (typeof feeSettings.feePercentage === 'number' && feeSettings.feePercentage >= 0 && feeSettings.feePercentage <= 100) {
-                console.log(`getPlatformFeePercentage: Using fee from Firestore: ${feeSettings.feePercentage}%`);
-                return feeSettings.feePercentage / 100; 
-            }
+async function calculateTieredPlatformFee(amount: Decimal): Promise<{
+    fee: Decimal;
+    netAmount: Decimal;
+    appliedFeePercentage: Decimal;
+    appliedFeeRuleId: string | null;
+}> {
+    const activeFeeRules = await prisma.feeRule.findMany({
+        where: { isActive: true },
+        orderBy: { priority: 'desc' },
+    });
+    let feePercentage: Decimal | null = null;
+    let ruleId: string | null = null;
+    for (const feeRule of activeFeeRules) {
+        if (feeRule.minAmount !== null && amount.gte(feeRule.minAmount) && (feeRule.maxAmount === null || amount.lte(feeRule.maxAmount))) {
+            feePercentage = feeRule.feePercentage;
+            ruleId = feeRule.id;
+            break;
         }
-        console.log(`getPlatformFeePercentage: Fee not set or invalid in Firestore. Using default fee.`);
-    } catch (error) {
-        console.error("Error fetching platform fee from Firestore:", error);
     }
-    return DEFAULT_PLATFORM_FEE_PERCENTAGE;
+    if (feePercentage === null) {
+        const platformSettings = await prisma.platformSetting.findUnique({ where: { id: 'global_settings' } });
+        feePercentage = platformSettings?.defaultFeePercentage ?? new Decimal(0);
+        console.log(`No specific fee rule for amount ${amount}. Using default: ${feePercentage}%`);
+    }
+    const feeRate = feePercentage!.div(100);
+    const calculatedFee = amount.mul(feeRate).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    const netAmountForSeller = amount.sub(calculatedFee);
+    return {
+        fee: calculatedFee,
+        netAmount: netAmountForSeller,
+        appliedFeePercentage: feePercentage!,
+        appliedFeeRuleId: ruleId,
+    };
 }
 
-const calculateFee = async (amount: number): Promise<{ fee: number, netAmount: number }> => {
-    const platformFeeRate = await getPlatformFeePercentage();
-    const fee = Math.round(amount * platformFeeRate * 100) / 100; 
-    const netAmount = Math.round((amount - fee) * 100) / 100;
-    return { fee, netAmount };
-};
-
 export async function POST(req: Request) {
-    console.log("--- API POST /api/payment/confirm-receipt START ---");
-
-    if (!adminDb) {
-        console.error("Confirm Receipt Error: Firebase Admin DB not initialized.");
-        return NextResponse.json({ message: 'Server configuration error.' }, { status: 500 });
-    }
+    console.log("--- API POST /api/payment/confirm-receipt (Prisma V3 - Create Earning) START ---");
 
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) {
-        console.warn("Confirm Receipt: Unauthorized attempt.");
         return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
     }
     const buyerId = session.user.id;
-    console.log(`Confirm Receipt: Authenticated as buyer ${buyerId}`);
 
     try {
-        let body;
-        try { body = await req.json(); } catch { return NextResponse.json({ message: 'Invalid request body.' }, { status: 400 }); }
+        let body; 
+        try { body = await req.json(); } catch { return NextResponse.json({ message: 'Invalid JSON body.'}, { status: 400}); }
         
         const validation = confirmSchema.safeParse(body);
         if (!validation.success) {
              return NextResponse.json({ message: 'Invalid input.', errors: validation.error.flatten().fieldErrors }, { status: 400 });
         }
         const { paymentId } = validation.data;
-        console.log(`Confirm Receipt: Request for paymentId: ${paymentId}`);
 
-        const paymentRef = adminDb.collection('payments').doc(paymentId);
-        const platformFeeSettingsRef = adminDb.collection('settings').doc('platformFee');
-
-        const result = await adminDb.runTransaction(async (transaction) => {
-            const paymentDoc = await transaction.get(paymentRef);
-            if (!paymentDoc.exists) {
-                 console.warn(`Confirm Receipt: Payment ${paymentId} not found.`);
-                 throw new Error('Payment record not found.');
-            }
-            const paymentData = paymentDoc.data() as Payment;
-
-            if (paymentData.buyerId !== buyerId) {
-                 console.warn(`Confirm Receipt: User ${buyerId} is not the buyer for payment ${paymentId}.`);
-                throw new Error('Forbidden: You are not the buyer for this order.');
-            }
-            if (paymentData.status !== 'paid_to_platform') {
-                console.log(`Confirm Receipt: Payment ${paymentId} has status ${paymentData.status}, cannot confirm receipt.`);
-                 throw new Error(`Cannot confirm receipt for order with status: ${paymentData.status}.`);
-            }
-
-            const { fee, netAmount } = await calculateFee(paymentData.amount);
-            console.log(`Confirm Receipt: Calculated fee=${fee}, netAmount=${netAmount} for payment ${paymentId}`);
-
-            const sellerId = paymentData.sellerId;
-            if (!sellerId) throw new Error('Seller ID missing on payment record.');
-            
-            const itemRef = adminDb!.collection('items').doc(paymentData.itemId);
-            const sellerRef = adminDb!.collection('users').doc(sellerId);
-            const earningId = uuidv4();
-            const earningRef = sellerRef.collection('earnings').doc(earningId);
-            const platformFeeRecordId = uuidv4();
-            const platformFeeRecordRef = adminDb!.collection('platformFees').doc(platformFeeRecordId);
-
-            // Get item to check quantity
-            const itemDoc = await transaction.get(itemRef);
-            if (!itemDoc.exists) {
-                throw new Error('Item related to payment not found.');
-            }
-            const itemData = itemDoc.data() as Item;
-            const currentQuantity = itemData.quantity !== undefined ? itemData.quantity : 1; // Default to 1 if undefined
-
-            // Update item quantity and status
-            const newQuantity = currentQuantity - 1;
-            let newItemStatus: Item['status'] = itemData.status;
-            if (newQuantity <= 0) {
-                newItemStatus = 'sold';
-            }
-
-            transaction.update(itemRef, {
-                quantity: newQuantity > 0 ? newQuantity : 0, // Ensure quantity doesn't go below 0
-                status: newItemStatus,
-                updatedAt: FieldValue.serverTimestamp(),
+        const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+            const payment = await tx.payment.findUnique({
+                where: { id: paymentId },
+                include: { item: { select: { id: true, title: true, quantity: true, status: true } } }
             });
-            console.log(`Confirm Receipt: Item ${paymentData.itemId} quantity updated from ${currentQuantity} to ${newQuantity}. Status set to ${newItemStatus}.`);
 
-            const earningData: Omit<Earning, 'id' | 'createdAt'> = {
-                 userId: sellerId,
-                 amount: netAmount,
-                 relatedPaymentId: paymentId,
-                 relatedItemId: paymentData.itemId,
-                 status: 'available', 
+            if (!payment) throw new Error('Payment record not found.');
+            if (payment.buyerId !== buyerId) throw new Error('Forbidden: You are not the buyer.');
+            if (payment.status !== 'SUCCESSFUL_ESCROW') {
+                throw new Error(`Cannot confirm receipt. Payment status: ${payment.status}. Expected SUCCESSFUL_ESCROW.`);
+            }
+            if (!payment.item) throw new Error('Item associated with payment not found.');
+
+            const { fee, netAmount, appliedFeePercentage, appliedFeeRuleId } = await calculateTieredPlatformFee(payment.amount);
+            console.log(`Confirm Receipt: Payment ${paymentId}, Fee=${fee}, Net=${netAmount}`);
+
+            const currentItem = await tx.item.findUnique({ where: {id: payment.itemId }});
+            if (!currentItem) throw new Error("Item not found for quantity update.");
+            const newQuantity = currentItem.quantity - 1;
+            let newItemStatus = currentItem.status;
+            if (newQuantity <= 0) {
+                newItemStatus = 'SOLD';
+            } else {
+                newItemStatus = 'AVAILABLE';
+            }
+            await tx.item.update({
+                where: { id: payment.itemId },
+                data: { quantity: newQuantity < 0 ? 0 : newQuantity, status: newItemStatus },
+            });
+            console.log(`Confirm Receipt: Item ${payment.itemId} quantity updated to ${newQuantity}. Status to ${newItemStatus}.`);
+
+            await tx.platformFee.create({
+                data: {
+                    relatedPaymentId: paymentId,
+                    relatedItemId: payment.itemId,
+                    sellerId: payment.sellerId,
+                    amount: fee,
+                    appliedFeePercentage: appliedFeePercentage,
+                    appliedFeeRuleId: appliedFeeRuleId,
+                }
+            });
+
+            await tx.payment.update({
+                where: { id: paymentId },
+                data: {
+                    status: 'RELEASED_TO_SELLER',
+                    platformFeeCharged: fee,
+                }
+            });
+            
+            await tx.user.update({
+                where: { id: payment.sellerId },
+                data: { availableBalance: { increment: netAmount } }
+            });
+
+            // Create Earning record for the seller
+            await tx.earning.create({
+                data: {
+                    userId: payment.sellerId,
+                    amount: netAmount,
+                    relatedPaymentId: payment.id,
+                    relatedItemId: payment.itemId,
+                    itemTitleSnapshot: payment.item?.title || payment.itemTitle || 'N/A',
+                    status: 'AVAILABLE',
+                }
+            });
+            console.log(`Confirm Receipt: Earning record created for seller ${payment.sellerId}, payment ${payment.id}`);
+
+            await tx.platformSetting.update({
+                where: { id: 'global_settings' },
+                data: { totalPlatformFees: { increment: fee } }
+            });
+            
+            return { 
+                success: true, 
+                sellerId: payment.sellerId, 
+                netAmount: netAmount, 
+                itemId: payment.itemId, 
+                itemTitle: payment.item.title 
             };
-
-             const feeRecordData: Omit<PlatformFeeRecord, 'id' | 'createdAt'> = {
-                 amount: fee,
-                 relatedPaymentId: paymentId,
-                 relatedItemId: paymentData.itemId,
-                 sellerId: sellerId, 
-             };
-            
-            transaction.update(paymentRef, {
-                 status: 'released_to_seller_balance',
-                 updatedAt: FieldValue.serverTimestamp(),
-             });
-            
-             transaction.set(earningRef, {
-                 ...earningData,
-                 id: earningId, 
-                 createdAt: FieldValue.serverTimestamp(),
-             });
-
-             transaction.update(sellerRef, {
-                 availableBalance: FieldValue.increment(netAmount)
-             });
-
-             transaction.set(platformFeeRecordRef, {
-                 ...feeRecordData,
-                 id: platformFeeRecordId, 
-                 createdAt: FieldValue.serverTimestamp(),
-             });
-
-             transaction.set(platformFeeSettingsRef, {
-                 totalPlatformFees: FieldValue.increment(fee),
-                 updatedAt: FieldValue.serverTimestamp() 
-             }, { merge: true }); 
-            
-            console.log(`Confirm Receipt: Updated item ${paymentData.itemId}. Prepared updates for payment ${paymentId}.`);
-            return { success: true, sellerId, netAmount, itemId: paymentData.itemId, itemTitle: itemData.title || 'Item' }; // Use itemData.title
         });
 
         if (result?.success) {
-            console.log(`Confirm Receipt: Transaction successful for payment ${paymentId}.`);
-            try {
-                 await createNotification({
-                     userId: result.sellerId,
-                     type: 'funds_available',
-                     message: `Funds (KES ${result.netAmount.toLocaleString()}) for "${result.itemTitle}" are now available in your earnings balance.`,
-                     relatedItemId: result.itemId,
-                     relatedPaymentId: paymentId,
-                 });
-                 await createNotification({
-                    userId: buyerId,
-                    type: 'admin_action', 
-                    message: `You have successfully confirmed receipt for item "${result.itemTitle}".`,
-                    relatedItemId: result.itemId,
-                    relatedPaymentId: paymentId,
-                });
-                 console.log(`Confirm Receipt: Notifications sent for payment ${paymentId}.`);
-            } catch (notifyError) {
-                 console.error(`Confirm Receipt: Failed to send notification for payment ${paymentId}:`, notifyError);
-            }
-            console.log("--- API POST /api/payment/confirm-receipt SUCCESS ---");
-             return NextResponse.json({ message: 'Receipt confirmed and funds released to seller balance. Item quantity updated.' }, { status: 200 });
-        } else {
-             console.warn(`Confirm Receipt: Transaction completed but didn't return expected success object for ${paymentId}. Result:`, result);
-             return NextResponse.json({ message: 'Confirmation processed but with unexpected result.' }, { status: 200 });
+            await createNotification({
+                userId: result.sellerId,
+                type: 'funds_released',
+                message: `Funds (KES ${result.netAmount.toDecimalPlaces(2).toString()}) for "${result.itemTitle}" are now in your available balance.`,
+                relatedItemId: result.itemId,
+                relatedPaymentId: paymentId,
+            });
+            await createNotification({
+                userId: buyerId,
+                type: 'receipt_confirmed', 
+                message: `You successfully confirmed receipt for "${result.itemTitle}".`,
+                relatedItemId: result.itemId,
+                relatedPaymentId: paymentId,
+            });
+            return NextResponse.json({ message: 'Receipt confirmed, funds released, item updated, earning recorded.' }, { status: 200 });
         }
+        return NextResponse.json({ message: 'Confirmation processed with unexpected outcome.'}, { status: 500 });
 
     } catch (error: any) {
-        console.error("--- API POST /api/payment/confirm-receipt FAILED --- Error:", error);
-        const status = error.message.startsWith('Forbidden') ? 403 : error.message.includes('not found') ? 404 : 400;
-        return NextResponse.json({ message: error.message || 'Failed to confirm receipt.' }, { status });
+        console.error("--- API POST /api/payment/confirm-receipt (Prisma) FAILED ---", error.message);
+        const isKnownError = error.message.startsWith('Forbidden') || error.message.includes('not found') || error.message.includes('status:');
+        const statusCode = isKnownError ? (error.message.startsWith('Forbidden') ? 403 : error.message.includes('not found') ? 404 : 400) : 500;
+        return NextResponse.json({ message: error.message || 'Failed to confirm receipt.' }, { status: statusCode });
     }
 }

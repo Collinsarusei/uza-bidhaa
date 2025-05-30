@@ -2,69 +2,111 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from '../auth/[...nextauth]/route';
-import { adminDb } from '@/lib/firebase-admin';
-import { Notification } from '@/lib/types';
-import { Timestamp as AdminTimestamp } from 'firebase-admin/firestore'; // Import AdminTimestamp
-
-const notificationsCollection = adminDb!.collection('notifications');
-
-// Helper to safely convert Firestore Admin Timestamp to ISO string or return null
-const adminTimestampToISOStringOrNull = (timestamp: any): string | null => {
-    if (timestamp instanceof AdminTimestamp) {
-        try {
-            return timestamp.toDate().toISOString();
-        } catch (e) {
-            console.error("Error converting admin timestamp to ISO string:", e);
-            return null;
-        }
-    }
-    if (typeof timestamp === 'string') {
-        try {
-            if (new Date(timestamp).toISOString() === timestamp) {
-                return timestamp;
-            }
-        } catch (e) { /* ignore */ }
-    }
-    return null;
-};
+import prisma from '@/lib/prisma'; // Changed: Use Prisma client
+// The Notification type from @/lib/types is still relevant for the shape of the API response
+// but Prisma's generated types will be used internally for DB interactions.
+// We expect Prisma Date fields to be serialized to ISO strings by NextResponse.json()
 
 // GET /api/notifications - Fetch notifications for the authenticated user
-export async function GET(request: Request) {
-    console.log("API: Fetching notifications");
-
+export async function GET(req: Request) {
+    console.log("API GET /api/notifications (Prisma): Received request");
+    
     const session = await getServerSession(authOptions);
-    if (!session || !session.user?.id) {
-        console.warn("API Get Notifications: Unauthorized attempt.");
+    if (!session?.user?.id) {
+        console.warn("API Notifications GET: Unauthorized attempt.");
         return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
     }
     const userId = session.user.id;
 
     try {
-        const query = notificationsCollection
-            .where('userId', '==', userId)
-            .orderBy('createdAt', 'desc');
+        const { searchParams } = new URL(req.url);
+        const page = parseInt(searchParams.get('page') || '1');
+        const limit = parseInt(searchParams.get('limit') || '10');
+        const skip = (page - 1) * limit;
 
-        const snapshot = await query.get();
+        const [notifications, total] = await Promise.all([
+            prisma.notification.findMany({
+                where: { userId },
+                orderBy: { createdAt: 'desc' },
+                skip,
+                take: limit,
+                include: {
+                    relatedItem: {
+                        select: {
+                            id: true,
+                            title: true,
+                            mediaUrls: true,
+                            sellerId: true,
+                            status: true
+                        }
+                    }
+                }
+            }),
+            prisma.notification.count({
+                where: { userId }
+            })
+        ]);
 
-        const notificationsData = snapshot.docs.map(doc => {
-            const data = doc.data();
-            return {
-                id: doc.id,
-                ...data,
-                createdAt: adminTimestampToISOStringOrNull(data.createdAt),
-                readAt: adminTimestampToISOStringOrNull(data.readAt),
-            } as Notification;
+        const unreadCount = await prisma.notification.count({
+            where: {
+                userId,
+                isRead: false
+            }
         });
 
-        console.log(`API: Found ${notificationsData.length} notifications for user ${userId}`);
-        return NextResponse.json(notificationsData);
+        console.log(`API Notifications GET: Found ${notifications.length} notifications for user ${userId}`);
+        return NextResponse.json({
+            notifications,
+            pagination: {
+                total,
+                pages: Math.ceil(total / limit),
+                currentPage: page,
+                hasMore: skip + notifications.length < total
+            },
+            unreadCount
+        });
 
     } catch (error: any) {
-        console.error("API Error fetching notifications:", error);
-        if (error.code === 'FAILED_PRECONDITION' && error.message.includes('index')) {
-             console.error("Firestore index missing for notifications query. Please create an index on 'userId' (ascending) and 'createdAt' (descending) in the 'notifications' collection.");
-            return NextResponse.json({ message: 'Database query failed. Index potentially missing.', details: error.message }, { status: 500 });
-        }
+        console.error("API Notifications GET Error (Prisma):", error);
         return NextResponse.json({ message: 'Failed to fetch notifications', error: error.message }, { status: 500 });
     }
 }
+
+export async function PATCH(req: Request) {
+    console.log("API PATCH /api/notifications (Prisma): Received request");
+    
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+        console.warn("API Notifications PATCH: Unauthorized attempt.");
+        return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+    }
+    const userId = session.user.id;
+
+    try {
+        const { notificationIds } = await req.json();
+
+        if (!Array.isArray(notificationIds) || notificationIds.length === 0) {
+            console.error("API Notifications PATCH: Invalid notification IDs provided.");
+            return NextResponse.json({ message: 'Invalid notification IDs' }, { status: 400 });
+        }
+
+        const updatedNotifications = await prisma.notification.updateMany({
+            where: {
+                id: { in: notificationIds },
+                userId
+            },
+            data: { isRead: true }
+        });
+
+        console.log(`API Notifications PATCH: Marked ${updatedNotifications.count} notifications as read for user ${userId}`);
+        return NextResponse.json({ message: 'Notifications marked as read' });
+
+    } catch (error: any) {
+        console.error("API Notifications PATCH Error (Prisma):", error);
+        return NextResponse.json({ message: 'Failed to update notifications', error: error.message }, { status: 500 });
+    }
+}
+
+// POST /api/notifications - Optional: If you want to allow creating notifications via this route as well
+// (Currently, creation is handled in src/lib/notifications.ts, which is fine)
+// export async function POST(request: Request) { ... }

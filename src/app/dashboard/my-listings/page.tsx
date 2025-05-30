@@ -73,38 +73,38 @@ export default function MyListingsPage() {
   const renderMyItemCard = (item: Item) => (
     <Card key={item.id} className="flex flex-col overflow-hidden">
       <CardHeader className="p-0">
-        <div className="block relative w-full aspect-square"> 
-            {item.mediaUrls && item.mediaUrls.length > 0 ? (
-               <img 
-                    src={item.mediaUrls[0]} 
-                    alt={item.title} 
-                    className="absolute h-full w-full object-cover rounded-t-md" 
-                />
-            ) : (
-               <div className="absolute h-full w-full bg-secondary rounded-t-md flex items-center justify-center text-muted-foreground">No Image</div>
-            )}
+        <div className="block relative w-full aspect-[4/3]"> 
+          {item.mediaUrls && item.mediaUrls.length > 0 ? (
+            <img 
+              src={item.mediaUrls[0]} 
+              alt={item.title} 
+              className="absolute h-full w-full object-cover rounded-t-md" 
+            />
+          ) : (
+            <div className="absolute h-full w-full bg-secondary rounded-t-md flex items-center justify-center text-muted-foreground">No Image</div>
+          )}
         </div>
-        <div className="p-4">
-            <CardTitle>{item.title}</CardTitle>
-            <CardDescription className="text-sm text-muted-foreground">{item.location}</CardDescription>
+        <div className="p-2 md:p-4">
+          <CardTitle className="text-sm md:text-base">{item.title}</CardTitle>
+          <CardDescription className="text-xs text-muted-foreground">{item.location}</CardDescription>
         </div>
       </CardHeader>
-      <CardContent className="flex-grow p-4 pt-0">
-         <p className="mb-2 text-lg font-semibold">KES {item.price.toLocaleString()}</p>
-         {item.quantity !== undefined && <p className="text-xs text-muted-foreground">Quantity: {item.quantity}</p>}
-         <Badge
-            variant={item.status === 'sold' ? 'destructive' : item.status === 'pending' || item.status === 'paid_escrow' ? 'secondary' : 'default'}
-            className="mt-2"
-          >
-            {item.status.charAt(0).toUpperCase() + item.status.slice(1).replace(/_/g, ' ')}
-          </Badge>
+      <CardContent className="flex-grow p-2 md:p-4 pt-0">
+        <p className="mb-2 text-sm md:text-base font-semibold">KES {item.price.toLocaleString()}</p>
+        {item.quantity !== undefined && <p className="text-xs text-muted-foreground">Quantity: {item.quantity}</p>}
+        <Badge
+          variant={item.status === 'SOLD' ? 'destructive' : item.status === 'PENDING_PAYMENT' || item.status === 'PAID_ESCROW' ? 'secondary' : 'default'}
+          className="mt-2 text-xs"
+        >
+          {item.status.charAt(0).toUpperCase() + item.status.slice(1).replace(/_/g, ' ')}
+        </Badge>
       </CardContent>
-      <CardFooter className="p-4 flex flex-col gap-2 border-t">
-        <Button variant="outline" className="w-full" onClick={() => alert(`View item: ${item.title}`)}>
-            <Icons.eye className="mr-2 h-4 w-4"/> View Listing
+      <CardFooter className="p-2 md:p-4 flex flex-col gap-2 border-t">
+        <Button variant="outline" size="sm" className="w-full" onClick={() => alert(`View item: ${item.title}`)}>
+          <Icons.eye className="mr-2 h-4 w-4"/> View Listing
         </Button>
-        <Button variant="default" className="w-full" onClick={() => alert(`Edit item: ${item.title}`)}>
-             <Icons.edit className="mr-2 h-4 w-4"/> Edit Listing
+        <Button variant="default" size="sm" className="w-full" onClick={() => alert(`Edit item: ${item.title}`)}>
+          <Icons.edit className="mr-2 h-4 w-4"/> Edit Listing
         </Button>
       </CardFooter>
     </Card>
@@ -180,7 +180,7 @@ export default function MyListingsPage() {
       )}
 
       {!error && myItems.length > 0 && (
-        <div className="grid grid-cols-1 xs:grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 md:gap-4">
           {myItems.map(renderMyItemCard)}
         </div>
       )}

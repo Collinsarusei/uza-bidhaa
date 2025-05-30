@@ -1,192 +1,194 @@
 // src/app/api/items/route.ts
 import { NextResponse } from 'next/server';
-import type { Item } from '@/lib/types';
-import { adminDb } from '@/lib/firebase-admin';
+import prisma from '@/lib/prisma';
 import { getServerSession } from "next-auth/next";
-import { authOptions } from '../auth/[...nextauth]/route';
-import { FieldValue, Timestamp as AdminTimestamp } from 'firebase-admin/firestore';
-import { v4 as uuidv4 } from 'uuid';
-import { createNotification } from '@/lib/notifications';
+import { authOptions } from '@/app/api/auth/[...nextauth]/route';
+import * as z from 'zod';
 
-// Helper to safely convert Firestore Admin Timestamp to ISO string or return null
-const adminTimestampToISOStringOrNull = (timestamp: any): string | null => {
-    if (timestamp instanceof AdminTimestamp) {
-        try {
-            return timestamp.toDate().toISOString();
-        } catch (e) {
-            console.error("Error converting admin timestamp to ISO string:", e);
-            return null;
-        }
-    }
-    if (typeof timestamp === 'string') {
-        try {
-            if (new Date(timestamp).toISOString() === timestamp) {
-                return timestamp;
-            }
-        } catch (e) { /* ignore */ }
-    }
-    return null;
-};
+// Validation schemas
+const createItemSchema = z.object({
+  title: z.string().min(1, "Title is required"),
+  description: z.string().min(1, "Description is required"),
+  price: z.number().positive("Price must be positive"),
+  category: z.string().min(1, "Category is required"),
+  location: z.string().min(1, "Location is required"),
+  quantity: z.number().int().positive("Quantity must be a positive integer"),
+  mediaUrls: z.array(z.string().url()).optional(),
+  offersDelivery: z.boolean().optional(),
+  acceptsInstallments: z.boolean().optional(),
+  discountPercentage: z.number().min(0).max(100).optional().nullable(),
+});
 
-
-// GET /api/items - Fetch items from Firestore with optional filtering
+// GET /api/items - Fetch items from PostgreSQL with Prisma
 export async function GET(request: Request) {
-    if (!adminDb) {
-        console.error("API /api/items GET Error: Firebase Admin DB is not initialized. adminDb is null.");
-        return NextResponse.json({ message: "Server configuration error: Database not available." }, { status: 500 });
-    }
-    const itemsCollection = adminDb.collection('items');
-
-    console.log("API: Fetching items from Firestore");
+  try {
+    const session = await getServerSession(authOptions);
     const { searchParams } = new URL(request.url);
     const userIdToExclude = searchParams.get('userId');
     const sellerIdToInclude = searchParams.get('sellerId');
     const itemIdToFetch = searchParams.get('itemId');
+    const categoryFilter = searchParams.get('category');
+    const statusQuery = searchParams.get('status');
+    const searchTerm = searchParams.get('q');
 
-    try {
-        let query: FirebaseFirestore.Query<FirebaseFirestore.DocumentData> = itemsCollection;
+    let itemStatusFilter: 'AVAILABLE' | 'SOLD' | 'DELISTED' | 'DISPUTED' = 'AVAILABLE';
+    if (statusQuery && ['AVAILABLE', 'SOLD', 'DELISTED', 'DISPUTED'].includes(statusQuery)) {
+        itemStatusFilter = statusQuery as 'AVAILABLE' | 'SOLD' | 'DELISTED' | 'DISPUTED';
+    }
 
-        if (itemIdToFetch) {
-            console.log(`API: Fetching single item by ID: ${itemIdToFetch}`);
-            const itemDoc = await itemsCollection.doc(itemIdToFetch).get();
-            if (!itemDoc.exists) {
-                return NextResponse.json({ message: "Item not found" }, { status: 404 });
-            }
-            const itemData = itemDoc.data();
-            if (itemData) {
-                const processedItem = {
-                    ...itemData,
-                    id: itemDoc.id,
-                    createdAt: adminTimestampToISOStringOrNull(itemData.createdAt),
-                    updatedAt: adminTimestampToISOStringOrNull(itemData.updatedAt),
-                };
-                return NextResponse.json([processedItem], { status: 200 });
-            }
-            return NextResponse.json({ message: "Item data malformed" }, { status: 500 });
-
-        } else if (sellerIdToInclude) {
-            console.log(`API: Filtering items to include only seller ID: ${sellerIdToInclude}`);
-            query = query.where('sellerId', '==', sellerIdToInclude).orderBy('createdAt', 'desc');
-        } else if (userIdToExclude) {
-            console.log(`API: Filtering items to exclude user ID: ${userIdToExclude}`);
-            query = query.where('status', '==', 'available').orderBy('createdAt', 'desc');
-        } else {
-             console.log(`API: Fetching all available items.`);
-             query = query.where('status', '==', 'available').orderBy('createdAt', 'desc');
-        }
-
-        const snapshot = await query.get();
-        let itemsData = snapshot.docs.map(doc => {
-            const data = doc.data();
-            return {
-                id: doc.id,
-                ...data,
-                createdAt: adminTimestampToISOStringOrNull(data.createdAt),
-                updatedAt: adminTimestampToISOStringOrNull(data.updatedAt),
-            } as Item;
+    if (itemIdToFetch) {
+        const item = await prisma.item.findUnique({
+            where: { id: itemIdToFetch },
+            include: {
+                seller: {
+                    select: {
+                        id: true,
+                        name: true,
+                        image: true,
+                        email: true,
+                    },
+                },
+            },
         });
 
-        if (userIdToExclude && !sellerIdToInclude && !itemIdToFetch) {
-             itemsData = itemsData.filter(item => item.sellerId !== userIdToExclude);
-             console.log(`API: Found ${itemsData.length} items after excluding user ID: ${userIdToExclude}.`);
-        } else if (!itemIdToFetch) {
-             console.log(`API: Found ${itemsData.length} items matching query.`);
+        if (!item) {
+            return NextResponse.json({ message: "Item not found" }, { status: 404 });
         }
-
-        return NextResponse.json(itemsData);
-
-    } catch (error: any) {
-        console.error("API Error fetching items:", error);
-        if (error.code === 'FAILED_PRECONDITION' && error.message.includes('index')) {
-            console.error("Firestore index missing for items query. Check required indexes based on query type (status/createdAt or sellerId/createdAt).");
-            return NextResponse.json({ message: 'Database query failed. Index potentially missing.', details: error.message }, { status: 500 });
-        }
-        return NextResponse.json({ message: 'Failed to fetch items', error: error.message }, { status: 500 });
+        return NextResponse.json([item], {
+            headers: {
+                'Cache-Control': 'no-store, must-revalidate',
+                'Pragma': 'no-cache',
+                'Expires': '0',
+            },
+        }); 
     }
+
+    let whereClause: {
+        status: 'AVAILABLE' | 'SOLD' | 'DELISTED' | 'DISPUTED';
+        sellerId?: string | { not: string };
+        category?: string;
+        OR?: Array<{
+            title?: { contains: string; mode: 'insensitive' };
+            description?: { contains: string; mode: 'insensitive' };
+        }>;
+    } = {
+        status: itemStatusFilter,
+    };
+
+    if (sellerIdToInclude) {
+        whereClause.sellerId = sellerIdToInclude;
+    } else if (userIdToExclude) {
+        whereClause.sellerId = { not: userIdToExclude };
+    }
+
+    if (categoryFilter) {
+        whereClause.category = categoryFilter;
+    }
+    
+    if (searchTerm) {
+        whereClause.OR = [
+            { title: { contains: searchTerm, mode: 'insensitive' } },
+            { description: { contains: searchTerm, mode: 'insensitive' } },
+        ];
+    }
+
+    const items = await prisma.item.findMany({
+        where: whereClause,
+        orderBy: {
+            createdAt: 'desc',
+        },
+        include: {
+            seller: {
+                select: {
+                    id: true,
+                    name: true,
+                    image: true,
+                    email: true,
+                },
+            },
+        },
+    });
+
+    return NextResponse.json(items, {
+        headers: {
+            'Cache-Control': 'no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0',
+        },
+    });
+  } catch (error) {
+    console.error("Error fetching items:", error);
+    return NextResponse.json(
+      { message: 'Failed to fetch items', error: error instanceof Error ? error.message : 'Unknown error' },
+      { status: 500 }
+    );
+  }
 }
 
-
-// POST /api/items - Create a new item in Firestore
+// POST /api/items - Create a new item
 export async function POST(request: Request) {
-    if (!adminDb) {
-        console.error("API /api/items POST Error: Firebase Admin DB is not initialized. adminDb is null.");
-        return NextResponse.json({ message: "Server configuration error: Database not available." }, { status: 500 });
-    }
-    const itemsCollection = adminDb.collection('items');
-    console.log("API: Attempting to create item in Firestore");
-
+  try {
     const session = await getServerSession(authOptions);
-    if (!session || !session.user?.id) {
-        console.warn("API Create Item: Unauthorized attempt.");
+    if (!session?.user?.id) {
         return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
     }
-    const sellerId = session.user.id;
 
-    try {
-        const body = await request.json();
-        console.log("API: Received item data for creation:", body);
+    const body = await request.json();
+    const validatedData = createItemSchema.parse({
+      ...body,
+      price: parseFloat(body.price),
+      quantity: parseInt(body.quantity, 10),
+      discountPercentage: body.discountPercentage ? parseFloat(body.discountPercentage) : null,
+    });
 
-        const requiredFields = ['title', 'description', 'price', 'category', 'location', 'quantity'];
-        const missingFields = requiredFields.filter(field => !(field in body) || body[field] === undefined || body[field] === null || body[field] === '');
+    const newItem = await prisma.item.create({
+      data: {
+        seller: { connect: { id: session.user.id } },
+        ...validatedData,
+        status: 'AVAILABLE',
+      },
+      include: {
+        seller: {
+          select: {
+            id: true,
+            name: true,
+            image: true,
+            email: true,
+          },
+        },
+      },
+    });
 
-        if (missingFields.length > 0) {
-            console.log(`API Create Item: Missing required fields: ${missingFields.join(', ')}`);
-            return NextResponse.json({ message: `Missing required fields: ${missingFields.join(', ')}` }, { status: 400 });
-        }
-
-        const quantity = parseInt(body.quantity);
-        if (isNaN(quantity) || quantity <= 0) {
-            return NextResponse.json({ message: 'Invalid quantity. Must be a number greater than 0.'}, { status: 400 });
-        }
-
-        const itemId = uuidv4();
-         const newItemData = {
-            id: itemId,
-            sellerId: sellerId,
-            title: body.title,
-            description: body.description,
-            category: body.category,
-            price: parseFloat(body.price) || 0,
-            quantity: quantity,
-            location: body.location,
-            offersDelivery: body.offersDelivery ?? false,
-            acceptsInstallments: body.acceptsInstallments ?? false,
-            discountPercentage: body.discountPercentage ?? null,
-            mediaUrls: body.mediaUrls ?? [],
-            status: 'available',
-            createdAt: FieldValue.serverTimestamp(),
-            updatedAt: FieldValue.serverTimestamp(),
-         };
-
-        await itemsCollection.doc(itemId).set(newItemData);
-        console.log(`API: Created new item in Firestore with ID: ${itemId} by seller: ${sellerId} with quantity: ${quantity}`);
-
-        try {
-            await createNotification({
-                userId: sellerId,
-                type: 'item_listed',
-                message: `Your item "${body.title}" (x${quantity}) has been successfully listed!`,
-                relatedItemId: itemId,
-            });
-        } catch (notificationError) {
-             console.error("Failed to create notification after listing item:", notificationError);
-        }
-
-        const createdDoc = await itemsCollection.doc(itemId).get();
-        const responseData = createdDoc.data();
-
-        if (responseData) {
-            const processedResponse = {
-                ...responseData,
-                createdAt: adminTimestampToISOStringOrNull(responseData.createdAt),
-                updatedAt: adminTimestampToISOStringOrNull(responseData.updatedAt),
-            };
-            return NextResponse.json(processedResponse, { status: 201 });
-        }
-        return NextResponse.json({ message: "Failed to retrieve created item data"}, { status: 500});
-
-    } catch (error: any) {
-        console.error("API Error creating item:", error);
-        return NextResponse.json({ message: 'Failed to create item', error: error.message }, { status: 500 });
+    // Create notification for the seller
+    await prisma.notification.create({
+      data: {
+        userId: session.user.id,
+        type: 'item_listed',
+        message: `Your item "${newItem.title}" has been successfully listed!`,
+        relatedItemId: newItem.id,
+      },
+    });
+        
+    return NextResponse.json(newItem, { status: 201 });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json(
+        { message: 'Invalid input data', errors: error.errors },
+        { status: 400 }
+      );
     }
+
+    if (error instanceof Error && 'code' in error && error.code === 'P2002') {
+        return NextResponse.json(
+            { message: 'Failed to create item due to a conflict' },
+            { status: 409 }
+        );
+    }
+
+    console.error("Error creating item:", error);
+    return NextResponse.json(
+      { message: 'Failed to create item' },
+      { status: 500 }
+    );
+  }
 }

@@ -3,11 +3,14 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from '../../auth/[...nextauth]/route';
 import { adminDb } from '@/lib/firebase-admin';
-import { FieldValue } from 'firebase-admin/firestore';
+import { FieldValue, Firestore, Transaction } from 'firebase-admin/firestore';
 import * as z from 'zod';
-import { Payment, Earning, PlatformSettings, Item, PlatformFeeRecord } from '@/lib/types'; // Added Item, PlatformFeeRecord
+import { Payment, Earning, PlatformSettingData, Item } from '@/lib/types';
 import { v4 as uuidv4 } from 'uuid';
 import { createNotification } from '@/lib/notifications';
+
+// Type assertion for adminDb
+const typedAdminDb = adminDb as Firestore;
 
 const releaseSchema = z.object({
     paymentId: z.string().min(1, "Payment ID is required"),
@@ -21,12 +24,12 @@ async function getPlatformFeePercentage(): Promise<number> {
         return DEFAULT_PLATFORM_FEE_PERCENTAGE;
     }
     try {
-        const feeDocRef = adminDb.collection('settings').doc('platformFee');
+        const feeDocRef = (adminDb as Firestore).collection('settings').doc('platformFee');
         const docSnap = await feeDocRef.get();
         if (docSnap.exists) {
-            const feeSettings = docSnap.data() as PlatformSettings;
-            if (typeof feeSettings.feePercentage === 'number' && feeSettings.feePercentage >= 0 && feeSettings.feePercentage <= 100) {
-                return feeSettings.feePercentage / 100;
+            const feeSettings = docSnap.data() as PlatformSettingData;
+            if (typeof feeSettings.defaultFeePercentage === 'number' && feeSettings.defaultFeePercentage >= 0 && feeSettings.defaultFeePercentage <= 100) {
+                return feeSettings.defaultFeePercentage / 100;
             }
         }
     } catch (error) {
@@ -78,11 +81,11 @@ export async function POST(req: Request) {
             const paymentData = paymentDoc.data() as Payment;
 
             if (paymentData.buyerId !== buyerId) throw new Error('Forbidden: You are not the buyer for this order.');
-            if (paymentData.status !== 'paid_to_platform') {
+            if (paymentData.status !== 'SUCCESSFUL_ESCROW') {
                 throw new Error(`Cannot release funds for order with status: ${paymentData.status}.`);
             }
 
-            const { fee, netAmount } = await calculateFee(paymentData.amount);
+            const { fee, netAmount } = await calculateFee(Number(paymentData.amount));
             const sellerId = paymentData.sellerId;
             if (!sellerId) throw new Error('Internal error: Seller information missing.');
             
@@ -100,7 +103,7 @@ export async function POST(req: Request) {
             const currentQuantity = itemData.quantity !== undefined ? itemData.quantity : 1;
             const newQuantity = currentQuantity - 1;
             let newItemStatus: Item['status'] = itemData.status;
-            if (newQuantity <= 0) newItemStatus = 'sold';
+            if (newQuantity <= 0) newItemStatus = 'SOLD';
 
             // 1. Update Item Quantity and Status
             transaction.update(itemRef, {

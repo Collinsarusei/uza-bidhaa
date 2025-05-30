@@ -16,7 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Icons } from "@/components/icons";
 import { Input } from "@/components/ui/input"; // Not used, but kept from original
 import { Textarea } from "@/components/ui/textarea";
-import { Conversation, Message, ParticipantData } from '@/lib/types';
+import { Conversation, Message, UserProfile } from '@/lib/types';
 import { formatDistanceToNow, parseISO } from 'date-fns';
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
@@ -38,6 +38,8 @@ import { useRouter } from 'next/navigation'; // Not used, but kept from original
 import {adminDb} from '@/lib/firebase-admin'; // Adjust path if your firebase init is elsewhere
 import { collection, query, orderBy, onSnapshot, doc, Timestamp as FirestoreTimestamp } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+
+type ParticipantData = Partial<Pick<UserProfile, 'id' | 'name' | 'image'>>;
 
 // --- Main Component ---
 export default function MessagesPage() {
@@ -91,44 +93,41 @@ export default function MessagesPage() {
     if (!currentUserId) return { inbox, incoming };
 
     allConversations.forEach(conv => {
-        const isApproved = conv.approved === true;
-        const isLegacyOrApproved = isApproved || (conv.approved === undefined && conv.initiatorId === undefined);
-        if (isLegacyOrApproved || (!isApproved && conv.initiatorId === currentUserId)) {
-            inbox.push(conv);
-        } else if (!isApproved && conv.initiatorId !== currentUserId) {
-            incoming.push(conv);
-        }
+      const isInitiator = conv.initiatorId === currentUserId;
+      if (isInitiator) {
+        inbox.push(conv);
+      } else {
+        incoming.push(conv);
+      }
     });
 
-    const getTimeValue = (timestamp: string | null, fallbackTimestamp: string | null = null): number => {
-        const timestampToParse = timestamp ?? fallbackTimestamp;
-        if (timestampToParse && typeof timestampToParse === 'string') {
-            try {
-                return parseISO(timestampToParse).getTime();
-            } catch (e) {
-                 console.warn(`Sorting: Could not parse timestamp "${timestampToParse}"`, e);
-                return 0;
-            }
+    const getTimeValue = (timestamp: string | null | undefined, fallbackTimestamp: string | null | undefined = null): number => {
+      const timestampToParse = timestamp ?? fallbackTimestamp;
+      if (timestampToParse && typeof timestampToParse === 'string') {
+        try {
+          return parseISO(timestampToParse).getTime();
+        } catch (e) {
+          console.warn(`Sorting: Could not parse timestamp "${timestampToParse}"`, e);
+          return 0;
         }
-        return 0;
+      }
+      return 0;
     };
 
     inbox.sort((a, b) => {
-        const timeA = getTimeValue(a.lastMessageTimestamp, a.createdAt);
-        const timeB = getTimeValue(b.lastMessageTimestamp, b.createdAt);
-        return timeB - timeA;
+      const timeA = getTimeValue(a.lastMessageTimestamp, a.createdAt);
+      const timeB = getTimeValue(b.lastMessageTimestamp, b.createdAt);
+      return timeB - timeA;
     });
 
     incoming.sort((a, b) => {
-        const timeA = getTimeValue(a.createdAt);
-        const timeB = getTimeValue(b.createdAt);
-        return timeB - timeA;
+      const timeA = getTimeValue(a.createdAt);
+      const timeB = getTimeValue(b.createdAt);
+      return timeB - timeA;
     });
 
     return { inbox, incoming };
-
   }, [allConversations, currentUserId]);
-
 
   // Real-time message fetching using onSnapshot
   useEffect(() => {
@@ -148,25 +147,25 @@ export default function MessagesPage() {
       const fetchedMessages: Message[] = [];
       querySnapshot.forEach((docSnapshot) => {
         const data = docSnapshot.data();
-        // Ensure timestamp is converted from Firestore Timestamp to ISO string
         const timestampFromServer = data.timestamp;
         let isoTimestamp: string | null = null;
+        
         if (timestampFromServer instanceof FirestoreTimestamp) {
-            isoTimestamp = timestampFromServer.toDate().toISOString();
-        } else if (typeof timestampFromServer === 'string') { // Handle cases where it might already be a string
-            isoTimestamp = timestampFromServer;
-        } else if (timestampFromServer && typeof timestampFromServer.toDate === 'function') { // Firebase Web SDK v8 Timestamps
-            isoTimestamp = timestampFromServer.toDate().toISOString();
+          isoTimestamp = timestampFromServer.toDate().toISOString();
+        } else if (typeof timestampFromServer === 'string') {
+          isoTimestamp = timestampFromServer;
+        } else if (timestampFromServer && typeof timestampFromServer.toDate === 'function') {
+          isoTimestamp = timestampFromServer.toDate().toISOString();
         }
-
 
         fetchedMessages.push({
           id: docSnapshot.id,
+          conversationId: selectedConversation.id,
           senderId: data.senderId,
-          text: data.text,
-          timestamp: isoTimestamp,
-          isSystemMessage: data.isSystemMessage || data.senderId === "system_warning", // Ensure this is captured
-        } as Message); // Cast to Message, ensure your Message type is accurate
+          content: data.text,
+          createdAt: isoTimestamp,
+          isSystemMessage: data.isSystemMessage || false,
+        });
       });
       setMessages(fetchedMessages);
       setIsLoadingMessages(false);
@@ -179,53 +178,45 @@ export default function MessagesPage() {
       setIsLoadingMessages(false);
     });
 
-    // Cleanup listener on component unmount or when conversationId/currentUserId changes
     return () => unsubscribe();
-
   }, [selectedConversation?.id, currentUserId, toast]);
 
-
   useEffect(() => {
-     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-   }, [messages]);
-
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
   const handleSelectConversation = (conv: Conversation) => {
-       // console.log("Selecting conversation:", conv); // Keep for debugging if needed
-       setSelectedConversation(conv);
-       // No need to manually fetch messages here, the useEffect for onSnapshot will handle it.
-   };
-
+    setSelectedConversation(conv);
+  };
 
   const handleSendMessage = async (e?: React.FormEvent | React.KeyboardEvent) => {
     e?.preventDefault();
     if (!newMessage.trim() || !selectedConversation?.id || !currentUserId || isSending) return;
 
-    const recipientId = selectedConversation.participantIds.find(id => id !== currentUserId);
+    const recipientId = selectedConversation.participants?.find(p => p.id !== currentUserId)?.id;
     if (!recipientId) {
-        toast({ title: "Error", description: "Cannot determine recipient.", variant: "destructive" });
-        return;
+      toast({ title: "Error", description: "Cannot determine recipient.", variant: "destructive" });
+      return;
     }
 
     const itemIdToSend = selectedConversation.itemId;
     if (!itemIdToSend) {
-         toast({ title: "Error", description: "Cannot send message: Item details missing for this conversation.", variant: "destructive" });
-         console.error("Missing itemId in selectedConversation for sending message:", selectedConversation);
-         return;
+      toast({ title: "Error", description: "Cannot send message: Item details missing for this conversation.", variant: "destructive" });
+      return;
     }
-    const itemTitleToSend = selectedConversation.itemTitle || "this item";
 
     setIsSending(true);
-    const tempMessageId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`; // More unique temp ID
+    const tempMessageId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const messageText = newMessage.trim();
 
     // Optimistic update
     setMessages(prev => [...prev, {
-        id: tempMessageId,
-        senderId: currentUserId,
-        text: messageText,
-        timestamp: new Date().toISOString(), // Client-generated timestamp for optimistic update
-        isSystemMessage: false,
+      id: tempMessageId,
+      conversationId: selectedConversation.id,
+      senderId: currentUserId,
+      content: messageText,
+      createdAt: new Date().toISOString(),
+      isSystemMessage: false,
     }]);
     setNewMessage("");
 
@@ -234,11 +225,8 @@ export default function MessagesPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          recipientId: recipientId,
-          itemId: itemIdToSend,
-          itemTitle: itemTitleToSend,
-          itemImageUrl: selectedConversation.itemImageUrl,
-          text: messageText,
+          conversationId: selectedConversation.id,
+          content: messageText,
         }),
       });
 
@@ -246,90 +234,66 @@ export default function MessagesPage() {
       if (!response.ok) {
         throw new Error(result.message || `Failed to send message (${response.status})`);
       }
-      // Message will be updated by the onSnapshot listener. No need to manually fetch.
-      // Optimistic message will be replaced by the server version via onSnapshot.
-
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'An unknown error occurred.';
-      setError(message);
-      console.error("handleSendMessage Error:", err);
-      toast({ title: "Send Error", description: message, variant: "destructive" });
-      // Revert optimistic update on error
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to send message.';
+      toast({ title: "Error", description: message, variant: "destructive" });
+      // Remove optimistic message on error
       setMessages(prev => prev.filter(msg => msg.id !== tempMessageId));
-      setNewMessage(messageText);
     } finally {
       setIsSending(false);
     }
   };
 
-
   const handleApprove = async (conversationId: string) => {
-    if (isApproving) return;
+    if (!currentUserId || isApproving) return;
+
     setIsApproving(conversationId);
-    setError(null);
     try {
       const response = await fetch(`/api/conversations/${conversationId}/approve`, {
-        method: 'PATCH',
+        method: 'POST',
       });
+
       if (!response.ok) {
-        const result = await response.json().catch(() => ({}));
-        throw new Error(result.message || 'Failed to approve conversation');
+        const error = await response.json();
+        throw new Error(error.message || 'Failed to approve conversation');
       }
 
-      // Attempt to optimistically update or refetch for immediate UI change
-      // The fetchConversations() will eventually update, but this can be faster for the selected one.
-      const updatedConv = allConversations.find(c => c.id === conversationId);
-      if (updatedConv) {
-          const newSelectedConvData = { ...updatedConv, approved: true, approvedAt: new Date().toISOString() };
-          setAllConversations(prev => prev.map(c => c.id === conversationId ? newSelectedConvData : c));
-          if (selectedConversation?.id === conversationId) {
-              setSelectedConversation(newSelectedConvData);
-          }
-          // If the approved conversation was in 'incoming', move it to 'inbox' view
-          handleSelectConversation(newSelectedConvData);
-          setActiveTab('inbox');
-          toast({ title: "Conversation Approved", description: "Moved to Inbox." });
-      } else {
-        // Fallback to refetching if the conversation wasn't found in current state (less likely)
-        await fetchConversations(); // This will refresh the categorized lists
-        const newlyFetchedConv = allConversations.find(c => c.id === conversationId && c.approved);
-        if(newlyFetchedConv) handleSelectConversation(newlyFetchedConv);
-        setActiveTab('inbox');
-        toast({ title: "Conversation Approved", description: "Please check your inbox." });
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to approve conversation.';
-      setError(message);
-      toast({ title: "Approval Error", description: message, variant: "destructive" });
+      // Update local state
+      setAllConversations(prev => 
+        prev.map(conv => 
+          conv.id === conversationId 
+            ? { ...conv, approved: true }
+            : conv
+        )
+      );
+
+      toast({ title: "Success", description: "Conversation approved successfully" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to approve conversation';
+      toast({ title: "Error", description: message, variant: "destructive" });
     } finally {
       setIsApproving(null);
     }
   };
 
   const getParticipantData = (conversation: Conversation | null, userId: string): ParticipantData => {
-        if (!conversation?.participantsData?.[userId]) {
-            const name = userId === currentUserId ? session?.user?.name : 'User';
-            const avatar = userId === currentUserId ? session?.user?.image : null;
-            return { name: name || (userId ? `User ${userId.substring(0,4)}` : 'User'), avatar };
-       }
-       return conversation.participantsData[userId];
-   };
+    if (!conversation?.participants) return { id: '', name: 'Unknown', image: null };
+    const participant = conversation.participants.find(p => p.id === userId);
+    return participant || { id: '', name: 'Unknown', image: null };
+  };
 
   const formatTimestamp = (timestamp: string | null): string => {
-      if (!timestamp) return '';
-     try {
-         if (typeof timestamp === 'string') {
-            return formatDistanceToNow(parseISO(timestamp), { addSuffix: true });
-         }
-         return 'Invalid date input';
-     } catch (e) {
-         // console.error("Error parsing timestamp for formatting:", timestamp, e); // Debug if needed
-         return 'A while ago'; // Fallback for invalid dates
-     }
-  }
+    if (!timestamp) return '';
+    try {
+      return formatDistanceToNow(parseISO(timestamp), { addSuffix: true });
+    } catch (e) {
+      console.warn('Failed to format timestamp:', e);
+      return '';
+    }
+  };
 
-  const renderConversationSkeleton = () => (
-       <div className="flex items-center space-x-3 p-3 border-b">
+  const renderConversationSkeleton = (index: number) => (
+       <div key={`skeleton-${index}`} className="flex items-center space-x-3 p-3 border-b">
           <Skeleton className="h-10 w-10 rounded-full" />
           <div className="flex-1 space-y-1.5">
               <Skeleton className="h-4 w-2/5" />
@@ -337,8 +301,9 @@ export default function MessagesPage() {
           </div>
       </div>
   );
-  const renderMessageSkeleton = () => (
-        <div className="flex items-start space-x-2 p-2">
+
+  const renderMessageSkeleton = (index: number) => (
+        <div key={`message-skeleton-${index}`} className="flex items-start space-x-2 p-2">
           <Skeleton className="h-8 w-8 rounded-full" />
           <div className="flex-1 space-y-1 rounded-md bg-muted p-2">
                <Skeleton className="h-3 w-1/4" />
@@ -348,7 +313,7 @@ export default function MessagesPage() {
   );
 
   const renderConversationItem = (conv: Conversation, isIncomingView: boolean) => {
-        const otherUserId = conv.participantIds.find(id => id !== currentUserId) || 'unknown';
+        const otherUserId = conv.participants?.find(p => p.id !== currentUserId)?.id || 'unknown';
         const otherParticipant = getParticipantData(conv, otherUserId);
         const isSelected = selectedConversation?.id === conv.id;
         const hasUnread = false; // Implement unread logic if needed
@@ -364,7 +329,7 @@ export default function MessagesPage() {
                 )}
             >
                 <Avatar className="h-10 w-10 border">
-                    <AvatarImage src={otherParticipant.avatar ?? undefined} alt={otherParticipant.name ?? 'User avatar'} />
+                    <AvatarImage src={otherParticipant.image ?? undefined} alt={otherParticipant.name ?? 'User avatar'} />
                     <AvatarFallback>{otherParticipant.name?.charAt(0)?.toUpperCase() || 'U'}</AvatarFallback>
                 </Avatar>
                 <div className="flex-1 overflow-hidden">
@@ -415,7 +380,7 @@ export default function MessagesPage() {
        const canChat = conversation.approved || isInitiator || isLegacy;
        const showApprovalMessage = !conversation.approved && !isInitiator && !isLegacy;
 
-      const otherUserId = conversation.participantIds.find(id => id !== currentUserId) || 'unknown';
+      const otherUserId = conversation.participants?.find(p => p.id !== currentUserId)?.id || 'unknown';
       const otherParticipant = getParticipantData(conversation, otherUserId);
       const paymentButtonLink = conversation.itemId ? `/item/${conversation.itemId}` : '#';
       const paymentButtonTitle = conversation.itemId
@@ -426,7 +391,7 @@ export default function MessagesPage() {
              <div className="flex-1 flex flex-col h-full bg-background">
                 <div className="p-3 border-b flex items-center space-x-3 sticky top-0 bg-background z-10 flex-shrink-0">
                      <Avatar className="h-9 w-9 border">
-                        <AvatarImage src={otherParticipant.avatar ?? undefined} alt={otherParticipant.name ?? 'User avatar'} />
+                        <AvatarImage src={otherParticipant.image ?? undefined} alt={otherParticipant.name ?? 'User avatar'} />
                         <AvatarFallback>{otherParticipant.name?.charAt(0)?.toUpperCase() || 'U'}</AvatarFallback>
                      </Avatar>
                      <div className="flex-1 overflow-hidden">
@@ -449,7 +414,7 @@ export default function MessagesPage() {
 
                       {isLoadingMessages && !messages.length && (
                          <div className="space-y-3">
-                             {Array.from({ length: 5 }).map((_, i) => renderMessageSkeleton())}
+                             {Array.from({ length: 5 }).map((_, i) => renderMessageSkeleton(i))}
                          </div>
                      )}
                      {!isLoadingMessages && messages.length === 0 && canChat && (
@@ -472,12 +437,12 @@ export default function MessagesPage() {
                                      <div className="flex-1">
                                         {/* System messages might not always need a title, or title could be part of msg.text */}
                                         {/* For this specific warning, we can add the title if msg.text matches */}
-                                        {msg.text.includes("For your safety, ensure all payments are made") && (
+                                        {msg.content.includes("For your safety, ensure all payments are made") && (
                                              <p className="font-medium">Important Security Notice</p>
                                         )}
-                                         <p className="whitespace-pre-wrap">{msg.text}</p>
+                                         <p className="whitespace-pre-wrap">{msg.content}</p>
                                          <p className="text-xs mt-1 opacity-70 text-left">
-                                            {formatTimestamp(msg.timestamp)}
+                                            {formatTimestamp(msg.createdAt)}
                                          </p>
                                      </div>
                                  </div>
@@ -491,21 +456,21 @@ export default function MessagesPage() {
                             <div key={msg.id} className={cn("flex items-end gap-2", isSender ? "justify-end" : "justify-start")}>
                                 {!isSender && (
                                      <Avatar className="h-6 w-6 border flex-shrink-0 self-start">
-                                         <AvatarImage src={senderInfo.avatar ?? undefined} alt={senderInfo.name ?? 'Sender'} />
+                                         <AvatarImage src={senderInfo.image ?? undefined} alt={senderInfo.name ?? 'Sender'} />
                                          <AvatarFallback>{senderInfo.name?.charAt(0)?.toUpperCase() || 'U'}</AvatarFallback>
                                      </Avatar>
                                 )}
                                 <div className={cn("rounded-lg px-3 py-2 max-w-[70%] break-words text-sm shadow-sm",
                                    isSender ? "bg-primary text-primary-foreground" : "bg-muted"
                                 )}>
-                                   <p className="whitespace-pre-wrap">{msg.text}</p>
+                                   <p className="whitespace-pre-wrap">{msg.content}</p>
                                    <p className={cn("text-xs mt-1 opacity-70", isSender ? "text-right" : "text-left")}>
-                                       {formatTimestamp(msg.timestamp)}
+                                       {formatTimestamp(msg.createdAt)}
                                    </p>
                                </div>
                                {isSender && (
                                     <Avatar className="h-6 w-6 border flex-shrink-0 self-start">
-                                        <AvatarImage src={senderInfo.avatar ?? undefined} alt={senderInfo.name ?? 'You'} />
+                                        <AvatarImage src={senderInfo.image ?? undefined} alt={senderInfo.name ?? 'You'} />
                                         <AvatarFallback>{senderInfo.name?.charAt(0)?.toUpperCase() || 'Y'}</AvatarFallback>
                                     </Avatar>
                                )}
@@ -600,24 +565,27 @@ export default function MessagesPage() {
               </Button>
           </div>
           <div className="flex-1 overflow-y-auto">
-               {isLoadingConversations && (
-                   <div className="p-3 space-y-2">
-                      {Array.from({ length: 5 }).map((_, i) => renderConversationSkeleton())}
-                   </div>
-               )}
-                {!isLoadingConversations && activeTab === 'inbox' && categorizedConversations.inbox.length === 0 && (
-                    <p className="p-4 text-center text-sm text-muted-foreground">Your inbox is empty.</p>
+                {isLoadingConversations ? (
+                    <div className="divide-y">
+                        {Array.from({ length: 5 }).map((_, i) => renderConversationSkeleton(i))}
+                    </div>
+                ) : (
+                    <>
+                        {activeTab === 'inbox' && categorizedConversations.inbox.length === 0 && (
+                            <p className="p-4 text-center text-sm text-muted-foreground">Your inbox is empty.</p>
+                        )}
+                        {activeTab === 'incoming' && categorizedConversations.incoming.length === 0 && (
+                            <p className="p-4 text-center text-sm text-muted-foreground">No incoming message requests.</p>
+                        )}
+                        {activeTab === 'inbox' && (
+                            categorizedConversations.inbox.map(conv => renderConversationItem(conv, false))
+                        )}
+                        {activeTab === 'incoming' && (
+                            categorizedConversations.incoming.map(conv => renderConversationItem(conv, true))
+                        )}
+                    </>
                 )}
-                {!isLoadingConversations && activeTab === 'incoming' && categorizedConversations.incoming.length === 0 && (
-                    <p className="p-4 text-center text-sm text-muted-foreground">No incoming message requests.</p>
-                )}
-                {!isLoadingConversations && activeTab === 'inbox' && (
-                    categorizedConversations.inbox.map(conv => renderConversationItem(conv, false))
-                )}
-                {!isLoadingConversations && activeTab === 'incoming' && (
-                    categorizedConversations.incoming.map(conv => renderConversationItem(conv, true))
-                )}
-                 {error && !isLoadingConversations && <p className="p-4 text-center text-sm text-destructive">{error}</p>}
+                {error && !isLoadingConversations && <p className="p-4 text-center text-sm text-destructive">{error}</p>}
           </div>
       </div>
 

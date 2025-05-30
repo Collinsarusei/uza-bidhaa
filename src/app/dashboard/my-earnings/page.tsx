@@ -5,7 +5,7 @@ import { useSession } from 'next-auth/react';
 import { Earning, UserProfile } from '@/lib/types';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
+import { Button, type ButtonProps, buttonVariants } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Icons } from '@/components/icons';
 import Link from 'next/link';
@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
 
 interface EarningsData {
     earnings: Earning[];
@@ -32,7 +33,7 @@ interface EarningsData {
     profile: Partial<UserProfile>;
 }
 
-const MINIMUM_WITHDRAWAL_AMOUNT_FRONTEND = 100; // KES 100, align with backend
+const MINIMUM_WITHDRAWAL_AMOUNT_FRONTEND = 100; // KES 100 minimum withdrawal
 
 export default function MyEarningsPage() {
     const { data: session, status } = useSession();
@@ -41,31 +42,28 @@ export default function MyEarningsPage() {
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [isWithdrawing, setIsWithdrawing] = useState(false);
-    const [withdrawalInputAmount, setWithdrawalInputAmount] = useState<string>("");
     const [dialogError, setDialogError] = useState<string | null>(null);
-
+    const [withdrawalAmount, setWithdrawalAmount] = useState<string>('');
 
     useEffect(() => {
         const fetchEarnings = async () => {
-            if (status !== 'authenticated' || !session?.user?.id) {
-                setIsLoading(false);
-                return; 
-            }
+            if (!session?.user?.id) return;
+            
             setIsLoading(true);
             setError(null);
             try {
-                console.log("MyEarnings: Fetching earnings...");
-                const response = await fetch(`/api/user/earnings`); 
+                const response = await fetch(`/api/user/earnings?userId=${session.user.id}`);
                 if (!response.ok) {
-                    const errData = await response.json().catch(() => ({}));
-                    throw new Error(errData.message || `HTTP error! status: ${response.status}`);
+                    const error = await response.json();
+                    throw new Error(error.message || `HTTP error! status: ${response.status}`);
                 }
-                const data: EarningsData = await response.json();
-                console.log(`MyEarnings: Fetched ${data.earnings?.length ?? 0} earning records, Balance: ${data.availableBalance}`);
+                const data = await response.json();
                 setEarningsData(data);
-                setWithdrawalInputAmount(data.availableBalance > 0 ? data.availableBalance.toString() : "");
             } catch (err) {
-                const message = err instanceof Error ? err.message : 'Failed to fetch your earnings.';
+                let message = "Failed to fetch earnings.";
+                if (err instanceof Error) {
+                    message = err.message;
+                }
                 setError(message);
                 console.error("Error fetching earnings:", err);
             } finally {
@@ -73,70 +71,65 @@ export default function MyEarningsPage() {
             }
         };
 
+        if (status === "authenticated") {
         fetchEarnings();
-    }, [status, session?.user?.id]);
+        }
+    }, [session?.user?.id, status]);
 
     const handleWithdraw = async () => {
-        setDialogError(null); 
-        if (!earningsData || earningsData.availableBalance <= 0) {
-            toast({ title: "No Funds", description: "No available balance to withdraw.", variant: "destructive" });
-            return;
-        }
-        if (!earningsData.profile.mpesaPhoneNumber) {
-             toast({ title: "M-Pesa Number Missing", description: "Please add your M-Pesa payout number in your profile first.", variant: "destructive" });
-             return;
-        }
+        if (!earningsData || !session?.user?.id) return;
 
-        const amountToWithdraw = parseFloat(withdrawalInputAmount);
-
-        if (isNaN(amountToWithdraw) || amountToWithdraw <= 0) {
-            setDialogError("Please enter a valid positive amount to withdraw.");
-            return;
-        }
-        if (amountToWithdraw < MINIMUM_WITHDRAWAL_AMOUNT_FRONTEND) {
-            setDialogError(`Minimum withdrawal amount is KES ${MINIMUM_WITHDRAWAL_AMOUNT_FRONTEND}.`);
-            return;
-        }
-        if (amountToWithdraw > earningsData.availableBalance) {
-            setDialogError("Withdrawal amount cannot exceed your available balance.");
+        const amount = parseFloat(withdrawalAmount);
+        if (isNaN(amount) || amount < MINIMUM_WITHDRAWAL_AMOUNT_FRONTEND || amount > earningsData.availableBalance) {
+            setDialogError(`Please enter a valid amount between KES ${MINIMUM_WITHDRAWAL_AMOUNT_FRONTEND} and ${earningsData.availableBalance}`);
             return;
         }
 
         setIsWithdrawing(true);
+        setDialogError(null);
         try {
-            console.log(`MyEarnings: Initiating withdrawal of KES ${amountToWithdraw}...`);
-            const response = await fetch('/api/payouts/initiate', {
+            const response = await fetch('/api/earnings/withdraw', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ amount: amountToWithdraw }) 
+                body: JSON.stringify({
+                    userId: session.user.id,
+                    amount,
+                    mpesaPhoneNumber: earningsData.profile.mpesaPhoneNumber
+                })
             });
-            const result = await response.json();
-            if (!response.ok) {
-                throw new Error(result.message || 'Failed to initiate withdrawal.');
-            }
-            console.log(`MyEarnings: Withdrawal initiated successfully for KES ${amountToWithdraw}.`);
-            toast({ title: "Withdrawal Initiated", description: `KES ${amountToWithdraw.toLocaleString()} is being sent to your M-Pesa. It may take a few moments.` });
-            
-            setEarningsData(prev => prev ? ({ 
-                ...prev, 
-                availableBalance: prev.availableBalance - amountToWithdraw, 
-            }) : null);
-            setWithdrawalInputAmount( (earningsData.availableBalance - amountToWithdraw) > 0 ? (earningsData.availableBalance - amountToWithdraw).toString() : "")
-            document.getElementById('close-withdraw-dialog')?.click(); 
 
-        } catch (err) {
-            const message = err instanceof Error ? err.message : 'An unknown error occurred';
-            console.error("Withdrawal Error:", err);
-            setDialogError(message);
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.message || 'Failed to process withdrawal');
+            }
+
+            const result = await response.json();
+            toast({
+                title: "Withdrawal Initiated",
+                description: "Your withdrawal request has been submitted successfully.",
+                duration: 5000
+            });
+
+            // Refresh earnings data
+            const updatedResponse = await fetch(`/api/user/earnings?userId=${session.user.id}`);
+            if (updatedResponse.ok) {
+                const updatedData = await updatedResponse.json();
+                setEarningsData(updatedData);
+            }
+        } catch (error: any) {
+            console.error('Withdrawal error:', error);
+            setDialogError(error.message || 'Failed to process withdrawal. Please try again.');
         } finally {
             setIsWithdrawing(false);
         }
     };
 
-    const formatDate = (dateString: string | null | undefined): string => {
-        if (!dateString) return 'N/A';
-        try { return format(new Date(dateString), 'PP'); } 
-        catch { return 'Invalid Date'; }
+    const formatDate = (date: string) => {
+        try {
+            return format(new Date(date), 'MMM d, yyyy');
+        } catch (err) {
+            return 'Invalid date';
+        }
     };
 
     const renderEarningRow = (earning: Earning) => (
@@ -144,9 +137,14 @@ export default function MyEarningsPage() {
             <div>
                 <p className="font-medium text-gray-800 dark:text-gray-200">KES {earning.amount.toLocaleString()}</p>
                 <p className="text-xs text-muted-foreground dark:text-slate-400">From Item ID: {earning.relatedItemId.substring(0,8)}...</p>
-                <p className="text-xs text-muted-foreground dark:text-slate-400">Date Available: {formatDate(earning.createdAt)}</p>
+                <p className="text-xs text-muted-foreground dark:text-slate-400">Date Available: {earning.createdAt ? formatDate(earning.createdAt) : 'N/A'}</p>
             </div>
-            <Badge variant={earning.status === 'available' ? 'secondary' : earning.status === 'withdrawn' ? 'outline' : 'default'} className="dark:text-gray-300 dark:border-gray-600">
+            <Badge className={cn(
+                "dark:text-gray-300 dark:border-gray-600",
+                earning.status === 'AVAILABLE' ? 'bg-secondary text-secondary-foreground' :
+                earning.status === 'WITHDRAWN' ? 'text-foreground' :
+                'bg-primary text-primary-foreground'
+            )}>
                 {earning.status.replace(/_/g, ' ')}
             </Badge>
         </div>
@@ -208,7 +206,7 @@ export default function MyEarningsPage() {
                                 <CardTitle className="text-3xl text-gray-800 dark:text-gray-200">KES {earningsData.availableBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</CardTitle>
                             </CardHeader>
                             <CardContent>
-                                <Dialog onOpenChange={(open) => { if(!open) setDialogError(null); }}>
+                                <Dialog onOpenChange={(open: boolean) => { if(!open) setDialogError(null); }}>
                                     <DialogTrigger asChild>
                                         <Button 
                                             className="bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-70"
@@ -219,71 +217,68 @@ export default function MyEarningsPage() {
                                             Withdraw Funds
                                         </Button>
                                     </DialogTrigger>
-                                    <DialogContent className="dark:bg-slate-800 dark:border-slate-700">
+                                    <DialogContent>
                                         <DialogHeader>
-                                            <DialogTitle className="text-gray-800 dark:text-gray-200">Withdraw Funds</DialogTitle>
-                                            <DialogDescription className="pt-2 text-muted-foreground dark:text-slate-400">
-                                                Enter amount to withdraw to M-Pesa: {earningsData.profile.mpesaPhoneNumber || '[Not Set]'}.
-                                                {!earningsData.profile.mpesaPhoneNumber && <p className='text-destructive text-sm pt-1 dark:text-red-400'> Please set your M-Pesa number in your profile first.</p>}
-                                                <p className="text-sm text-muted-foreground pt-1 dark:text-slate-400">Available: KES {earningsData.availableBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                                            <DialogTitle>Withdraw Funds</DialogTitle>
+                                            <DialogDescription>
+                                                Enter the amount you want to withdraw to your M-Pesa account.
                                             </DialogDescription>
                                         </DialogHeader>
                                         <div className="grid gap-4 py-4">
-                                            <div className="space-y-2">
-                                                <Label htmlFor="withdrawalAmount" className="text-gray-700 dark:text-gray-300">Amount (KES)</Label>
-                                                <Input 
-                                                    id="withdrawalAmount"
-                                                    type="number"
-                                                    className="bg-background dark:bg-slate-700 dark:border-slate-600 dark:text-gray-200"
-                                                    value={withdrawalInputAmount}
-                                                    onChange={(e) => setWithdrawalInputAmount(e.target.value)}
-                                                    placeholder={`Min ${MINIMUM_WITHDRAWAL_AMOUNT_FRONTEND}, Max ${earningsData.availableBalance}`}
-                                                    min={MINIMUM_WITHDRAWAL_AMOUNT_FRONTEND.toString()}
-                                                    max={earningsData.availableBalance.toString()}
-                                                    step="0.01"
-                                                    disabled={isWithdrawing || !earningsData.profile.mpesaPhoneNumber}
-                                                />
-                                            </div>
                                             {dialogError && (
-                                                <Alert variant="destructive" className="mt-2 bg-red-50 dark:bg-red-900/30 border-red-300 dark:border-red-700">
+                                                <Alert variant="destructive" className="bg-red-50 dark:bg-red-900/30 border-red-300 dark:border-red-700">
                                                     <Icons.alertTriangle className="h-4 w-4 text-red-600 dark:text-red-400" />
                                                     <AlertDescription className="text-red-600 dark:text-red-400">{dialogError}</AlertDescription>
                                                 </Alert>
                                             )}
+                                            <div className="grid gap-2">
+                                                <Label htmlFor="amount">Amount (KES)</Label>
+                                                <Input
+                                                    id="amount"
+                                                    type="number"
+                                                    min={MINIMUM_WITHDRAWAL_AMOUNT_FRONTEND}
+                                                    max={earningsData.availableBalance}
+                                                    value={withdrawalAmount}
+                                                    onChange={(e) => setWithdrawalAmount(e.target.value)}
+                                                    disabled={isWithdrawing}
+                                                />
+                                                <p className="text-sm text-muted-foreground">
+                                                    Minimum withdrawal: KES {MINIMUM_WITHDRAWAL_AMOUNT_FRONTEND}
+                                                </p>
+                                            </div>
                                         </div>
                                         <DialogFooter>
-                                            <DialogClose asChild id="close-withdraw-dialog">
-                                                <Button type="button" variant="secondary" disabled={isWithdrawing} className="hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors">Cancel</Button>
+                                            <DialogClose asChild>
+                                                <button className={buttonVariants({ variant: "outline" })} disabled={isWithdrawing}>Cancel</button>
                                             </DialogClose>
                                             <Button 
-                                                type="button" 
                                                 onClick={handleWithdraw} 
-                                                className="bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-70"
-                                                disabled={isWithdrawing || !earningsData.profile.mpesaPhoneNumber || earningsData.availableBalance < MINIMUM_WITHDRAWAL_AMOUNT_FRONTEND || parseFloat(withdrawalInputAmount) > earningsData.availableBalance || parseFloat(withdrawalInputAmount) < MINIMUM_WITHDRAWAL_AMOUNT_FRONTEND }
+                                                disabled={isWithdrawing || !withdrawalAmount}
                                             >
-                                                {isWithdrawing && <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />}
-                                                Confirm Withdrawal
+                                                {isWithdrawing ? (
+                                                    <>
+                                                        <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
+                                                        Processing...
+                                                    </>
+                                                ) : (
+                                                    'Withdraw'
+                                                )}
                                             </Button>
                                         </DialogFooter>
                                     </DialogContent>
                                 </Dialog>
-                                {!earningsData.profile.mpesaPhoneNumber && (
-                                    <p className="text-sm text-destructive mt-2 dark:text-red-400">Please set your M-Pesa number in your profile to enable withdrawals.</p>
-                                )}
                             </CardContent>
                         </Card>
 
                         <Card className="shadow-md dark:bg-slate-800 dark:border-slate-700">
                             <CardHeader>
-                                <CardTitle className="text-gray-800 dark:text-gray-200">Earnings History</CardTitle>
-                                <CardDescription className="text-muted-foreground dark:text-slate-400">Record of funds made available to your balance.</CardDescription>
+                                <CardTitle className="text-xl text-gray-800 dark:text-gray-200">Transaction History</CardTitle>
                             </CardHeader>
                             <CardContent>
-                                {earningsData.earnings.length === 0 && (
-                                    <p className="text-sm text-muted-foreground dark:text-slate-400">No earnings recorded yet.</p>
-                                )}
-                                {earningsData.earnings.length > 0 && (
-                                    <div className="space-y-1">
+                                {earningsData.earnings.length === 0 ? (
+                                    <p className="text-center text-muted-foreground py-4">No transactions yet.</p>
+                                ) : (
+                                    <div className="space-y-2">
                                         {earningsData.earnings.map(renderEarningRow)}
                                     </div>
                                 )}

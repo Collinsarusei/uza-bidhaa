@@ -36,7 +36,7 @@ export default function ItemDetailPage() {
   const [isMessageSheetOpen, setIsMessageSheetOpen] = useState(false);
   const [messageText, setMessageText] = useState("");
   const [isSendingMessage, setIsSendingMessage] = useState(false);
-  const [isInitiatingPayment, setIsInitiatingPayment] = useState(false); // State for payment button
+  const [isInitiatingPayment, setIsInitiatingPayment] = useState(false);
 
   useEffect(() => {
     const fetchItemDetails = async () => {
@@ -45,20 +45,22 @@ export default function ItemDetailPage() {
         setIsLoading(false);
         return;
       }
+
       setIsLoading(true);
       setError(null);
+
       try {
-        console.log(`Fetching details for item: ${itemId}`);
         const response = await fetch(`/api/items?itemId=${itemId}`);
         if (!response.ok) {
-            const errData = await response.json().catch(() => ({}));
+          const errData = await response.json();
              throw new Error(errData.message || `HTTP error! status: ${response.status}`);
         }
+
         const data = await response.json();
         if (!data || data.length === 0) { 
            throw new Error('Item not found.');
         }
-        console.log("Item data received:", data[0]);
+
         setItem(data[0]); 
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to fetch item details.';
@@ -74,13 +76,18 @@ export default function ItemDetailPage() {
 
   const handleSendMessage = async () => {
       if (!item || !messageText.trim() || !session?.user?.id) return;
+
       if (session.user.id === item.sellerId) {
-           toast({ title: "Action Denied", description: "You cannot message yourself.", variant: "destructive" });
+      toast({
+        title: "Action Denied",
+        description: "You cannot message yourself.",
+        variant: "destructive"
+      });
            return;
       }
+
       setIsSendingMessage(true);
       try {
-          // ... send message API call ...
            const response = await fetch('/api/messages', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -92,71 +99,88 @@ export default function ItemDetailPage() {
                   text: messageText.trim(),
               }),
           });
+
+      if (!response.ok) {
           const result = await response.json();
-          if (!response.ok) {
               throw new Error(result.message || 'Failed to send message');
           }
-          toast({ title: "Message Sent", description: "Your message has been sent." });
+
+      toast({
+        title: "Message Sent",
+        description: "Your message has been sent."
+      });
           setIsMessageSheetOpen(false); 
           setMessageText("");
       } catch (err) {
            const message = err instanceof Error ? err.message : 'Failed to send message.';
-           console.error("Error sending message from item detail:", err);
-           toast({ title: "Send Error", description: message, variant: "destructive" });
+      console.error("Error sending message:", err);
+      toast({
+        title: "Send Error",
+        description: message,
+        variant: "destructive"
+      });
       } finally {
           setIsSendingMessage(false);
       }
   };
 
-  // --- Handle Initiate Payment --- 
   const handleInitiatePayment = async () => {
       if (!item || !session?.user?.id) {
-           toast({ title: "Login Required", description: "Please log in to purchase items.", variant: "destructive" });
+      toast({
+        title: "Login Required",
+        description: "Please log in to purchase items.",
+        variant: "destructive"
+      });
            return;
       }
-      if (item.status !== 'available') {
-            toast({ title: "Not Available", description: "This item is no longer available for purchase.", variant: "destructive" });
+
+    if (item.status !== 'AVAILABLE') {
+      toast({
+        title: "Not Available",
+        description: "This item is no longer available for purchase.",
+        variant: "destructive"
+      });
             return;
       }
+
       if (session.user.id === item.sellerId) {
-           toast({ title: "Action Denied", description: "You cannot purchase your own item.", variant: "destructive" });
+      toast({
+        title: "Action Denied",
+        description: "You cannot purchase your own item.",
+        variant: "destructive"
+      });
            return;
       }
 
       setIsInitiatingPayment(true);
       try {
-            console.log(`Initiating payment for item: ${item.id}, amount: ${item.price}`); // Log amount
             const response = await fetch('/api/payment/initiate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                // Corrected body to include amount
                 body: JSON.stringify({ 
                     itemId: item.id, 
-                    amount: item.price // Include the item price
+          amount: item.price
                 })
             });
-            const result = await response.json();
 
-            // --- Adjust based on Paystack Response --- 
-            // Paystack's initialize returns authorization_url, access_code, reference
+            const result = await response.json();
             if (!response.ok || !result.authorization_url) {
                 throw new Error(result.message || 'Failed to prepare payment checkout.');
             }
-            console.log(`Redirecting to Paystack checkout: ${result.authorization_url}`);
-            // Redirect the user to the Paystack payment page
-            window.location.href = result.authorization_url;
-            // ----------------------------------------
 
+            window.location.href = result.authorization_url;
       } catch (err) {
             const message = err instanceof Error ? err.message : 'Failed to initiate payment.';
-            console.error("Initiate Payment Error:", err);
-            toast({ title: "Payment Error", description: message, variant: "destructive" });
+      console.error("Payment Error:", err);
+      toast({
+        title: "Payment Error",
+        description: message,
+        variant: "destructive"
+      });
+    } finally {
             setIsInitiatingPayment(false); 
       }
   };
-  // -------------------------
-
-  // --- RENDER LOGIC --- 
 
   if (isLoading) {
      return (
@@ -206,7 +230,7 @@ export default function ItemDetailPage() {
 
   const canMessageSeller = session?.user && session.user.id !== item.sellerId;
   const isMyListing = session?.user?.id === item.sellerId;
-  const isAvailable = item.status === 'available';
+  const isAvailable = item.status === 'AVAILABLE';
 
   return (
     <div className="container mx-auto p-4 md:p-6 max-w-4xl">
@@ -231,16 +255,18 @@ export default function ItemDetailPage() {
 
         <div className="space-y-4">
            <h1 className="text-3xl lg:text-4xl font-bold tracking-tight">{item.title}</h1>
-           <p className="text-2xl lg:text-3xl font-semibold text-primary">KES {item.price.toLocaleString()}</p>
+          <p className="text-2xl lg:text-3xl font-semibold text-primary">
+            KES {Number(item.price).toLocaleString()}
+          </p>
            <div className="flex items-center gap-2 text-muted-foreground">
                <Icons.mapPin className="h-4 w-4"/> 
                <span>{item.location}</span>
            </div>
            <div>
                 <Badge 
-                    variant={item.status === 'sold' ? 'destructive' : item.status === 'available' ? 'default' : 'secondary'}
+              variant={item.status === 'SOLD' ? 'destructive' : item.status === 'AVAILABLE' ? 'default' : 'secondary'}
                 >
-                    Status: {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
+              Status: {item.status.charAt(0) + item.status.slice(1).toLowerCase()}
                 </Badge>
             </div>
             
@@ -258,9 +284,6 @@ export default function ItemDetailPage() {
                 </ul>
             </div>
 
-           {/* Action Buttons Container */} 
-            <div className="pt-4 space-y-3"> 
-                {/* Buy/Payment Button */} 
                 {!isMyListing && (
                      <Button 
                          className="w-full" 
@@ -275,8 +298,6 @@ export default function ItemDetailPage() {
                   <Button className="w-full" disabled>This is Your Listing</Button>
                 )}
                 
-                {/* Message Seller Button / Sheet */} 
-                {!isMyListing && (
                   <Sheet open={isMessageSheetOpen} onOpenChange={setIsMessageSheetOpen}>
                       <SheetTrigger asChild>
                           <Button variant="outline" className="w-full" disabled={!session?.user}>
@@ -303,18 +324,19 @@ export default function ItemDetailPage() {
                              </div>
                          </div>
                          <SheetFooter>
-                             <SheetClose asChild>
-                                 <Button type="button" variant="outline" disabled={isSendingMessage}>Cancel</Button>
-                             </SheetClose>
-                             <Button type="button" onClick={handleSendMessage} disabled={!messageText.trim() || isSendingMessage}>
-                                 {isSendingMessage && <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />} 
-                                 Send Message
+                <Button onClick={handleSendMessage} disabled={isSendingMessage || !messageText.trim()}>
+                  {isSendingMessage ? (
+                    <>
+                      <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
+                      Sending...
+                    </>
+                  ) : (
+                    'Send Message'
+                  )}
                              </Button>
                          </SheetFooter>
                       </SheetContent>
                   </Sheet>
-               )}
-            </div>
         </div>
       </div>
     </div>

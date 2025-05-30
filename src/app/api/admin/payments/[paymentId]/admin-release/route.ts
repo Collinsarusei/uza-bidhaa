@@ -1,173 +1,182 @@
 // src/app/api/admin/payments/[paymentId]/admin-release/route.ts
-'use server';
-
 import { NextResponse } from 'next/server';
-import { adminDb } from '@/lib/firebase-admin';
-import { FieldValue } from 'firebase-admin/firestore';
 import { getServerSession } from "next-auth/next";
-import { authOptions } from '@/app/api/auth/[...nextauth]/route';
-import { Payment, Item, Earning, UserProfile, PlatformSettings, PlatformFeeRecord, DisputeRecord } from '@/lib/types'; // Added DisputeRecord
+import { authOptions } from '@/app/api/auth/[...nextauth]/route'; 
+import prisma from '@/lib/prisma';
 import { createNotification } from '@/lib/notifications';
-import { v4 as uuidv4 } from 'uuid';
+import { Prisma } from '@prisma/client';
+import { Decimal } from '@prisma/client/runtime/library';
 
-const DEFAULT_PLATFORM_FEE_PERCENTAGE = 0.10;
-
-async function isAdmin(userId: string | undefined): Promise<boolean> {
-    if (!userId || !adminDb) return false;
-    try {
-        const userDoc = await adminDb.collection('users').doc(userId).get();
-        return userDoc.exists && userDoc.data()?.role === 'admin';
-    } catch (error) {
-        console.error("Error checking admin role:", error);
-        return false;
-    }
-}
-
-async function getPlatformFeePercentage(): Promise<number> {
-    if (!adminDb) return DEFAULT_PLATFORM_FEE_PERCENTAGE;
-    try {
-        const feeDocRef = adminDb.collection('settings').doc('platformFee');
-        const docSnap = await feeDocRef.get();
-        if (docSnap.exists) {
-            const feeSettings = docSnap.data() as PlatformSettings;
-            if (typeof feeSettings.feePercentage === 'number' && feeSettings.feePercentage >= 0 && feeSettings.feePercentage <= 100) {
-                return feeSettings.feePercentage / 100;
-            }
+// Tiered fee calculation function (ensure this is consistent, ideally from a shared lib)
+async function calculateTieredPlatformFee(amount: Decimal): Promise<{
+    fee: Decimal;
+    netAmount: Decimal;
+    appliedFeePercentage: Decimal;
+    appliedFeeRuleId: string | null;
+}> {
+    const activeFeeRules = await prisma.feeRule.findMany({
+        where: { isActive: true },
+        orderBy: { priority: 'desc' },
+    });
+    let feePercentage: Decimal | null = null;
+    let ruleId: string | null = null;
+    for (const feeRule of activeFeeRules) {
+        if (feeRule.minAmount !== null && amount.gte(feeRule.minAmount) && (feeRule.maxAmount === null || amount.lte(feeRule.maxAmount))) {
+            feePercentage = feeRule.feePercentage;
+            ruleId = feeRule.id;
+            break;
         }
-    } catch (error) {
-        console.error("Error fetching platform fee (admin-release):", error);
     }
-    return DEFAULT_PLATFORM_FEE_PERCENTAGE;
+    if (feePercentage === null) {
+        const platformSettings = await prisma.platformSetting.findUnique({ where: { id: 'global_settings' } });
+        feePercentage = platformSettings?.defaultFeePercentage ?? new Decimal(0);
+        console.log(`No specific fee rule for amount ${amount}. Using default: ${feePercentage}%`);
+    }
+    const feeRate = feePercentage!.div(100);
+    const calculatedFee = amount.mul(feeRate).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    const netAmountForSeller = amount.sub(calculatedFee);
+    return {
+        fee: calculatedFee,
+        netAmount: netAmountForSeller,
+        appliedFeePercentage: feePercentage!,
+        appliedFeeRuleId: ruleId,
+    };
 }
 
-const calculateFee = async (amount: number): Promise<{ fee: number, netAmount: number }> => {
-    const platformFeeRate = await getPlatformFeePercentage();
-    const fee = Math.round(amount * platformFeeRate * 100) / 100;
-    const netAmount = Math.round((amount - fee) * 100) / 100;
-    return { fee, netAmount };
-};
-
-interface RouteContext {
-    params: { paymentId?: string; };
+interface AdminReleaseParams {
+    params: {
+        paymentId: string;
+    }
 }
 
-export async function POST(req: Request, context: RouteContext) {
-    const paymentId = context.params?.paymentId;
-    console.log(`--- API POST /api/admin/payments/${paymentId}/admin-release START ---`);
-
-    if (!paymentId) return NextResponse.json({ message: 'Missing payment ID' }, { status: 400 });
-    if (!adminDb) {
-        console.error(`Admin Release ${paymentId}: Firebase Admin DB not initialized.`);
-        return NextResponse.json({ message: 'Server configuration error.' }, { status: 500 });
-    }
+export async function POST(req: Request, context: any) {
+    const { paymentId } = context.params;
+    console.log(`--- API POST /api/admin/payments/${paymentId}/admin-release (Prisma V3 - Create Earning) START ---`);
 
     const session = await getServerSession(authOptions);
-    if (!(await isAdmin(session?.user?.id))) {
-        console.warn(`Admin Release ${paymentId}: Unauthorized attempt.`);
-        return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+    if (!session?.user?.id || (session.user as any).role !== 'ADMIN') { 
+        console.warn(`Admin Release Payment ${paymentId}: Unauthorized or not admin.`);
+        return NextResponse.json({ message: 'Forbidden: Admin access required' }, { status: 403 });
     }
-
-    let disputeId: string | undefined;
-    try {
-        const body = await req.json();
-        disputeId = body.disputeId; // Expecting disputeId in the body now
-    } catch (e) {
-        // If body is not present or not JSON, it's fine if disputeId is not needed for this action
-        console.log(`Admin Release ${paymentId}: No JSON body or disputeId provided, proceeding without it.`);
-    }
+    const adminUserId = session.user.id;
 
     try {
-        const paymentRef = adminDb.collection('payments').doc(paymentId);
-        const platformFeeSettingsRef = adminDb.collection('settings').doc('platformFee');
-
-        const result = await adminDb.runTransaction(async (transaction) => {
-            const paymentDoc = await transaction.get(paymentRef);
-            if (!paymentDoc.exists) throw new Error('Payment record not found.');
-            const paymentData = paymentDoc.data() as Payment;
-
-            if (paymentData.status !== 'paid_to_platform' && paymentData.status !== 'disputed' && paymentData.status !== 'admin_review') {
-                throw new Error(`Cannot release payment with status: ${paymentData.status}.`);
-            }
-
-            const { fee, netAmount } = await calculateFee(paymentData.amount);
-            const sellerId = paymentData.sellerId;
-            if (!sellerId) throw new Error('Seller ID missing on payment record.');
-
-            const itemRef = adminDb!.collection('items').doc(paymentData.itemId);
-            const sellerRef = adminDb!.collection('users').doc(sellerId);
-            const earningId = uuidv4();
-            const earningRef = sellerRef.collection('earnings').doc(earningId);
-            const platformFeeRecordId = uuidv4();
-            const platformFeeRecordRef = adminDb!.collection('platformFees').doc(platformFeeRecordId);
-
-            const itemDoc = await transaction.get(itemRef);
-            if (!itemDoc.exists) throw new Error('Item related to payment not found.');
-            const itemData = itemDoc.data() as Item;
-            const currentQuantity = itemData.quantity !== undefined ? itemData.quantity : 1;
-            const newQuantity = currentQuantity - 1;
-            let newItemStatus: Item['status'] = itemData.status;
-            if (newQuantity <= 0) newItemStatus = 'sold';
-
-            transaction.update(itemRef, {
-                quantity: newQuantity > 0 ? newQuantity : 0,
-                status: newItemStatus,
-                updatedAt: FieldValue.serverTimestamp(),
+        const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+            const payment = await tx.payment.findUnique({
+                where: { id: paymentId },
+                include: { 
+                    item: { select: { id: true, title: true, quantity: true, status: true } }, 
+                    disputes: { where: { status: { notIn: ['RESOLVED_REFUND', 'RESOLVED_RELEASE_PAYMENT', 'CLOSED'] } } } 
+                }
             });
 
-            transaction.update(paymentRef, {
-                status: 'released_to_seller_balance',
-                isDisputed: false, // Clear dispute flags as it's resolved by release
-                disputeReason: FieldValue.delete(),
-                disputeId: FieldValue.delete(),
-                disputeFiledBy: FieldValue.delete(),
-                disputeSubmittedAt: FieldValue.delete(),
-                updatedAt: FieldValue.serverTimestamp(),
-            });
-            transaction.set(earningRef, { id: earningId, userId: sellerId, amount: netAmount, relatedPaymentId: paymentId, relatedItemId: paymentData.itemId, status: 'available', createdAt: FieldValue.serverTimestamp() });
-            transaction.update(sellerRef, { availableBalance: FieldValue.increment(netAmount) });
-            transaction.set(platformFeeRecordRef, { id: platformFeeRecordId, amount: fee, relatedPaymentId: paymentId, relatedItemId: paymentData.itemId, sellerId: sellerId, createdAt: FieldValue.serverTimestamp() });
-            transaction.set(platformFeeSettingsRef, { totalPlatformFees: FieldValue.increment(fee), updatedAt: FieldValue.serverTimestamp() }, { merge: true });
-
-            // If a disputeId was provided, update the dispute record
-            if (disputeId) {
-                const disputeDocRef = adminDb!.collection('disputes').doc(disputeId);
-                transaction.update(disputeDocRef, {
-                    status: 'resolved_release',
-                    resolutionNotes: `Funds released to seller by admin ${session.user?.email || session.user?.id}.`,
-                    resolvedAt: FieldValue.serverTimestamp(),
-                    updatedAt: FieldValue.serverTimestamp(),
-                });
-                console.log(`Admin Release: Dispute ${disputeId} for payment ${paymentId} marked as resolved_release.`);
+            if (!payment) throw new Error('Payment record not found.');
+            if (payment.status !== 'SUCCESSFUL_ESCROW' && payment.status !== 'PENDING_CONFIRMATION' && payment.status !== 'DISPUTED') {
+                 throw new Error(`Admin cannot release. Payment status: ${payment.status}.`);
             }
+            if (!payment.item) throw new Error('Item associated with payment not found.');
 
-            console.log(`Admin Release: Payment ${paymentId} released. Item quantity ${newQuantity}. Net: ${netAmount}, Fee: ${fee}.`);
-            return { success: true, sellerId, buyerId: paymentData.buyerId, netAmount, itemId: paymentData.itemId, itemTitle: itemData.title || 'Item', wasDisputed: !!disputeId, disputeIdIfAny: disputeId };
+            const { fee, netAmount, appliedFeePercentage, appliedFeeRuleId } = await calculateTieredPlatformFee(payment.amount);
+            console.log(`Admin Release: Payment ${paymentId}, Fee=${fee}, Net=${netAmount}`);
+
+            const currentItem = await tx.item.findUnique({ where: {id: payment.itemId }});
+            if (!currentItem) throw new Error("Item not found for quantity update.");
+            const newQuantity = currentItem.quantity - 1;
+            let newItemStatus = currentItem.status;
+            if (newQuantity <= 0) {
+                newItemStatus = 'SOLD';
+            } else {
+                newItemStatus = 'AVAILABLE';
+            }
+            await tx.item.update({
+                where: { id: payment.itemId },
+                data: { quantity: newQuantity < 0 ? 0 : newQuantity, status: newItemStatus },
+            });
+            console.log(`Admin Release: Item ${payment.itemId} quantity to ${newQuantity}. Status to ${newItemStatus}.`);
+
+            await tx.platformFee.create({
+                data: {
+                    relatedPaymentId: paymentId,
+                    relatedItemId: payment.itemId,
+                    sellerId: payment.sellerId,
+                    amount: fee,
+                    appliedFeePercentage: appliedFeePercentage,
+                    appliedFeeRuleId: appliedFeeRuleId,
+                }
+            });
+
+            await tx.payment.update({
+                where: { id: paymentId },
+                data: {
+                    status: 'RELEASED_TO_SELLER',
+                    platformFeeCharged: fee,
+                }
+            });
+            
+            await tx.user.update({
+                where: { id: payment.sellerId },
+                data: { availableBalance: { increment: netAmount } }
+            });
+
+            // Create Earning record for the seller
+            await tx.earning.create({
+                data: {
+                    userId: payment.sellerId,
+                    amount: netAmount,
+                    relatedPaymentId: payment.id,
+                    relatedItemId: payment.itemId,
+                    itemTitleSnapshot: payment.item?.title || payment.itemTitle || 'N/A',
+                    status: 'AVAILABLE',
+                }
+            });
+            console.log(`Admin Release: Earning record created for seller ${payment.sellerId}, payment ${payment.id}`);
+
+            await tx.platformSetting.update({
+                where: { id: 'global_settings' },
+                data: { totalPlatformFees: { increment: fee } }
+            });
+
+            if (payment.disputes && payment.disputes.length > 0) {
+                for (const dispute of payment.disputes) {
+                    await tx.dispute.update({
+                        where: { id: dispute.id },
+                        data: { status: 'RESOLVED_RELEASE_PAYMENT', updatedAt: new Date() }
+                    });
+                }
+            }
+            
+            return { 
+                success: true, 
+                sellerId: payment.sellerId, 
+                buyerId: payment.buyerId, 
+                netAmount: netAmount, 
+                itemId: payment.itemId, 
+                itemTitle: payment.item.title 
+            };
         });
 
         if (result?.success) {
-            // Notifications
             await createNotification({
                 userId: result.sellerId,
-                type: 'payment_released',
-                message: `Funds (KES ${result.netAmount.toLocaleString()}) for "${result.itemTitle}" are now in your earnings balance. ${result.wasDisputed ? 'The dispute has been resolved in your favor.' : ''}`,
+                type: 'funds_released_by_admin',
+                message: `Admin released funds (KES ${result.netAmount.toDecimalPlaces(2).toString()}) for "${result.itemTitle}". Now in your balance.`,
                 relatedItemId: result.itemId,
                 relatedPaymentId: paymentId,
-                relatedDisputeId: result.disputeIdIfAny
             });
             await createNotification({
                 userId: result.buyerId,
-                type: 'admin_action',
-                message: `An admin has reviewed the transaction for "${result.itemTitle}". ${result.wasDisputed ? 'The dispute has been resolved, and funds released to the seller.' : 'Funds have been released to the seller.'}`,
+                type: 'order_completed_by_admin', 
+                message: `Admin has finalized the transaction for "${result.itemTitle}". Funds released to seller.`,
                 relatedItemId: result.itemId,
                 relatedPaymentId: paymentId,
-                relatedDisputeId: result.disputeIdIfAny
             });
-            return NextResponse.json({ message: 'Funds released to seller successfully. Dispute (if any) resolved.' }, { status: 200 });
+            return NextResponse.json({ message: 'Admin released funds to seller, item updated, earning recorded.' }, { status: 200 });
         }
-        throw new Error('Transaction failed unexpectedly.');
+        return NextResponse.json({ message: 'Admin release processed with unexpected outcome.'}, { status: 500 });
 
     } catch (error: any) {
-        console.error(`--- API POST /api/admin/payments/${paymentId}/admin-release FAILED --- Error:`, error);
-        return NextResponse.json({ message: error.message || 'Failed to release funds.' }, { status: 500 });
+        console.error(`--- API POST /api/admin/payments/${paymentId}/admin-release (Prisma) FAILED ---`, error.message);
+        const statusCode = error.message?.startsWith('Forbidden') ? 403 : error.message?.includes('not found') ? 404 : error.message?.includes('status:') ? 400 : 500;
+        return NextResponse.json({ message: error.message || 'Failed to release payment.' }, { status: statusCode });
     }
 }

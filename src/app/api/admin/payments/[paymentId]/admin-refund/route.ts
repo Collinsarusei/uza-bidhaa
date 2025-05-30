@@ -1,158 +1,154 @@
 // src/app/api/admin/payments/[paymentId]/admin-refund/route.ts
-'use server';
-
 import { NextResponse } from 'next/server';
-import { adminDb } from '@/lib/firebase-admin';
-import { FieldValue } from 'firebase-admin/firestore';
+import prisma from '@/lib/prisma';
 import { getServerSession } from "next-auth/next";
-import { authOptions } from '@/app/api/auth/[...nextauth]/route';
-import { Payment, Item, UserProfile, DisputeRecord } from '@/lib/types';
+import { authOptions } from '@/app/api/auth/[...nextauth]/route'; // Adjust path as needed
 import { createNotification } from '@/lib/notifications';
+import { Prisma } from '@prisma/client';
 
-async function isAdmin(userId: string | undefined): Promise<boolean> {
-    if (!userId || !adminDb) return false;
-    try {
-        const userDoc = await adminDb.collection('users').doc(userId).get();
-        return userDoc.exists && userDoc.data()?.role === 'admin';
-    } catch (error) {
-        console.error("Error checking admin role for refund:", error);
-        return false;
-    }
+interface AdminRefundParams {
+    params: {
+        paymentId: string;
+    };
 }
 
-interface RouteContext {
-    params: { paymentId?: string; };
+interface AdminRefundBody {
+    disputeId?: string;
+    adminNotes?: string;
 }
 
-export async function POST(req: Request, context: RouteContext) {
-    const paymentId = context.params?.paymentId;
-    console.log(`--- API POST /api/admin/payments/${paymentId}/admin-refund START ---`);
+export async function POST(req: Request, context: any) {
+    const { paymentId } = context.params;
+    console.log(`--- API POST /api/admin/payments/${paymentId}/admin-refund (Prisma) START ---`);
 
-    if (!paymentId) return NextResponse.json({ message: 'Missing payment ID' }, { status: 400 });
-    if (!adminDb) {
-        console.error(`Admin Refund ${paymentId}: Firebase Admin DB not initialized.`);
-        return NextResponse.json({ message: 'Server configuration error.' }, { status: 500 });
+    if (!paymentId) {
+        return NextResponse.json({ message: 'Missing payment ID' }, { status: 400 });
     }
 
     const session = await getServerSession(authOptions);
-    if (!session?.user?.id || !(await isAdmin(session.user.id))) {
-        console.warn(`Admin Refund ${paymentId}: Unauthorized attempt.`);
-        return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+    if (!session?.user?.id || (session.user as any).role !== 'ADMIN') {
+        console.warn(`Admin Refund ${paymentId}: Unauthorized or not admin.`);
+        return NextResponse.json({ message: 'Forbidden: Admin access required' }, { status: 403 });
     }
+    const adminUserId = session.user.id;
 
-    let disputeId: string | undefined;
-    let adminNotes: string | undefined; // For admin notes on why refund was processed
+    let requestBody: AdminRefundBody = {};
     try {
-        const body = await req.json();
-        disputeId = body.disputeId;
-        adminNotes = body.adminNotes || `Refund processed by admin ${session.user?.email || session.user?.id}.`;
+        requestBody = await req.json();
     } catch (e) {
-        console.log(`Admin Refund ${paymentId}: No JSON body or disputeId/adminNotes provided.`);
-        adminNotes = `Refund processed by admin ${session.user?.email || session.user?.id}.`;
+        console.log(`Admin Refund ${paymentId}: No JSON body or optional fields provided.`);
     }
+    const { disputeId, adminNotes } = requestBody;
+    const notesForDispute = adminNotes || `Refund processed by admin ${session.user?.email || adminUserId}.`;
 
     try {
-        const paymentRef = adminDb.collection('payments').doc(paymentId);
-
-        const result = await adminDb.runTransaction(async (transaction) => {
-            const paymentDoc = await transaction.get(paymentRef);
-            if (!paymentDoc.exists) throw new Error('Payment record not found.');
-            const paymentData = paymentDoc.data() as Payment;
-
-            if (!['disputed', 'admin_review', 'paid_to_platform'].includes(paymentData.status)) {
-                throw new Error(`Cannot refund payment with status: ${paymentData.status}.`);
-            }
-            if (paymentData.status === 'refunded') throw new Error('Payment has already been refunded.');
-
-            const buyerId = paymentData.buyerId;
-            const buyerRef = adminDb!.collection('users').doc(buyerId);
-            const itemRef = adminDb!.collection('items').doc(paymentData.itemId);
-            const itemDoc = await transaction.get(itemRef);
-            const itemData = itemDoc.exists ? itemDoc.data() as Item : null;
-
-            // 1. Update Payment Status
-            transaction.update(paymentRef, {
-                status: 'refunded',
-                isDisputed: false,
-                disputeReason: FieldValue.delete(),
-                disputeId: FieldValue.delete(),
-                disputeFiledBy: FieldValue.delete(),
-                disputeSubmittedAt: FieldValue.delete(),
-                updatedAt: FieldValue.serverTimestamp(),
+        const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+            const payment = await tx.payment.findUnique({
+                where: { id: paymentId },
+                include: { item: { select: { id: true, title: true, quantity: true, status: true } } }
             });
 
-            // 2. Handle item quantity and status (restock)
-            if (itemData) {
-                transaction.update(itemRef, {
-                    status: 'available', 
-                    quantity: FieldValue.increment(1), 
-                    updatedAt: FieldValue.serverTimestamp(),
-                });
-                console.log(`Admin Refund: Item ${paymentData.itemId} status set to available, quantity incremented.`);
-            } else {
-                console.warn(`Admin Refund: Item ${paymentData.itemId} not found, cannot update its status or quantity.`);
+            if (!payment) {
+                throw new Error('Payment record not found.');
             }
-            
+
+            if (!(['SUCCESSFUL_ESCROW'] as string[]).includes(payment.status)) {
+                throw new Error(`Cannot refund payment with status: ${payment.status}. Expected SUCCESSFUL_ESCROW.`);
+            }
+            if (payment.status === 'REFUNDED_TO_BUYER') {
+                throw new Error('Payment has already been refunded.');
+            }
+            if (!payment.item) {
+                throw new Error('Item associated with payment not found.');
+            }
+
+            // 1. Update Payment Status
+            await tx.payment.update({
+                where: { id: paymentId },
+                data: {
+                    status: 'REFUNDED_TO_BUYER',
+                    platformFeeCharged: null, 
+                }
+            });
+
+            // 2. Restock Item: Increment quantity and set status to AVAILABLE
+            await tx.item.update({
+                where: { id: payment.itemId },
+                data: {
+                    quantity: { increment: 1 },
+                    status: 'AVAILABLE', 
+                }
+            });
+            console.log(`Admin Refund: Item ${payment.itemId} status set to AVAILABLE, quantity incremented.`);
+
             // 3. Credit Buyer's Platform Available Balance
-            const buyerProfileDoc = await transaction.get(buyerRef);
-            if (buyerProfileDoc.exists) {
-                transaction.update(buyerRef, {
-                    availableBalance: FieldValue.increment(paymentData.amount)
-                });
-                console.log(`Admin Refund: Credited KES ${paymentData.amount} to buyer ${buyerId} platform availableBalance.`);
-            } else {
-                 console.warn(`Admin Refund: Buyer profile ${buyerId} not found. Cannot credit platform availableBalance.`);
-                 // Decide if this is critical. For now, it logs and continues.
-            }
+            await tx.user.update({
+                where: { id: payment.buyerId },
+                data: { availableBalance: { increment: payment.amount } }
+            });
+            console.log(`Admin Refund: Credited KES ${payment.amount.toFixed(2)} to buyer ${payment.buyerId} platform availableBalance.`);
 
             // 4. If a disputeId was provided, update the dispute record
             if (disputeId) {
-                const disputeDocRef = adminDb!.collection('disputes').doc(disputeId);
-                transaction.update(disputeDocRef, {
-                    status: 'resolved_refund',
-                    resolutionNotes: adminNotes,
-                    resolvedAt: FieldValue.serverTimestamp(),
-                    updatedAt: FieldValue.serverTimestamp(),
-                });
-                console.log(`Admin Refund: Dispute ${disputeId} for payment ${paymentId} marked as resolved_refund.`);
+                const dispute = await tx.dispute.findUnique({ where: { id: disputeId }});
+                if (dispute && dispute.paymentId === paymentId) { 
+                    await tx.dispute.update({
+                        where: { id: disputeId },
+                        data: {
+                            status: 'RESOLVED_REFUND',
+                            resolutionNotes: notesForDispute,
+                            resolvedAt: new Date(),
+                        }
+                    });
+                    console.log(`Admin Refund: Dispute ${disputeId} for payment ${paymentId} marked as RESOLVED_REFUND.`);
+                } else if (dispute) {
+                    console.warn(`Admin Refund: Provided disputeId ${disputeId} does not match paymentId ${paymentId}. Not updating dispute.`);
+                } else {
+                    console.warn(`Admin Refund: Provided disputeId ${disputeId} not found. Not updating dispute.`);
+                }
             }
             
             console.log(`Admin Refund: Payment ${paymentId} marked as refunded. Buyer platform balance updated.`);
             return { 
                 success: true, 
-                buyerId, 
-                sellerId: paymentData.sellerId, 
-                amountRefunded: paymentData.amount, 
-                itemId: paymentData.itemId,
-                itemTitle: itemData?.title || paymentData.itemTitle || 'Item',
+                buyerId: payment.buyerId, 
+                sellerId: payment.sellerId, 
+                amountRefunded: payment.amount, 
+                itemId: payment.itemId,
+                itemTitle: payment.item.title || payment.itemTitle || 'Item',
                 wasDisputed: !!disputeId,
-                disputeIdIfAny: disputeId
+                disputeIdIfAny: disputeId 
             };
         });
 
         if (result?.success) {
             await createNotification({
                 userId: result.buyerId,
-                type: 'admin_action',
-                message: `Admin has processed a refund of KES ${result.amountRefunded.toLocaleString()} for your order of "${result.itemTitle}". The amount has been credited to your platform balance. ${result.wasDisputed ? 'The dispute has been resolved. ' : ''}`,
+                type: 'payment_refunded',
+                message: `Admin processed a refund of KES ${result.amountRefunded.toDecimalPlaces(2).toString()} for "${result.itemTitle}". Funds are in your balance.`,
                 relatedItemId: result.itemId,
                 relatedPaymentId: paymentId,
                 relatedDisputeId: result.disputeIdIfAny
             });
             await createNotification({
                 userId: result.sellerId,
-                type: 'admin_action',
-                message: `Admin has processed a refund to the buyer for item "${result.itemTitle}" (Payment ID: ${paymentId}). ${result.wasDisputed ? 'The dispute has been resolved. ' : ''}The item may have been restocked.`,
+                type: 'payment_refund_processed',
+                message: `Admin processed a refund to the buyer for item "${result.itemTitle}" (Payment ID: ${paymentId}). The item has been restocked.`,
                 relatedItemId: result.itemId,
                 relatedPaymentId: paymentId,
                 relatedDisputeId: result.disputeIdIfAny
             });
-            return NextResponse.json({ message: 'Refund processed successfully. Buyer platform balance updated. Dispute (if any) resolved.' }, { status: 200 });
+            return NextResponse.json({ message: 'Refund processed successfully.' }, { status: 200 });
         }
-        throw new Error('Transaction failed unexpectedly.');
+        throw new Error('Transaction failed unexpectedly after completion (admin refund).');
 
     } catch (error: any) {
-        console.error(`--- API POST /api/admin/payments/${paymentId}/admin-refund FAILED --- Error:`, error);
-        return NextResponse.json({ message: error.message || 'Failed to process refund.' }, { status: error.message?.includes('already been refunded') ? 409 : 400 });
+        console.error(`--- API POST /api/admin/payments/${paymentId}/admin-refund (Prisma) FAILED --- Error:`, error.message);
+        const statusCode = error.message?.includes('Forbidden') ? 403 
+                         : error.message?.includes('not found') ? 404 
+                         : error.message?.includes('status:') ? 400 
+                         : error.message?.includes('already been refunded') ? 409 
+                         : 500;
+        return NextResponse.json({ message: error.message || 'Failed to process refund.' }, { status: statusCode });
     }
 }

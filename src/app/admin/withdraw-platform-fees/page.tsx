@@ -13,7 +13,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from '@/hooks/use-toast';
 import { Icons } from '@/components/icons';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { PlatformSettings } from '@/lib/types';
 
 interface Bank {
     name: string;

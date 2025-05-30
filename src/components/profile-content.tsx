@@ -10,51 +10,51 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { Icons } from "@/components/icons";
-import { UserProfile as BaseUserProfile } from "@/lib/types"; // Keep for reference if needed elsewhere
 import { format, differenceInDays, parseISO } from 'date-fns';
 
-// Interface for data received from the /api/user/me endpoint
-// Defined independently based on actual API response structure
-interface ProfileDataFromApi {
-  id: string; // Ensure id is always present
-  name: string | null; // Directly defined based on API
+// Import UploadThing components
+import { UploadButton } from "@uploadthing/react";
+import type { OurFileRouter } from "@/app/api/uploadthing/core"; // Adjust path if needed
+
+interface ProfileDataFromApi { // Aligned with Prisma User model and /api/user/me select
+  id: string; 
+  name: string | null; 
   email: string | null;
+  image: string | null; // Was profilePictureUrl, now maps to Prisma 'image'
   phoneNumber: string | null;
   location: string | null;
-  profilePictureUrl: string | null;
   mpesaPhoneNumber: string | null;
-  createdAt: string | null;
-  updatedAt: string | null;
-  nameLastUpdatedAt?: string | null; // Keep as optional
-  locationLastUpdatedAt?: string | null; // Keep as optional
-  mpesaLastUpdatedAt?: string | null; // Keep as optional
+  createdAt: string | null; 
+  updatedAt: string | null; 
+  nameLastUpdatedAt?: string | null; 
 }
 
-// Interface for the form state
 interface ProfileFormData {
-    name: string; // Keep as string for the input value
+    name: string; 
     location: string;
     mpesaPhoneNumber: string;
+    // No image here, image is handled by uploadedImageUrl state
 }
 
 export function ProfileContent() {
   const { data: session, status, update: updateSession } = useSession();
   const { toast } = useToast();
-  const [profile, setProfile] = useState<ProfileDataFromApi | null>(null); // State uses the corrected interface
+  const [profile, setProfile] = useState<ProfileDataFromApi | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [formData, setFormData] = useState<ProfileFormData>({ name: '', location: '', mpesaPhoneNumber: '' });
 
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  // No longer need selectedFile for upload logic, UploadThing handles the file.
+  // uploadedImageUrl will store the URL from UploadThing or current profile.image
   const [uploadedImageUrl, setUploadedImageUrl] = useState<string | null>(null);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  // fileInputRef is no longer needed
 
   useEffect(() => {
     const fetchProfile = async () => {
-      if (status === 'unauthenticated') { setIsLoading(false); setError("Authentication required to view profile."); return; }
+      if (status === 'unauthenticated') { setIsLoading(false); setError("Authentication required."); return; }
       if (status === 'loading') { return; } 
       
       setIsLoading(true); setError(null);
@@ -67,78 +67,29 @@ export function ProfileContent() {
         const data = await response.json();
         if (!data.user) throw new Error("Profile data missing in API response.");
         
-        // Type assertion here ensures the fetched data matches our interface
         const fetchedProfile: ProfileDataFromApi = data.user; 
         setProfile(fetchedProfile);
-        
         setFormData({ 
-            name: fetchedProfile.name || '', // Handle null from API
+            name: fetchedProfile.name || '', 
             location: fetchedProfile.location || '', 
             mpesaPhoneNumber: fetchedProfile.mpesaPhoneNumber || '' 
         });
-        setUploadedImageUrl(null); 
-        setSelectedFile(null);
+        setUploadedImageUrl(null); // Reset any temporarily uploaded image URL on new fetch/edit cancel
 
       } catch (err: any) {
-          console.error("Fetch Profile Error:", err);
           setError(err.message); 
       } finally { 
           setIsLoading(false); 
       }
     };
-
     fetchProfile();
-
   }, [status]); 
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
-  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-        const file = event.target.files?.[0];
-        if (file) {
-            console.log("File selected:", file.name);
-            setSelectedFile(file);
-            setUploadedImageUrl(null);
-            handleImageUpload(file); 
-        }
-    };
-
-   const handleImageUpload = async (fileToUpload: File) => {
-        if (!fileToUpload) return;
-        setIsUploadingImage(true);
-        setError(null);
-        const uploadFormData = new FormData();
-        uploadFormData.append('files', fileToUpload);
-
-        try {
-            console.log("Uploading profile picture...");
-            const response = await fetch('/api/upload', {
-                method: 'POST',
-                body: uploadFormData,
-            });
-            const result = await response.json();
-            if (!response.ok) {
-                throw new Error(result.message || `Image upload failed: ${response.statusText}`);
-            }
-            if (!result.urls || result.urls.length === 0) {
-                 throw new Error("Image URL missing in upload response.");
-            }
-            const imageUrl = result.urls[0];
-            console.log("Image uploaded successfully:", imageUrl);
-            setUploadedImageUrl(imageUrl);
-            toast({ title: "Image Uploaded", description: "Ready to save with profile." });
-        } catch (err: any) {
-            console.error("Image Upload Error:", err);
-            setError(`Image Upload Failed: ${err.message}`);
-            toast({ title: "Image Upload Failed", description: err.message, variant: "destructive" });
-            setSelectedFile(null);
-            setUploadedImageUrl(null);
-        } finally {
-            setIsUploadingImage(false);
-        }
-    };
+  // handleFileChange and handleImageUpload are replaced by UploadThing's callbacks
 
   const handleCancel = () => {
       setFormData({ 
@@ -146,8 +97,7 @@ export function ProfileContent() {
           location: profile?.location || '', 
           mpesaPhoneNumber: profile?.mpesaPhoneNumber || '' 
       });
-      setSelectedFile(null);
-      setUploadedImageUrl(null);
+      setUploadedImageUrl(null); // Clear any pending image upload URL
       setIsEditing(false); 
       setError(null);
   };
@@ -155,43 +105,38 @@ export function ProfileContent() {
   const handleSave = async () => {
       setIsSaving(true); setError(null);
       
-      const payload: Partial<ProfileDataFromApi> = {}; // Use Partial for the update payload
+      const payload: Partial<Omit<ProfileDataFromApi, 'id' | 'createdAt' | 'updatedAt' | 'nameLastUpdatedAt'> & { image?: string }> = {};
       let changesDetected = false;
 
-      // Compare and add changed fields
-      // Use profile?.name which can be null, compare with formData.name (string)
       if (formData.name.trim() && formData.name !== (profile?.name ?? '')) { 
           payload.name = formData.name.trim();
           changesDetected = true;
       }
       if (formData.location !== (profile?.location ?? '')) { 
-          payload.location = formData.location.trim(); 
+          payload.location = formData.location.trim() === '' ? null : formData.location.trim(); 
           changesDetected = true;
       }
       if (formData.mpesaPhoneNumber !== (profile?.mpesaPhoneNumber ?? '')) { 
-          payload.mpesaPhoneNumber = formData.mpesaPhoneNumber.trim();
+          payload.mpesaPhoneNumber = formData.mpesaPhoneNumber.trim() === '' ? null : formData.mpesaPhoneNumber.trim();
           changesDetected = true;
       }
-      if (uploadedImageUrl && uploadedImageUrl !== (profile?.profilePictureUrl ?? null)) {
-          payload.profilePictureUrl = uploadedImageUrl;
+      // Use uploadedImageUrl from UploadThing. `profile.image` is the current persisted image.
+      if (uploadedImageUrl && uploadedImageUrl !== profile?.image) {
+          payload.image = uploadedImageUrl;
           changesDetected = true;
       }
 
       if (!changesDetected) {
-           toast({ title: "No Changes", description: "No modifications detected to save." });
-           setIsSaving(false);
-           setIsEditing(false);
-           return;
+           toast({ title: "No Changes", description: "No modifications detected." });
+           setIsSaving(false); setIsEditing(false); return;
       }
       if (payload.name !== undefined && !payload.name) {
           setError("Name cannot be empty.");
           toast({ title: "Save Failed", description: "Name cannot be empty.", variant: "destructive" });
-          setIsSaving(false);
-          return;
+          setIsSaving(false); return;
       }
 
-      console.log("Sending PATCH request to /api/user/me with payload:", payload);
-
+      console.log("Saving profile with payload:", payload);
       try {
           const response = await fetch('/api/user/me', { 
               method: 'PATCH', 
@@ -204,7 +149,6 @@ export function ProfileContent() {
               throw new Error(errorMsg);
           }
           
-          console.log("Profile updated successfully, API response:", result.user);
           const updatedProfile: ProfileDataFromApi = result.user;
           setProfile(updatedProfile);
           setFormData({ 
@@ -212,26 +156,14 @@ export function ProfileContent() {
               location: updatedProfile.location || '', 
               mpesaPhoneNumber: updatedProfile.mpesaPhoneNumber || '' 
           });
-          setSelectedFile(null); 
-          setUploadedImageUrl(null); 
+          setUploadedImageUrl(null); // Clear after successful save
           setIsEditing(false);
           toast({ title: "Success", description: "Profile updated." });
 
-          if (payload.name || payload.profilePictureUrl) {
-               console.log("Updating session...");
-                await updateSession({ 
-                   ...session, 
-                   user: { 
-                       ...session?.user,
-                       name: updatedProfile.name || session?.user?.name, 
-                       image: updatedProfile.profilePictureUrl || session?.user?.image 
-                    } 
-               });
-                console.log("Session updated.");
+          if (payload.name || payload.image) {
+                await updateSession(); // Request session update from NextAuth
           }
-
       } catch (err: any) {
-          console.error("Save Profile Error:", err);
           setError(err.message);
           toast({ title: "Save Failed", description: err.message, variant: "destructive" });
       } finally { 
@@ -241,14 +173,14 @@ export function ProfileContent() {
 
   const canEditField = (lastUpdateTimestamp: string | null | undefined): boolean => {
       if (!lastUpdateTimestamp) return true;
-      try { return differenceInDays(new Date(), parseISO(lastUpdateTimestamp)) >= 60; }
-      catch (e) { console.error("Error parsing date for cooldown:", e); return false; }
+      try { return differenceInDays(new Date(), parseISO(lastUpdateTimestamp)) >= 60; } // 60 days
+      catch { return false; }
   };
   const isNameLocked = !!(isEditing && profile?.nameLastUpdatedAt && !canEditField(profile.nameLastUpdatedAt));
-  const isLocationLocked = false; 
-  const isMpesaLocked = false;  
+  const isLocationLocked = false; // No cooldown for location in current backend logic
+  const isMpesaLocked = false;  // No cooldown for Mpesa in current backend logic
 
-  const renderSkeleton = () => (
+  const renderSkeleton = () => ( /* ... skeleton code remains the same ... */ 
       <Card className="w-full border-none shadow-none">
           <CardHeader className="items-center">
               <Skeleton className="h-24 w-24 rounded-full mb-3" />
@@ -298,7 +230,8 @@ export function ProfileContent() {
      try { return format(new Date(dateString), 'PPP p'); } catch { return 'Invalid Date'; }
   };
   
-  const currentProfileImageUrl = uploadedImageUrl || profile?.profilePictureUrl || null;
+  // Use profile.image for current persisted image. uploadedImageUrl for newly uploaded one.
+  const displayImageUrl = uploadedImageUrl || profile?.image || null;
   const fallbackChar = profile?.name?.charAt(0)?.toUpperCase() || 'U';
 
   return (
@@ -306,35 +239,52 @@ export function ProfileContent() {
       <CardHeader className="items-center text-center">
           <div className="relative mb-3">
                 <Avatar className="h-24 w-24">
-                    <AvatarImage src={currentProfileImageUrl ?? undefined} alt={profile?.name ?? "User profile picture"} />
+                    <AvatarImage src={displayImageUrl ?? undefined} alt={profile?.name ?? "User profile picture"} />
                     <AvatarFallback>{fallbackChar}</AvatarFallback>
                 </Avatar>
                  {isEditing && (
                     <div className="absolute bottom-0 right-0">
-                       <input 
-                           type="file" 
-                           ref={fileInputRef} 
-                           onChange={handleFileChange} 
-                           accept="image/png, image/jpeg, image/webp" 
-                           className="hidden" 
-                           id="profile-picture-upload"
-                       />
-                        <Button 
-                            type="button"
-                            size="icon" 
-                            className="rounded-full h-8 w-8" 
-                            onClick={() => fileInputRef.current?.click()} 
-                            disabled={isUploadingImage || isSaving}
-                            title="Upload new profile picture"
-                        >
-                            {isUploadingImage ? <Icons.spinner className="h-4 w-4 animate-spin"/> : <Icons.edit className="h-4 w-4"/>}
-                        </Button>
+                        <UploadButton<OurFileRouter, "profilePictureUploader">
+                            endpoint="profilePictureUploader"
+                            onClientUploadComplete={(res) => {
+                                if (res && res.length > 0) {
+                                    console.log("Upload Completed:", res);
+                                    setUploadedImageUrl(res[0].url);
+                                    toast({ title: "Image Ready", description: "New profile picture uploaded and ready to be saved." });
+                                }
+                                setIsUploadingImage(false);
+                            }}
+                            onUploadError={(error: Error) => {
+                                console.error("UploadThing Error:", error);
+                                setError(`Image Upload Failed: ${error.message}`);
+                                toast({ title: "Upload Failed", description: error.message, variant: "destructive" });
+                                setIsUploadingImage(false);
+                            }}
+                            onUploadBegin={() => {
+                                console.log("Upload beginning...");
+                                setIsUploadingImage(true);
+                                setError(null);
+                                setUploadedImageUrl(null); // Clear previous temp url
+                            }}
+                            appearance={{
+                                button: "rounded-full h-8 w-8 p-0 bg-primary text-primary-foreground",
+                                // container: "",
+                                // allowedContent: "hidden"
+                            }}
+                            content={{
+                                button({ ready, isUploading }) {
+                                    if (isUploading) return <Icons.spinner className="h-4 w-4 animate-spin" />;
+                                    return <Icons.edit className="h-4 w-4" />;
+                                },
+                                allowedContent: () => null // Effectively hides allowed content text
+                            }}
+                        />
                    </div>
                 )}
             </div>
-            {isEditing && selectedFile && (
-                 <p className="text-xs text-muted-foreground truncate max-w-[200px]"> 
-                     {isUploadingImage ? `Uploading: ${selectedFile.name}` : uploadedImageUrl ? `Uploaded: ${selectedFile.name}` : `Selected: ${selectedFile.name}`}
+            {isEditing && uploadedImageUrl && (
+                 <p className="text-xs text-green-600 truncate max-w-[200px]"> 
+                     New image uploaded. Click Save.
                 </p>
              )}
 
@@ -342,7 +292,7 @@ export function ProfileContent() {
         <CardDescription>{profile?.email || 'Email Not Set'}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-         {isEditing && error && (<p className="text-sm font-medium text-destructive text-center">{error}</p>)}
+         {isEditing && error && (<p className="text-sm font-medium text-destructive text-center py-2">Error: {error}</p>)}
 
         <div className="space-y-1">
             <Label htmlFor="profile-name">Name <span className="text-red-500">*</span></Label>
@@ -356,8 +306,7 @@ export function ProfileContent() {
                 placeholder="Enter your full name or username"
                 className={isNameLocked ? "border-yellow-500 focus-visible:ring-yellow-400" : ""}
             />
-             {isNameLocked && (<p className="text-xs text-yellow-600">You can change your name again after 60 days from the last update.</p>)}
-        </div>
+             {isNameLocked && (<p className="text-xs text-yellow-600">You can change your name again in {60 - differenceInDays(new Date(), parseISO(profile!.nameLastUpdatedAt!))} days.</p>)}        </div>
          <div className="space-y-1"> <Label>Email</Label><Input value={profile?.email || ''} readOnly disabled /><p className="text-xs text-muted-foreground">Email cannot be changed.</p></div>
          <div className="space-y-1"> <Label>Phone Number</Label><Input value={profile?.phoneNumber || 'Not Set'} readOnly disabled /><p className="text-xs text-muted-foreground">Contact support to change phone number.</p></div>
         

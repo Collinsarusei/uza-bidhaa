@@ -1,68 +1,118 @@
 // src/app/privacy/page.tsx
 'use client';
 
-import Link from 'next/link';
-import { Button } from '@/components/ui/button';
-import { Icons } from '@/components/icons';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Separator } from '@/components/ui/separator';
 
 export default function PrivacyPolicyPage() {
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 py-8 md:py-12">
-      <div className="container mx-auto max-w-3xl px-4 md:px-6">
-        <div className="mb-6">
-          <Link href="/" passHref>
-            <Button variant="outline">
-              <Icons.arrowLeft className="mr-2 h-4 w-4" /> Back to Home
-            </Button>
-          </Link>
-        </div>
-
-        <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-gray-100 sm:text-4xl mb-8">
-          Privacy Policy
-        </h1>
-        
-        <div className="prose prose-slate dark:prose-invert max-w-none bg-card dark:bg-slate-800 p-6 rounded-lg shadow">
-          <p className="text-muted-foreground dark:text-slate-400">
-            Last updated: {new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
-          </p>
-
-          <h2>1. Introduction</h2>
-          <p>
-            Welcome to Uza Bidhaa Marketplace (&quot;we&quot;, &quot;our&quot;, or &quot;us&quot;). We are committed to protecting your personal information and your right to privacy. If you have any questions or concerns about this privacy notice, or our practices with regards to your personal information, please contact us at uzabidhaa@gmail.com.
-          </p>
-
-          <h2>2. Information We Collect</h2>
-          <p>
-            We collect personal information that you voluntarily provide to us when you register on the marketplace, express an interest in obtaining information about us or our products and services, when you participate in activities on the marketplace (such as posting items, making purchases, or sending messages) or otherwise when you contact us.
-          </p>
-          <p>
-            The personal information that we collect depends on the context of your interactions with us and the marketplace, the choices you make and the products and features you use. The personal information we collect may include the following: name, phone number, email address, mailing address, user preferences, and payment data (processed by our payment partners like Paystack).
-          </p>
-
-          <h2>3. How We Use Your Information</h2>
-          <p>
-            We use personal information collected via our marketplace for a variety of business purposes described below. We process your personal information for these purposes in reliance on our legitimate business interests, in order to enter into or perform a contract with you, with your consent, and/or for compliance with our legal obligations.
-          </p>
-          <ul>
-            <li>To facilitate account creation and logon process.</li>
-            <li>To post testimonials.</li>
-            <li>To manage user accounts.</li>
-            <li>To send administrative information to you.</li>
-            <li>To protect our Services.</li>
-            <li>To enforce our terms, conditions and policies for business purposes, to comply with legal and regulatory requirements or in connection with our contract.</li>
-            <li>To respond to legal requests and prevent harm.</li>
-          </ul>
-
-          <h2>4. Will Your Information Be Shared With Anyone?</h2>
-          <p>
-            We only share information with your consent, to comply with laws, to provide you with services, to protect your rights, or to fulfill business obligations (e.g., with payment processors like Paystack for transactions).
-          </p>
-          
-          {/* Add more sections as per your actual policy (e.g., Cookies, Data Retention, Your Rights, Contact) */}
-          <h2>Placeholder Sections:</h2>
-          <p>Please replace this placeholder content with your full Privacy Policy, including details on data security, cookies, data retention, user rights (GDPR/CCPA if applicable), international transfers, policy updates, and detailed contact information for privacy-specific concerns.</p>
-        </div>
+    <div className="container mx-auto py-6 space-y-6">
+      <div>
+        <h1 className="text-3xl font-bold">Privacy Policy</h1>
+        <p className="text-muted-foreground mt-2">
+          Last updated: {new Date().toLocaleDateString()}
+        </p>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Introduction</CardTitle>
+          <CardDescription>
+            At UZA Bidhaa, we take your privacy seriously. This policy describes how we collect, use, and protect your personal information.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <section>
+            <h2 className="text-xl font-semibold mb-2">Information We Collect</h2>
+            <p className="text-muted-foreground">
+              We collect information that you provide directly to us, including:
+            </p>
+            <ul className="list-disc list-inside mt-2 space-y-1 text-muted-foreground">
+              <li>Name and contact information</li>
+              <li>Phone number (for OTP verification)</li>
+              <li>Email address</li>
+              <li>Location information</li>
+              <li>Payment information (processed securely through Paystack)</li>
+              <li>Profile pictures and item images</li>
+            </ul>
+          </section>
+
+          <Separator />
+
+          <section>
+            <h2 className="text-xl font-semibold mb-2">How We Use Your Information</h2>
+            <p className="text-muted-foreground">
+              We use the collected information to:
+            </p>
+            <ul className="list-disc list-inside mt-2 space-y-1 text-muted-foreground">
+              <li>Provide and maintain our services</li>
+              <li>Process transactions and payments</li>
+              <li>Send you notifications about your account and transactions</li>
+              <li>Facilitate communication between buyers and sellers</li>
+              <li>Prevent fraud and ensure platform security</li>
+              <li>Comply with legal obligations</li>
+            </ul>
+          </section>
+
+          <Separator />
+
+          <section>
+            <h2 className="text-xl font-semibold mb-2">Data Security</h2>
+            <p className="text-muted-foreground">
+              We implement appropriate security measures to protect your personal information:
+            </p>
+            <ul className="list-disc list-inside mt-2 space-y-1 text-muted-foreground">
+              <li>Secure data storage using Prisma and PostgreSQL</li>
+              <li>Encrypted communication using HTTPS</li>
+              <li>Secure payment processing through Paystack</li>
+              <li>Regular security audits and updates</li>
+            </ul>
+          </section>
+
+          <Separator />
+
+          <section>
+            <h2 className="text-xl font-semibold mb-2">Third-Party Services</h2>
+            <p className="text-muted-foreground">
+              We use the following third-party services:
+            </p>
+            <ul className="list-disc list-inside mt-2 space-y-1 text-muted-foreground">
+              <li>Paystack for payment processing</li>
+              <li>UploadThing for file storage</li>
+              <li>Firebase for phone OTP verification</li>
+              <li>NextAuth.js for authentication</li>
+            </ul>
+          </section>
+
+          <Separator />
+
+          <section>
+            <h2 className="text-xl font-semibold mb-2">Your Rights</h2>
+            <p className="text-muted-foreground">
+              You have the right to:
+            </p>
+            <ul className="list-disc list-inside mt-2 space-y-1 text-muted-foreground">
+              <li>Access your personal information</li>
+              <li>Correct inaccurate data</li>
+              <li>Request deletion of your data</li>
+              <li>Opt-out of marketing communications</li>
+              <li>Export your data</li>
+            </ul>
+          </section>
+
+          <Separator />
+
+          <section>
+            <h2 className="text-xl font-semibold mb-2">Contact Us</h2>
+            <p className="text-muted-foreground">
+              If you have any questions about this Privacy Policy, please contact us at:
+            </p>
+            <p className="mt-2 text-muted-foreground">
+              Email: support@uzabidhaa.com
+            </p>
+          </section>
+        </CardContent>
+      </Card>
     </div>
   );
 }

@@ -1,0 +1,464 @@
+// Datasource and Client Generator
+datasource db {
+  provider     = "postgresql"
+  url          = env("DATABASE_URL")
+  directUrl    = env("DIRECT_URL")
+  relationMode = "prisma"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// --- NextAuth.js Models --- 
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// --- Application Models --- 
+model User {
+  id                      String    @id @default(cuid())
+  name                    String?
+  email                   String?   @unique
+  emailVerified           DateTime?
+  image                   String?
+  password                String?   
+  status                  UserStatus @default(ACTIVE)
+  role                    UserRole  @default(USER) 
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  nameLastUpdatedAt       DateTime? 
+
+  kycVerified             Boolean   @default(false)
+  location                String?
+  mpesaPhoneNumber        String?   @unique
+  phoneNumber             String?   @unique
+  phoneVerified           Boolean   @default(false)
+  
+  bankName                String? 
+  bankAccountNumber       String? 
+  bankCode                String?   
+
+  paystackRecipientCode   String?   
+  lastVerifiedPayoutMethod String? 
+  lastVerifiedMpesa       String? 
+  lastVerifiedBankAcc     String? 
+  lastVerifiedBankCode    String? 
+
+  availableBalance        Decimal   @default(0.00) 
+
+  accounts                Account[]
+  sessions                Session[]
+  items                   Item[]    @relation("UserItems")
+  initiatedConversations  Conversation[] @relation("InitiatorConversations")
+  participatedConversations Conversation[] @relation("ConversationParticipants") 
+  sentMessages            Message[] @relation("SentMessages")
+  notifications           Notification[]
+  paymentsAsBuyer         Payment[] @relation("BuyerPayments")
+  paymentsAsSeller        Payment[] @relation("SellerPayments")
+  disputesFiled           Dispute[] @relation("FiledDisputes")
+  disputesAgainst         Dispute[] @relation("OtherPartyDisputes")
+  adminFeeWithdrawals     AdminFeeWithdrawal[]
+  userWithdrawals         UserWithdrawal[] 
+  platformFees            PlatformFee[]
+  conversationParticipants ConversationParticipant[] 
+  earnings                Earning[] // Added relation to Earning
+  contactMessages         ContactMessage[]
+}
+
+model AdminFeeWithdrawal {
+  id                        String                     @id @default(cuid())
+  adminUserId               String
+  adminUser                 User                       @relation(fields: [adminUserId], references: [id])
+  amount                    Decimal
+  currency                  String
+  initiatedAt             DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+  paymentGateway            String                     
+  payoutMethod              String                     
+  status                    AdminFeeWithdrawalStatus   @default(PENDING)
+  completedAt               DateTime?                  
+  failureReason             String?                    
+  paystackRecipientCode     String?
+  paystackTransferCode      String?                    
+  paystackTransferReference String?
+
+  @@index([adminUserId])
+  @@index([status])
+}
+
+model UserWithdrawal {
+  id                      String               @id @default(cuid())
+  userId                  String
+  user                    User                 @relation(fields: [userId], references: [id])
+  amount                  Decimal
+  currency                String               @default("KES")
+  status                  UserWithdrawalStatus @default(PENDING)
+  payoutMethod            String?              
+  payoutDetailsMasked     String?              
+  initiatedAt             DateTime             @default(now())
+  updatedAt               DateTime             @updatedAt
+  completedAt             DateTime?
+  failureReason           String?
+  paymentGateway          String               @default("paystack")
+  paystackTransferCode    String?              
+  paystackRecipientCode   String?              
+  paystackTransferReference String?            
+
+  @@index([userId])
+  @@index([status])
+}
+
+model Earning {
+  id                 String        @id @default(cuid())
+  userId             String
+  user               User          @relation(fields: [userId], references: [id])
+  amount             Decimal       // Net amount credited to the seller
+  relatedPaymentId   String        @unique // A payment should ideally result in one earning record for the seller
+  payment            Payment       @relation(fields: [relatedPaymentId], references: [id])
+  relatedItemId      String
+  item               Item          @relation(fields: [relatedItemId], references: [id])
+  itemTitleSnapshot  String?       // Snapshot of item title at time of earning
+  status             EarningStatus @default(AVAILABLE)
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  @@index([userId, createdAt])
+}
+
+
+model Conversation {
+  id                      String    @id @default(cuid())
+  itemId                  String
+  item                    Item      @relation(fields: [itemId], references: [id])
+  initiatorId             String
+  initiator               User      @relation("InitiatorConversations", fields: [initiatorId], references: [id])
+  
+  approved                Boolean   @default(false)
+  approvedAt              DateTime?
+  createdAt               DateTime  @default(now())
+  lastMessageSnippet      String?
+  lastMessageTimestamp    DateTime?
+  hasShownPaymentWarning  Boolean   @default(false) 
+
+  participants            User[]    @relation("ConversationParticipants") 
+  participantsInfo        ConversationParticipant[] 
+  messages                Message[]
+
+  itemTitle               String?   
+  itemImageUrl            String?   
+
+  @@index([itemId])
+  @@index([initiatorId])
+  @@index([lastMessageTimestamp(sort: Desc)]) 
+}
+
+model ConversationParticipant {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lastReadAt     DateTime?    
+
+  @@unique([conversationId, userId])
+  @@index([userId])
+  @@index([conversationId])
+}
+
+model Message {
+  id                      String        @id @default(cuid())
+  conversationId          String
+  conversation            Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId                String
+  sender                  User          @relation("SentMessages", fields: [senderId], references: [id])
+  content                 String
+  isSystemMessage         Boolean?      @default(false) 
+  createdAt               DateTime      @default(now())
+
+  @@index([conversationId])
+  @@index([senderId])
+}
+
+model Dispute {
+  id                  String        @id @default(cuid())
+  itemId              String
+  item                Item          @relation(fields: [itemId], references: [id])
+  paymentId           String        
+  payment             Payment       @relation(fields: [paymentId], references: [id])
+  filedByUserId       String
+  filedByUser         User          @relation("FiledDisputes", fields: [filedByUserId], references: [id])
+  otherPartyUserId    String
+  otherPartyUser      User          @relation("OtherPartyDisputes", fields: [otherPartyUserId], references: [id])
+  
+  reason              String        
+  description         String        @db.Text 
+  status              DisputeStatus @default(PENDING_ADMIN)
+  resolutionNotes     String?       @db.Text 
+  resolvedAt          DateTime?     
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  @@index([itemId])
+  @@index([paymentId])
+  @@index([filedByUserId])
+  @@index([otherPartyUserId])
+  @@index([status])
+}
+
+model Item {
+  id                    String    @id @default(cuid())
+  sellerId              String
+  seller                User      @relation("UserItems", fields: [sellerId], references: [id])
+  title                 String
+  description           String    @db.Text 
+  price                 Decimal
+  category              String    
+  location              String?
+  quantity              Int       @default(1)
+  status                ItemStatus @default(AVAILABLE)
+  mediaUrls             String[]  
+  offersDelivery        Boolean   @default(false)
+  acceptsInstallments   Boolean   @default(false)
+  discountPercentage    Float?    
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  conversations         Conversation[]
+  notifications         Notification[]
+  payments              Payment[]
+  disputes              Dispute[]
+  platformFees          PlatformFee[]
+  earnings              Earning[] // Added relation to Earning
+  tracking              ItemTracking?
+
+  @@index([sellerId, createdAt(sort: Desc)]) 
+  @@index([status, createdAt(sort: Desc)])   
+  @@index([category])
+  @@index([location])
+  @@index([price])
+}
+
+model Notification {
+  id                  String    @id @default(cuid())
+  userId              String
+  user                User      @relation(fields: [userId], references: [id])
+  type                String    
+  message             String
+  relatedItemId       String?
+  relatedItem         Item?     @relation(fields: [relatedItemId], references: [id])
+  relatedPaymentId    String?   
+  relatedWithdrawalId String?    
+  relatedDisputeId    String?   
+  isRead              Boolean   @default(false)
+  readAt              DateTime?
+  createdAt           DateTime  @default(now())
+
+  @@index([userId, createdAt(sort: Desc)]) 
+  @@index([relatedItemId])
+  @@index([relatedDisputeId]) 
+}
+
+model Payment {
+  id                        String        @id @default(cuid())
+  itemId                    String
+  item                      Item          @relation(fields: [itemId], references: [id])
+  buyerId                   String
+  buyer                     User          @relation("BuyerPayments", fields: [buyerId], references: [id])
+  sellerId                  String
+  seller                    User          @relation("SellerPayments", fields: [sellerId], references: [id])
+  
+  amount                    Decimal       
+  platformFeeCharged        Decimal?      
+  currency                  String
+  status                    PaymentStatus @default(INITIATED)
+  paymentGateway            String        
+  gatewayTransactionId      String?       
+  paystackReference         String?       
+  paystackAccessCode        String?       
+  paystackAuthorizationUrl  String?       
+  failureReason             String?       
+  activeDisputeId           String?       @unique 
+  disputes                  Dispute[]      
+  createdAt                 DateTime      @default(now())
+  updatedAt                 DateTime      @updatedAt
+
+  itemTitle                 String?       
+
+  platformFees              PlatformFee[] 
+  earning                   Earning? // Relation to Earning (if one-to-one with Payment)
+
+  @@index([itemId])
+  @@index([status, createdAt]) 
+  @@index([buyerId, createdAt(sort: Desc)]) 
+  @@index([sellerId])
+}
+
+model PlatformFee {
+  id                      String    @id @default(cuid())
+  relatedPaymentId        String    @unique 
+  payment                 Payment   @relation(fields: [relatedPaymentId], references: [id])
+  relatedItemId           String
+  item                    Item      @relation(fields: [relatedItemId], references: [id])
+  sellerId                String    
+  seller                  User      @relation(fields: [sellerId], references: [id])
+  amount                  Decimal   
+  appliedFeePercentage    Decimal?  
+  appliedFeeRuleId        String?   
+  appliedFeeRule          FeeRule?  @relation(fields: [appliedFeeRuleId], references: [id])
+  createdAt               DateTime  @default(now())
+
+  @@index([relatedItemId])
+  @@index([sellerId])
+  @@index([appliedFeeRuleId])
+}
+
+model PlatformSetting {
+  id                        String    @id @default("global_settings") 
+  defaultFeePercentage      Decimal   @default(2.0) 
+  totalPlatformFees         Decimal   @default(0.00) 
+  updatedAt                 DateTime  @updatedAt
+  @@unique([id]) 
+}
+
+model FeeRule {
+  id                String        @id @default(cuid())
+  name              String
+  description       String?
+  feePercentage     Decimal
+  minAmount         Decimal?
+  maxAmount         Decimal?
+  isActive          Boolean       @default(true)
+  priority          Int          @default(0)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  platformFees      PlatformFee[]
+}
+
+model GlobalSettings {
+  id                  String   @id @default("global")
+  defaultFeePercentage Float    @default(5)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}
+
+model ContactMessage {
+  id        String   @id @default(uuid())
+  userId    String
+  subject   String
+  message   String
+  status    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User?    @relation(fields: [userId], references: [id])
+}
+
+model ItemTracking {
+  id                  String   @id @default(cuid())
+  itemId             String   @unique
+  item               Item     @relation(fields: [itemId], references: [id])
+  trackingNumber     String
+  carrier            String
+  estimatedDeliveryDays Int
+  notes              String?
+  status             String   // IN_TRANSIT, DELAYED, DELIVERED
+  lastUpdated        DateTime @updatedAt
+  createdAt          DateTime @default(now())
+
+  @@index([itemId])
+}
+
+// --- Enums --- 
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  BANNED
+}
+
+enum AdminFeeWithdrawalStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum UserWithdrawalStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum EarningStatus { // Added EarningStatus enum
+  AVAILABLE
+  // REVERSED // Example for future use if earnings can be clawed back
+}
+
+enum DisputeStatus {
+  PENDING_BUYER
+  PENDING_SELLER
+  PENDING_ADMIN
+  RESOLVED_REFUND  
+  RESOLVED_RELEASE_PAYMENT 
+  CLOSED 
+}
+
+enum ItemStatus {
+  AVAILABLE
+  PENDING_PAYMENT
+  PAID_ESCROW
+  SOLD
+  DELISTED
+  DISPUTED 
+}
+
+enum PaymentStatus {
+  INITIATED       
+  PENDING_CONFIRMATION 
+  SUCCESSFUL_ESCROW 
+  RELEASED_TO_SELLER 
+  REFUNDED_TO_BUYER  
+  FAILED
+  CANCELLED
+  DISPUTED 
+}

@@ -1,0 +1,67 @@
+declare module 'lucide-react' {
+  import { FC, SVGProps } from 'react';
+  export interface IconProps extends SVGProps<SVGSVGElement> {
+    size?: string | number;
+    color?: string;
+    strokeWidth?: string | number;
+  }
+
+  export const AlertTriangle: FC<IconProps>;
+  export const ArrowLeft: FC<IconProps>;
+  export const ArrowRight: FC<IconProps>;
+  export const Bell: FC<IconProps>;
+  export const BellOff: FC<IconProps>;
+  export const Check: FC<IconProps>;
+  export const ChevronsUpDown: FC<IconProps>;
+  export const Circle: FC<IconProps>;
+  export const CircleDollarSign: FC<IconProps>;
+  export const Copy: FC<IconProps>;
+  export const Edit: FC<IconProps>;
+  export const ExternalLink: FC<IconProps>;
+  export const Eye: FC<IconProps>;
+  export const EyeOff: FC<IconProps>;
+  export const File: FC<IconProps>;
+  export const HelpCircle: FC<IconProps>;
+  export const Home: FC<IconProps>;
+  export const Loader2: FC<IconProps>;
+  export const Lock: FC<IconProps>;
+  export const LogOut: FC<IconProps>;
+  export const Mail: FC<IconProps>;
+  export const Menu: FC<IconProps>;
+  export const MessageSquare: FC<IconProps>;
+  export const Moon: FC<IconProps>;
+  export const Plus: FC<IconProps>;
+  export const PlusCircle: FC<IconProps>;
+  export const Search: FC<IconProps>;
+  export const Send: FC<IconProps>;
+  export const Server: FC<IconProps>;
+  export const Settings: FC<IconProps>;
+  export const Share2: FC<IconProps>;
+  export const Shield: FC<IconProps>;
+  export const ShieldAlert: FC<IconProps>;
+  export const Sun: FC<IconProps>;
+  export const Tag: FC<IconProps>;
+  export const Trash: FC<IconProps>;
+  export const User: FC<IconProps>;
+  export const Users: FC<IconProps>;
+  export const X: FC<IconProps>;
+  export const Workflow: FC<IconProps>;
+  export const Image: FC<IconProps>;
+  export const Phone: FC<IconProps>;
+  export const Info: FC<IconProps>;
+  export const Key: FC<IconProps>;
+  export const Inbox: FC<IconProps>;
+  export const Bot: FC<IconProps>;
+  export const MapPin: FC<IconProps>;
+  export const LayoutGrid: FC<IconProps>;
+  export const Package: FC<IconProps>;
+  export const AlertCircle: FC<IconProps>;
+  export const DollarSign: FC<IconProps>;
+  export const Receipt: FC<IconProps>;
+  export const Archive: FC<IconProps>;
+  export const ChevronDown: FC<IconProps>;
+  export const ChevronUp: FC<IconProps>;
+  export const ChevronRight: FC<IconProps>;
+  export const ChevronLeft: FC<IconProps>;
+  export const PanelLeft: FC<IconProps>;
+} 

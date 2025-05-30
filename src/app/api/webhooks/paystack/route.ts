@@ -1,10 +1,50 @@
 // src/app/api/webhooks/paystack/route.ts
 import { NextResponse } from 'next/server';
-import { adminDb } from '@/lib/firebase-admin';
-import { FieldValue } from 'firebase-admin/firestore';
+import prisma from '@/lib/prisma';
 import crypto from 'crypto';
-import { Payment, UserProfile, Item, Withdrawal, AdminPlatformFeeWithdrawal } from '@/lib/types';
+import { Prisma } from '@prisma/client';
+import { Decimal } from '@prisma/client/runtime/library';
 import { createNotification } from '@/lib/notifications';
+
+const PaymentStatus = {
+  INITIATED: 'INITIATED',
+  PENDING: 'PENDING',
+  SUCCESSFUL_ESCROW: 'SUCCESSFUL_ESCROW',
+  PAID_ESCROW: 'PAID_ESCROW',
+  RELEASED_TO_SELLER: 'RELEASED_TO_SELLER',
+  REFUNDED_TO_BUYER: 'REFUNDED_TO_BUYER',
+  CANCELLED: 'CANCELLED',
+  FAILED: 'FAILED',
+  DISPUTED: 'DISPUTED'
+} as const;
+
+const ItemStatus = {
+  AVAILABLE: 'AVAILABLE',
+  PENDING_PAYMENT: 'PENDING_PAYMENT',
+  PAID_ESCROW: 'PAID_ESCROW',
+  SOLD: 'SOLD',
+  DELISTED: 'DELISTED',
+  DISPUTED: 'DISPUTED'
+} as const;
+
+const AdminFeeWithdrawalStatus = {
+  PENDING: 'PENDING',
+  PROCESSING: 'PROCESSING',
+  COMPLETED: 'COMPLETED',
+  FAILED: 'FAILED'
+} as const;
+
+const UserWithdrawalStatus = {
+  PENDING: 'PENDING',
+  PROCESSING: 'PROCESSING',
+  COMPLETED: 'COMPLETED',
+  FAILED: 'FAILED'
+} as const;
+
+const UserRole = {
+  USER: 'USER',
+  ADMIN: 'ADMIN'
+} as const;
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 
@@ -13,319 +53,302 @@ if (!PAYSTACK_SECRET_KEY) {
 }
 
 async function handleChargeSuccess(payload: any) {
-    console.log("Paystack Webhook: Processing charge.success event...", payload);
+    console.log("Paystack Webhook: Processing charge.success event (Prisma V3 - Corrected Item Logic)...", payload);
     
-    const paymentId = payload?.data?.metadata?.payment_id; 
+    const prismaPaymentId = payload?.data?.metadata?.payment_id_prisma; 
     const paystackReference = payload?.data?.reference;
-    const paystackTransactionId = payload?.data?.id; 
-    const paymentStatus = payload?.data?.status;
+    const paystackTransactionId = payload?.data?.id;
+    const paymentStatusFromPaystack = payload?.data?.status; 
 
-    if (!paymentId || !adminDb) {
-        console.warn(`Charge Success Ignored: Missing payment_id in metadata or DB not init. Paystack Ref: ${paystackReference}`);
+    if (!prismaPaymentId) {
+        console.warn(`Webhook charge.success: Missing payment_id_prisma in metadata. Paystack Ref: ${paystackReference}`);
         return; 
     }
-
-    if (paymentStatus !== 'success') {
-        console.warn(`Charge Success Ignored: Payment reference ${paystackReference} status is not 'success' (is '${paymentStatus}'). Payment ID: ${paymentId}`);
+    if (paymentStatusFromPaystack !== 'success') {
+        console.warn(`Webhook charge.success: Paystack status is not 'success' (is '${paymentStatusFromPaystack}') for Prisma Payment ID: ${prismaPaymentId}.`);
         return;
     }
 
-    const paymentRef = adminDb.collection('payments').doc(paymentId);
-    
     try {
-        const paymentDoc = await paymentRef.get();
-
-        if (!paymentDoc.exists) {
-            console.warn(`Charge Success Ignored: Payment record not found for paymentId: ${paymentId} (Paystack Ref: ${paystackReference})`);
-            return;
-        }
-        const paymentData = paymentDoc.data() as Payment;
-        if (!paymentData) {
-            console.warn(`Charge Success Ignored: Payment data empty for paymentId: ${paymentId}`);
-            return;
-        }
-
-        if (['paid_to_platform', 'released_to_seller_balance', 'failed', 'refunded'].includes(paymentData.status)) {
-            console.log(`Charge Success Ignored: Payment ${paymentId} already in terminal state (${paymentData.status}). Paystack Ref: ${paystackReference}`);
-            return;
-        }
-
-        await adminDb.runTransaction(async (transaction) => {
-            const itemRef = adminDb!.collection('items').doc(paymentData.itemId);
-            const itemDoc = await transaction.get(itemRef);
-            
-            let currentItemStatus: Item['status'] = 'available';
-            let currentItemQuantity: number = 1; // Default if not found or no quantity
-
-            if(itemDoc.exists) {
-                const itemData = itemDoc.data() as Item;
-                currentItemStatus = itemData.status;
-                currentItemQuantity = itemData.quantity !== undefined ? itemData.quantity : 1;
-            }
-
-            transaction.update(paymentRef, {
-                status: 'paid_to_platform',
-                gatewayTransactionId: paystackTransactionId ? paystackTransactionId.toString() : null, 
-                updatedAt: FieldValue.serverTimestamp(),
-            });
-
-            // Logic for item status based on quantity and current status
-            if (currentItemStatus === 'available') {
-                if (currentItemQuantity === 1) {
-                    // This is the last unit, so mark as paid_escrow
-                    transaction.update(itemRef, {
-                        status: 'paid_escrow', 
-                        updatedAt: FieldValue.serverTimestamp()
-                    });
-                    console.log(`Charge Success: Item ${paymentData.itemId} (last unit) status updated to paid_escrow. Payment ${paymentId} to paid_to_platform.`);
-                } else {
-                    // Quantity > 1, item remains available. No status change needed here.
-                    // Quantity itself is not decremented here.
-                    console.log(`Charge Success: Item ${paymentData.itemId} has quantity > 1. Status remains '${currentItemStatus}'. Payment ${paymentId} to paid_to_platform.`);
-                }
-            } else {
-                // Item not 'available' (e.g., disputed, or already in paid_escrow from a previous transaction attempt)
-                // Do not change item status further in this case from webhook.
-                console.log(`Charge Success: Item ${paymentData.itemId} status is '${currentItemStatus}'. Not changing item status. Payment ${paymentId} to paid_to_platform.`);
-            }
+        const payment = await prisma.payment.findUnique({
+            where: { id: prismaPaymentId },
+            include: { item: { select: { id: true, title: true, quantity: true, status: true } } } // Include item details
         });
 
-        try {
-            await createNotification({
-                userId: paymentData.sellerId,
-                type: 'payment_received',
-                message: `Payment secured for "${paymentData.itemTitle || 'Item'}". Prepare for delivery/handover once buyer confirms receipt or admin releases.`,
-                relatedItemId: paymentData.itemId,
-                relatedPaymentId: paymentId,
-            });
-             await createNotification({
-                userId: paymentData.buyerId,
-                type: 'payment_received',
-                message: `Your payment for "${paymentData.itemTitle || 'Item'}" has been successfully processed and is held securely. Item Seller ID: ${paymentData.sellerId.substring(0,6)}`,
-                relatedItemId: paymentData.itemId,
-                relatedPaymentId: paymentId,
-            });
-        } catch (notifyError) {
-             console.error(`Charge Success: Failed to send notification for payment ${paymentId}:`, notifyError);
+        if (!payment) {
+            console.warn(`Webhook charge.success: Payment record not found for ID: ${prismaPaymentId}.`);
+            return;
         }
 
+        const terminalStatuses = [PaymentStatus.SUCCESSFUL_ESCROW, PaymentStatus.RELEASED_TO_SELLER, PaymentStatus.REFUNDED_TO_BUYER, PaymentStatus.FAILED];
+        if (terminalStatuses.includes(payment.status as typeof terminalStatuses[number])) {
+            console.log(`Webhook charge.success: Payment ${prismaPaymentId} already in terminal state (${payment.status}). Skipping.`);
+            return;
+        }
+
+        await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+            // 1. Update Payment status
+            await tx.payment.update({
+                where: { id: prismaPaymentId },
+                data: {
+                    status: PaymentStatus.SUCCESSFUL_ESCROW, 
+                    gatewayTransactionId: paystackTransactionId ? paystackTransactionId.toString() : null,
+                }
+            });
+            console.log(`Webhook charge.success: Payment ${prismaPaymentId} status updated to SUCCESSFUL_ESCROW.`);
+
+            // 2. Update Item status (conditionally based on quantity) - NO quantity decrement here
+            if (payment.item) {
+                if (payment.item.status === ItemStatus.AVAILABLE) {
+                    if (payment.item.quantity === 1) {
+                        // This is the last unit, mark as PAID_ESCROW (no longer available for others to buy)
+                        await tx.item.update({
+                            where: { id: payment.itemId },
+                            data: { status: ItemStatus.PAID_ESCROW }
+                        });
+                        console.log(`Webhook charge.success: Item ${payment.itemId} (last unit, quantity: 1) status updated to PAID_ESCROW.`);
+                    } else if (payment.item.quantity > 1) {
+                        // Quantity > 1, item listing remains AVAILABLE. No status change needed here for the item itself.
+                        console.log(`Webhook charge.success: Item ${payment.itemId} (quantity: ${payment.item.quantity}) status remains AVAILABLE.`);
+                    } else {
+                        // Quantity is 0 or less, but status was AVAILABLE. This is an inconsistent state.
+                        // Log this, but proceed with payment. Item should ideally not be buyable if quantity <= 0.
+                        console.warn(`Webhook charge.success: Item ${payment.itemId} has quantity ${payment.item.quantity} but status was AVAILABLE. Proceeding with payment update.`);
+                    }
+                }
+            } else {
+                console.warn(`Webhook charge.success: Item data not found for payment ${prismaPaymentId}. Cannot update item status.`);
+            }
+        });
+        
+        // Notifications
+        if (payment.item) {
+            await createNotification({
+                userId: payment.sellerId,
+                type: 'payment_secured',
+                message: `Payment secured for "${payment.itemTitle || payment.item.title}". Awaiting buyer confirmation.`,
+                relatedPaymentId: prismaPaymentId,
+                relatedItemId: payment.itemId,
+            });
+            await createNotification({
+                userId: payment.buyerId,
+                type: 'payment_successful',
+                message: `Your payment for "${payment.itemTitle || payment.item.title}" is successful and held securely.`,
+                relatedPaymentId: prismaPaymentId,
+                relatedItemId: payment.itemId,
+            });
+        }
     } catch (error) {
-         console.error(`Charge Success Error processing paymentId ${paymentId} (Paystack Ref: ${paystackReference}):`, error);
+         console.error(`Webhook charge.success: Error processing Prisma Payment ID ${prismaPaymentId}:`, error);
     }
 }
 
 async function handleTransferSuccess(payload: any) {
-    console.log("Paystack Webhook: Processing transfer.success event...", payload);
+    console.log("Paystack Webhook: Processing transfer.success event (Prisma)...", payload);
     const metadata = payload?.data?.recipient?.metadata;
     const transferData = payload?.data;
     
-    const withdrawalId = metadata?.withdrawal_id || metadata?.admin_withdrawal_id;
-    const userId = metadata?.user_id;
-    const adminUserId = metadata?.admin_user_id;
+    const adminWithdrawalId = metadata?.admin_withdrawal_id;
+    const userWithdrawalId = metadata?.user_withdrawal_id; 
+    const userIdForNotification = metadata?.user_id; 
+
     const paystackTransferCode = transferData?.transfer_code;
-    const amount = transferData?.amount / 100;
+    const amountDecimal = new Decimal(transferData?.amount / 100); 
 
-    if (!adminDb) {
-        console.error("Transfer Success Error: DB not initialized.");
-        return;
-    }
-    if (!withdrawalId) {
-        console.warn("Transfer Success Ignored: withdrawal_id or admin_withdrawal_id not found in webhook metadata.", metadata);
-        return;
-    }
-
-    try {
-        let withdrawalRef: FirebaseFirestore.DocumentReference | null = null;
-        let notificationUserId: string | null = null;
-        let notificationMessage = ``;
-
-        if (userId) {
-            withdrawalRef = adminDb.collection('users').doc(userId).collection('withdrawals').doc(withdrawalId);
-            notificationUserId = userId;
-            notificationMessage = `Your withdrawal of KES ${amount?.toLocaleString()} has been successfully completed.`;
-            console.log(`Transfer Success: User withdrawal ${withdrawalId} for user ${userId}.`);
-        } else if (adminUserId) {
-            withdrawalRef = adminDb.collection('adminFeeWithdrawals').doc(withdrawalId);
-            notificationUserId = adminUserId; 
-            notificationMessage = `Admin withdrawal of KES ${amount?.toLocaleString()} completed successfully.`;
-            console.log(`Transfer Success: Admin fee withdrawal ${withdrawalId} by admin ${adminUserId}.`);
-        } else {
-            console.warn(`Transfer Success Ignored: Could not determine user type for withdrawal ${withdrawalId}.`);
-            return;
-        }
-
-        await withdrawalRef.update({
-            status: 'completed',
-            paystackTransferCode: paystackTransferCode,
-            updatedAt: FieldValue.serverTimestamp(),
-            completedAt: FieldValue.serverTimestamp()
-        });
-        console.log(`Transfer Success: Updated withdrawal ${withdrawalId} to completed.`);
-
-        if (notificationUserId) {
-            try {
-                await createNotification({
-                    userId: notificationUserId,
-                    type: 'withdrawal_completed',
-                    message: notificationMessage,
-                    relatedWithdrawalId: withdrawalId 
-                });
-            } catch (notifyError) {
-                console.error(`Transfer Success: Notification error for withdrawal ${withdrawalId}:`, notifyError);
+    if (adminWithdrawalId) {
+        try {
+            const withdrawal = await prisma.adminFeeWithdrawal.findUnique({ where: { id: adminWithdrawalId } });
+            if (!withdrawal || withdrawal.status === AdminFeeWithdrawalStatus.COMPLETED || withdrawal.status === AdminFeeWithdrawalStatus.FAILED) {
+                console.log(`Webhook transfer.success: AdminFeeWithdrawal ${adminWithdrawalId} not found or already processed. Skipping.`);
+                return;
             }
-        }
-    } catch (error) {
-        console.error(`Transfer Success: Error processing withdrawal ${withdrawalId}:`, error);
-    }
-}
-
-async function handleTransferFailed(payload: any) {
-    console.log("Paystack Webhook: Processing transfer.failed event...", payload);
-    const metadata = payload?.data?.recipient?.metadata;
-    const transferData = payload?.data;
-    
-    const withdrawalId = metadata?.withdrawal_id || metadata?.admin_withdrawal_id;
-    const userId = metadata?.user_id;
-    const adminUserId = metadata?.admin_user_id;
-    const paystackTransferCode = transferData?.transfer_code;
-    const failureReason = transferData?.failure_reason || "Transfer failed (Paystack)";
-    const amount = transferData?.amount / 100;
-
-    if (!adminDb) {
-        console.error("Transfer Failed Error: DB not initialized.");
-        return;
-    }
-    if (!withdrawalId) {
-        console.warn("Transfer Failed Ignored: withdrawal_id or admin_withdrawal_id not found.", metadata);
-        return;
-    }
-
-    try {
-        let withdrawalRef: FirebaseFirestore.DocumentReference | null = null;
-        let userRef: FirebaseFirestore.DocumentReference | null = null;
-        let settingsRef: FirebaseFirestore.DocumentReference | null = null;
-        let notificationUserId: string | null = null;
-        let notificationMessage = ``;
-
-        if (userId) {
-            withdrawalRef = adminDb.collection('users').doc(userId).collection('withdrawals').doc(withdrawalId);
-            userRef = adminDb.collection('users').doc(userId);
-            notificationUserId = userId;
-            notificationMessage = `Your withdrawal of KES ${amount?.toLocaleString()} failed. Reason: ${failureReason}`;
-            console.log(`Transfer Failed: User withdrawal ${withdrawalId} for ${userId}. Reason: ${failureReason}`);
-        } else if (adminUserId) {
-            withdrawalRef = adminDb.collection('adminFeeWithdrawals').doc(withdrawalId);
-            settingsRef = adminDb.collection('settings').doc('platformFee');
-            notificationUserId = adminUserId;
-            notificationMessage = `Admin withdrawal of KES ${amount?.toLocaleString()} failed. Reason: ${failureReason}`;
-             console.log(`Transfer Failed: Admin fee withdrawal ${withdrawalId} by ${adminUserId}. Reason: ${failureReason}`);
-        } else {
-            console.warn(`Transfer Failed Ignored: Could not determine user type for withdrawal ${withdrawalId}.`);
-            return;
-        }
-        
-        const withdrawalDoc = await withdrawalRef.get();
-        if (withdrawalDoc.exists && (withdrawalDoc.data()?.status === 'failed' || withdrawalDoc.data()?.status === 'completed')) {
-            console.log(`Transfer Failed Ignored: Withdrawal ${withdrawalId} already in terminal state.`);
-            return;
-        }
-
-        await adminDb.runTransaction(async (transaction) => {
-            transaction.update(withdrawalRef!, {
-                status: 'failed',
-                failureReason: failureReason,
-                paystackTransferCode: paystackTransferCode,
-                updatedAt: FieldValue.serverTimestamp(),
-            });
-
-            if (amount > 0) { 
-                if (userRef) {
-                    transaction.update(userRef, { availableBalance: FieldValue.increment(amount) });
-                    console.log(`Transfer Failed: Reverted KES ${amount} to user ${userId} balance.`);
-                } else if (settingsRef) {
-                    transaction.update(settingsRef, { totalPlatformFees: FieldValue.increment(amount) });
-                     console.log(`Transfer Failed: Reverted KES ${amount} to totalPlatformFees.`);
+            await prisma.adminFeeWithdrawal.update({
+                where: { id: adminWithdrawalId },
+                data: {
+                    status: AdminFeeWithdrawalStatus.COMPLETED,
+                    paystackTransferCode: paystackTransferCode,
+                    completedAt: new Date(),
                 }
-            }
-        });
-         console.log(`Transfer Failed: Updated withdrawal ${withdrawalId} to failed.`);
-
-        if (notificationUserId) {
-            try {
-                await createNotification({
-                    userId: notificationUserId,
-                    type: 'withdrawal_failed',
-                    message: notificationMessage,
-                    relatedWithdrawalId: withdrawalId 
-                });
-            } catch (notifyError) {
-                console.error(`Transfer Failed: Notification error for withdrawal ${withdrawalId}:`, notifyError);
-            }
+            });
+            console.log(`Webhook transfer.success: AdminFeeWithdrawal ${adminWithdrawalId} COMPLETED.`);
+            await createNotification({
+                userId: withdrawal.adminUserId,
+                type: 'admin_withdrawal_completed',
+                message: `Admin withdrawal of KES ${amountDecimal.toFixed(2)} completed.`,
+                relatedWithdrawalId: adminWithdrawalId 
+            });
+        } catch (error) {
+            console.error(`Webhook transfer.success: Error AdminFeeWithdrawal ${adminWithdrawalId}:`, error);
         }
-    } catch (error) {
-        console.error(`Transfer Failed: Error processing withdrawal ${withdrawalId}:`, error);
+    } else if (userWithdrawalId && userIdForNotification) {
+        try {
+            const withdrawal = await prisma.userWithdrawal.findUnique({ where: { id: userWithdrawalId } });
+            if (!withdrawal || withdrawal.status === UserWithdrawalStatus.COMPLETED || withdrawal.status === UserWithdrawalStatus.FAILED) {
+                console.log(`Webhook transfer.success: UserWithdrawal ${userWithdrawalId} not found or already processed. Skipping.`);
+                return;
+            }
+            await prisma.userWithdrawal.update({
+                where: { id: userWithdrawalId },
+                data: {
+                    status: UserWithdrawalStatus.COMPLETED,
+                    paystackTransferCode: paystackTransferCode,
+                    completedAt: new Date(),
+                }
+            });
+            console.log(`Webhook transfer.success: UserWithdrawal ${userWithdrawalId} COMPLETED for user ${userIdForNotification}.`);
+            await createNotification({
+                userId: userIdForNotification,
+                type: 'user_withdrawal_completed',
+                message: `Your withdrawal of KES ${amountDecimal.toFixed(2)} has been completed.`,
+                relatedWithdrawalId: userWithdrawalId 
+            });
+        } catch (error) {
+            console.error(`Webhook transfer.success: Error UserWithdrawal ${userWithdrawalId}:`, error);
+        }
+    } else {
+        console.warn("Webhook transfer.success: No identifiable admin or user withdrawal ID in metadata.", metadata);
     }
 }
 
-async function handleTransferReversed(payload: any) {
-     console.warn("Paystack Webhook: transfer.reversed event received. Logic similar to transfer.failed.", payload);
-     // For now, reuse handleTransferFailed logic as the outcome (reverting funds) is similar.
-     await handleTransferFailed(payload); 
+async function handleTransferFailedOrReversed(payload: any, eventType: 'transfer.failed' | 'transfer.reversed') {
+    console.log(`Paystack Webhook: Processing ${eventType} (Prisma)...`, payload);
+    const metadata = payload?.data?.recipient?.metadata;
+    const transferData = payload?.data;
+
+    const adminWithdrawalId = metadata?.admin_withdrawal_id;
+    const userWithdrawalId = metadata?.user_withdrawal_id; 
+    const userIdForReversal = metadata?.user_id; 
+
+    const paystackTransferCode = transferData?.transfer_code;
+    const failureReason = transferData?.failure_reason || `${eventType} by Paystack`;
+    const amountDecimal = new Decimal(transferData?.amount / 100);
+
+    if (adminWithdrawalId) {
+        try {
+            const withdrawal = await prisma.adminFeeWithdrawal.findUnique({ where: { id: adminWithdrawalId }});
+            if (!withdrawal || withdrawal.status === AdminFeeWithdrawalStatus.COMPLETED || withdrawal.status === AdminFeeWithdrawalStatus.FAILED) {
+                console.log(`Webhook ${eventType}: AdminFeeWithdrawal ${adminWithdrawalId} not found or already processed. Skipping.`);
+                return;
+            }
+            await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+                await tx.adminFeeWithdrawal.update({
+                    where: { id: adminWithdrawalId },
+                    data: {
+                        status: AdminFeeWithdrawalStatus.FAILED,
+                        failureReason: failureReason,
+                        paystackTransferCode: paystackTransferCode,
+                    }
+                });
+                if (amountDecimal.gt(0)) {
+                    await tx.platformSetting.update({
+                        where: { id: "global_settings" },
+                        data: { totalPlatformFees: { increment: amountDecimal } }
+                    });
+                    console.log(`Webhook ${eventType}: Reverted KES ${amountDecimal.toFixed(2)} to totalPlatformFees for AdminFeeWithdrawal ${adminWithdrawalId}.`);
+                }
+            });
+            console.log(`Webhook ${eventType}: AdminFeeWithdrawal ${adminWithdrawalId} FAILED.`);
+            await createNotification({
+                userId: withdrawal.adminUserId,
+                type: 'admin_withdrawal_failed',
+                message: `Admin withdrawal of KES ${amountDecimal.toFixed(2)} ${eventType === 'transfer.failed' ? 'failed' : 'reversed'}. Reason: ${failureReason}`,
+                relatedWithdrawalId: adminWithdrawalId 
+            });
+        } catch (error) {
+            console.error(`Webhook ${eventType}: Error AdminFeeWithdrawal ${adminWithdrawalId}:`, error);
+        }
+    } else if (userWithdrawalId && userIdForReversal) {
+        try {
+            const withdrawal = await prisma.userWithdrawal.findUnique({ where: { id: userWithdrawalId }});
+            if (!withdrawal || withdrawal.status === UserWithdrawalStatus.COMPLETED || withdrawal.status === UserWithdrawalStatus.FAILED) {
+                 console.log(`Webhook ${eventType}: UserWithdrawal ${userWithdrawalId} not found or already processed. Skipping.`);
+                return;
+            }
+            await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+                await tx.userWithdrawal.update({
+                    where: { id: userWithdrawalId },
+                    data: {
+                        status: UserWithdrawalStatus.FAILED,
+                        failureReason: failureReason,
+                        paystackTransferCode: paystackTransferCode,
+                    }
+                });
+                if (amountDecimal.gt(0)) {
+                    await tx.user.update({
+                        where: { id: userIdForReversal },
+                        data: { availableBalance: { increment: amountDecimal } }
+                    });
+                    console.log(`Webhook ${eventType}: Reverted KES ${amountDecimal.toFixed(2)} to user ${userIdForReversal} availableBalance for UserWithdrawal ${userWithdrawalId}.`);
+                }
+            });
+            console.log(`Webhook ${eventType}: UserWithdrawal ${userWithdrawalId} FAILED for user ${userIdForReversal}.`);
+             await createNotification({
+                userId: userIdForReversal,
+                type: 'user_withdrawal_failed',
+                message: `Your withdrawal of KES ${amountDecimal.toFixed(2)} ${eventType === 'transfer.failed' ? 'failed' : 'reversed'}. Reason: ${failureReason}`,
+                relatedWithdrawalId: userWithdrawalId 
+            });
+        } catch (error) {
+            console.error(`Webhook ${eventType}: Error UserWithdrawal ${userWithdrawalId}:`, error);
+        }
+    } else {
+        console.warn(`Webhook ${eventType}: No identifiable admin or user withdrawal ID in metadata. Reversal/failure not fully processed. Amount: ${amountDecimal.toFixed(2)}`, metadata);
+    }
 }
 
 export async function POST(req: Request) {
-    console.log("--- API POST /api/webhooks/paystack START ---");
+    console.log("--- API POST /api/webhooks/paystack (Prisma) START ---");
 
-    if (!PAYSTACK_SECRET_KEY || !adminDb) {
-        console.error("Webhook Error: Paystack Secret Key or DB not initialized.");
+    if (!PAYSTACK_SECRET_KEY) {
+        console.error("Webhook Error: Paystack Secret Key not initialized.");
         return NextResponse.json({ message: 'Server configuration error.' }, { status: 500 });
     }
 
     const signature = req.headers.get('x-paystack-signature');
     const bodyText = await req.text(); 
 
-    const hash = crypto.createHmac('sha512', PAYSTACK_SECRET_KEY)
-                       .update(bodyText)
-                       .digest('hex');
-
-    if (hash !== signature) {
-        console.warn("Paystack Webhook: Invalid signature.");
-        return NextResponse.json({ message: 'Invalid signature' }, { status: 401 });
-    }
-    console.log("Paystack Webhook: Signature verified.");
-
-    const payload = JSON.parse(bodyText);
-    const eventType = payload.event;
-    console.log(`Paystack Webhook: Processing event: ${eventType}`);
-
     try {
+        const hash = crypto.createHmac('sha512', PAYSTACK_SECRET_KEY)
+                           .update(Buffer.from(bodyText, 'utf-8')) 
+                           .digest('hex');
+
+        if (hash !== signature) {
+            console.warn("Paystack Webhook: Invalid signature.");
+            return NextResponse.json({ message: 'Invalid signature' }, { status: 401 });
+        }
+        console.log("Paystack Webhook: Signature verified.");
+
+        const payload = JSON.parse(bodyText);
+        const eventType = payload.event;
+        console.log(`Paystack Webhook: Processing event: ${eventType}`);
+
         switch (eventType) {
             case 'charge.success':
                 await handleChargeSuccess(payload);
                 break;
-             case 'transfer.success':
-                 await handleTransferSuccess(payload);
-                 break;
-             case 'transfer.failed':
-                 await handleTransferFailed(payload);
-                 break;
+            case 'transfer.success':
+                await handleTransferSuccess(payload);
+                break;
+            case 'transfer.failed':
+                await handleTransferFailedOrReversed(payload, 'transfer.failed');
+                break;
             case 'transfer.reversed':
-                 await handleTransferReversed(payload);
-                 break;
+                await handleTransferFailedOrReversed(payload, 'transfer.reversed');
+                break;
             default:
                 console.log(`Paystack Webhook: Unhandled event: ${eventType}`);
         }
         
-        console.log(`--- API POST /api/webhooks/paystack SUCCESS --- Event '${eventType}' processed.`);
+        console.log(`--- API POST /api/webhooks/paystack (Prisma) SUCCESS --- Event '${eventType}' processed.`);
         return NextResponse.json({ received: true }, { status: 200 });
     
     } catch (error: any) {
-         console.error(`--- API POST /api/webhooks/paystack FAILED processing event ${eventType} --- Error:`, error);
+         console.error(`--- API POST /api/webhooks/paystack (Prisma) FAILED --- Error:`, error);
          return NextResponse.json({ message: 'Webhook processing error', error: error.message }, { status: 500 });
     }
 }
 
 export async function GET(req: Request) {
-    console.log("--- API GET /api/webhooks/paystack Received (Not Allowed) ---");
+    console.log("--- API GET /api/webhooks/paystack (Prisma) Received (Not Allowed) ---");
     return NextResponse.json({ message: "Webhook endpoint expects POST requests." }, { status: 405 });
 }

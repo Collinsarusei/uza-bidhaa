@@ -8,7 +8,6 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { useSession, signOut } from 'next-auth/react'; // Import signOut
 import { useRouter } from 'next/navigation';
 import { toast } from '@/hooks/use-toast';
-import { User } from 'lucide-react';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Item } from '@/lib/types';
@@ -60,10 +59,19 @@ export default function HomePage() {
       setItemsLoading(true);
       setItemsError(null);
       try {
-        const response = await fetch('/api/items');
+        const response = await fetch('/api/items', {
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+          },
+          cache: 'no-store'
+        });
+        
         if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
+          const errorData = await response.json().catch(() => ({ message: 'Failed to fetch items' }));
+          throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
         }
+        
         const data = await response.json();
         setItems(data.slice(0, 8)); 
       } catch (err) {
@@ -202,8 +210,17 @@ export default function HomePage() {
                  <Card key={item.id} className="flex flex-col overflow-hidden">
                     <CardHeader className="p-0">
                         <Link href={`/item/${item.id}`} passHref className="block relative h-48 w-full"> {/* Link wrapper */} 
-                            <Image src={item.mediaUrls && item.mediaUrls.length > 0 ? item.mediaUrls[0] : '/images/default-item.jpg'} alt={item.title} fill={true} style={{ objectFit: 'cover' }} sizes="(max-width: 640px) 50vw, (max-width: 1024px) 50vw, 25vw" className="rounded-t-lg" />
-                         </Link>
+                            <Image 
+                                src={item.mediaUrls && item.mediaUrls.length > 0 ? item.mediaUrls[0] : '/images/default-item.jpg'} 
+                                alt={item.title} 
+                                fill={true} 
+                                style={{ objectFit: 'cover' }} 
+                                sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw" 
+                                className="rounded-t-lg"
+                                priority={false}
+                                quality={85}
+                            />
+                        </Link>
                     </CardHeader>
                     <CardContent className="p-4 flex-grow">
                          <Link href={`/item/${item.id}`} passHref>

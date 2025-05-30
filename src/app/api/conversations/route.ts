@@ -1,34 +1,14 @@
 // src/app/api/conversations/route.ts
 import { NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
-import { authOptions } from '../auth/[...nextauth]/route'; // Adjust path as needed
-import { adminDb } from '@/lib/firebase-admin';
-import { Conversation } from '@/lib/types'; // Assuming Conversation type exists
-import { Timestamp } from 'firebase-admin/firestore'; // Import Timestamp for conversion
-
-// Helper to convert timestamps before sending
-const safeTimestampToString = (timestamp: any): string | null => {
-    if (timestamp instanceof Timestamp) {
-        try { return timestamp.toDate().toISOString(); } catch { return null; }
-    }
-    if (timestamp instanceof Date) {
-         try { return timestamp.toISOString(); } catch { return null; }
-    }
-    if (typeof timestamp === 'string') {
-         try {
-             if (new Date(timestamp).toISOString() === timestamp) return timestamp;
-         } catch { /* ignore */ }
-    }
-    return null;
-};
+import { authOptions } from '../auth/[...nextauth]/route';
+import prisma from '@/lib/prisma';
+import { Prisma } from '@prisma/client';
+import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
 
 export async function GET(req: Request) {
-    console.log("--- API GET /api/conversations START ---");
+    console.log("--- API GET /api/conversations (Prisma) START ---");
 
-    if (!adminDb) {
-        console.error("API Conversations GET Error: Firebase Admin DB is not initialized.");
-        return NextResponse.json({ message: 'Server configuration error.' }, { status: 500 });
-    }
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) {
         console.warn("API Conversations GET: Unauthorized attempt.");
@@ -38,44 +18,184 @@ export async function GET(req: Request) {
     console.log(`API Conversations GET: Authenticated as user ${currentUserId}`);
 
     try {
-        const conversationsRef = adminDb.collection('conversations');
-        const conversationsQuery = conversationsRef
-                                    .where('participantIds', 'array-contains', currentUserId)
-                                    .orderBy('lastMessageTimestamp', 'desc'); 
-
-        const snapshot = await conversationsQuery.get();
-        console.log(`API Conversations GET: Found ${snapshot.size} total conversations involving user ${currentUserId}`);
-
-        // --- Process ALL conversations, don't categorize here --- 
-        const allConversations: Conversation[] = [];
-        snapshot.forEach(doc => {
-            const data = doc.data() as Omit<Conversation, 'id'>;
-            
-            // Convert timestamps before sending
-            const conversation: Conversation = {
-                ...data,
-                id: doc.id,
-                createdAt: safeTimestampToString(data.createdAt),
-                lastMessageTimestamp: safeTimestampToString(data.lastMessageTimestamp),
-                approvedAt: safeTimestampToString(data.approvedAt),
-                // Convert readStatus timestamps if they exist
-                readStatus: data.readStatus ? Object.entries(data.readStatus).reduce((acc, [userId, ts]) => {
-                    acc[userId] = safeTimestampToString(ts);
-                    return acc;
-                }, {} as { [userId: string]: string | null }) : undefined,
-                 // Ensure participantsData is included if present
-                 participantsData: data.participantsData, 
-            };
-            allConversations.push(conversation);
+        const conversations = await prisma.conversation.findMany({
+            where: {
+                participants: {
+                    some: {
+                        id: currentUserId,
+                    },
+                },
+            },
+            include: {
+                participants: { 
+                    select: {
+                        id: true,
+                        name: true,
+                        image: true,
+                    },
+                },
+                participantsInfo: { 
+                    select: { lastReadAt: true, userId: true }
+                },
+                item: {
+                    select: {
+                        id: true,
+                        title: true,
+                        mediaUrls: true,
+                        sellerId: true,
+                    },
+                },
+                messages: {
+                    orderBy: {
+                        createdAt: 'desc',
+                    },
+                    take: 1, 
+                }
+            },
+            orderBy: {
+                lastMessageTimestamp: 'desc',
+            },
         });
 
-        // --- Let Frontend handle categorization --- 
-        console.log(`API Conversations GET: Returning ${allConversations.length} conversations.`);
-        console.log("--- API GET /api/conversations SUCCESS ---");
-        return NextResponse.json({ conversations: allConversations }, { status: 200 });
+        const processedConversations = conversations.map((conv: {
+            participantsInfo: { userId: string; lastReadAt: Date | null }[];
+            messages: { createdAt: Date; senderId: string; content: string }[];
+            item?: { mediaUrls?: string[] };
+            itemImageUrl?: string;
+            lastMessageSnippet?: string;
+        }) => {
+            const currentUserParticipantInfo = conv.participantsInfo.find((p: { userId: string }) => p.userId === currentUserId);
+            const lastMessage = conv.messages.length > 0 ? conv.messages[0] : null;
+            let unreadMessages = false;
+
+            if (lastMessage) {
+                if (currentUserParticipantInfo) { 
+                    if (!currentUserParticipantInfo.lastReadAt || currentUserParticipantInfo.lastReadAt < lastMessage.createdAt) {
+                        if (lastMessage.senderId !== currentUserId) {
+                            unreadMessages = true;
+                        }
+                    }
+                } else {
+                    if (lastMessage.senderId !== currentUserId) {
+                         unreadMessages = true;
+                    }
+                }
+            }
+            
+            return {
+                ...conv,
+                itemImageUrl: conv.item?.mediaUrls?.[0] || conv.itemImageUrl,
+                lastMessageSnippet: lastMessage?.content || conv.lastMessageSnippet,
+                lastMessageSenderId: lastMessage?.senderId,
+                // participantsInfo: undefined, // Decide if client needs this raw data
+                messages: undefined, 
+                unread: unreadMessages,
+            };
+        });
+
+        console.log(`API Conversations GET: Found ${processedConversations.length} conversations for user ${currentUserId}`);
+        return NextResponse.json({ conversations: processedConversations });
 
     } catch (error: any) {
-        console.error("--- API GET /api/conversations FAILED --- Error:", error);
+        console.error("--- API GET /api/conversations (Prisma) FAILED ---", error);
         return NextResponse.json({ message: 'Failed to fetch conversations', error: error.message }, { status: 500 });
+    }
+}
+
+export async function POST(req: Request) {
+    console.log("--- API POST /api/conversations (Prisma) START ---");
+
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+        console.warn("API Conversations POST: Unauthorized attempt.");
+        return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+    }
+    const initiatorId = session.user.id;
+
+    try {
+        const body = await req.json();
+        const { itemId, sellerId, initialMessageContent, itemTitle, itemImageUrl } = body;
+
+        if (!itemId || !sellerId || !initialMessageContent) {
+            return NextResponse.json({ message: 'Missing required fields: itemId, sellerId, initialMessageContent' }, { status: 400 });
+        }
+
+        if (initiatorId === sellerId) {
+            return NextResponse.json({ message: 'You cannot start a conversation with yourself.' }, { status: 400 });
+        }
+
+        const existingConversation = await prisma.conversation.findFirst({
+            where: {
+                itemId: itemId,
+                AND: [
+                    { participants: { some: { id: initiatorId } } },
+                    { participants: { some: { id: sellerId } } },
+                ],
+            },
+            include: { 
+                participants: { select: { id: true, name: true, image: true } },
+                item: { select: { id: true, title: true, mediaUrls: true } },
+                participantsInfo: { select: { userId: true, lastReadAt: true } }
+            }
+        });
+
+        if (existingConversation) {
+            console.log(`API Conversations POST: Conversation already exists (ID: ${existingConversation.id})`);
+            return NextResponse.json({ message: 'Conversation already exists.', conversationId: existingConversation.id, conversation: existingConversation }, { status: 200 });
+        }
+        
+        const now = new Date();
+
+        const newConversation = await prisma.conversation.create({
+            data: {
+                item: { connect: { id: itemId } },
+                itemTitle: itemTitle, 
+                itemImageUrl: itemImageUrl, 
+                initiator: { connect: { id: initiatorId } },
+                participants: { 
+                    connect: [
+                        { id: initiatorId }, 
+                        { id: sellerId }
+                    ] 
+                },
+                participantsInfo: {
+                    create: [
+                        { userId: initiatorId, lastReadAt: now }, 
+                        { userId: sellerId, lastReadAt: null }     
+                    ]
+                },
+                lastMessageSnippet: initialMessageContent,
+                lastMessageTimestamp: now,
+            },
+            include: {
+                participants: { select: { id: true, name: true, image: true } },
+                item: { select: { id: true, title: true, mediaUrls: true } },
+                participantsInfo: true,
+            }
+        });
+
+        const firstMessage = await prisma.message.create({
+            data: {
+                conversation: { connect: { id: newConversation.id } },
+                sender: { connect: { id: initiatorId } },
+                content: initialMessageContent,
+                createdAt: now, 
+            },
+        });
+        
+        console.log(`API Conversations POST: New conversation created (ID: ${newConversation.id})`);
+        // TODO: Trigger real-time notification (e.g., Socket.io event) to sellerId about new conversation/message
+
+        return NextResponse.json({ message: 'Conversation started successfully', conversation: newConversation }, { status: 201 });
+
+    } catch (error: any) {
+        console.error("--- API POST /api/conversations (Prisma) FAILED ---", error);
+        if (error instanceof PrismaClientKnownRequestError) {
+            if (error.code === 'P2002') {
+                console.error("Prisma unique constraint violation (P2002):", error.meta);
+                return NextResponse.json({ message: 'Failed to create conversation due to a conflict.' , details: error.meta?.target }, { status: 409 });
+            }
+        }
+        return NextResponse.json({ message: 'Failed to start conversation', error: error.message }, { status: 500 });
     }
 }

@@ -1,239 +1,175 @@
 // src/app/api/user/me/route.ts
 import { NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
-import { authOptions } from '../../auth/[...nextauth]/route';
-import { adminDb } from '@/lib/firebase-admin'; // adminDb can be null!
-import { UserProfile } from '@/lib/types'; 
-import { FieldValue, Timestamp } from 'firebase-admin/firestore'; // Keep Timestamp for FieldValue.serverTimestamp()
-import { differenceInDays, parseISO } from 'date-fns'; // Import parseISO
+import { authOptions } from '@/app/api/auth/[...nextauth]/route';
+import prisma from '@/lib/prisma';
+import { Prisma } from '@prisma/client';
+import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
+import { differenceInDays, parseISO } from 'date-fns';
 import * as z from 'zod';
 
-// Helper function to safely convert Firestore Timestamps
-const safeTimestampToString = (timestamp: any): string | null => {
-    // Check for Firestore Admin Timestamp
-    if (timestamp instanceof Timestamp) { 
-        try { return timestamp.toDate().toISOString(); } catch { return null; }
-    }
-    // Check for JS Date object
-    if (timestamp instanceof Date) {
-         try { return timestamp.toISOString(); } catch { return null; }
-    }
-     // Check if it's already a valid ISO string
-    if (typeof timestamp === 'string') {
-         try {
-             if (new Date(timestamp).toISOString() === timestamp) return timestamp;
-         } catch { /* ignore */ }
-    }
-    return null;
+// Helper function to select user fields for API response (excluding sensitive data)
+const userProfileSelect = {
+    id: true,
+    name: true,
+    email: true,
+    phoneNumber: true,
+    location: true,
+    image: true, // Maps to profilePictureUrl
+    mpesaPhoneNumber: true,
+    createdAt: true,
+    updatedAt: true,
+    nameLastUpdatedAt: true,
+    // Add other fields like locationLastUpdatedAt, mpesaLastUpdatedAt if they exist and are needed
+    kycVerified: true,
+    phoneVerified: true,
+    role: true,
+    status: true,
+    availableBalance: true, // Depending on if you want to show this in a general /me response
 };
 
 // --- GET Handler ---
 export async function GET(req: Request) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) {
+    return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
-    if (!adminDb) {
-        console.error("API /user/me GET Error: Firebase Admin DB is not initialized.");
-        return NextResponse.json({ message: 'Server configuration error.' }, { status: 500 });
+    const user = await prisma.user.findUnique({
+      where: { id: session.user.id },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        phoneNumber: true,
+        mpesaPhoneNumber: true,
+        location: true,
+        status: true,
+        role: true,
+        kycVerified: true,
+        phoneVerified: true,
+        availableBalance: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    if (!user) {
+      return NextResponse.json({ message: 'User not found' }, { status: 404 });
     }
 
-    const session = await getServerSession(authOptions);
-    if (!session || !session.user?.id) {
-      return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
-    }
-    const userId = session.user.id;
-    const userRef = adminDb.collection('users').doc(userId);
-    const userDoc = await userRef.get();
-
-    if (!userDoc.exists) {
-      return NextResponse.json({ message: 'User profile not found' }, { status: 404 });
-    }
-    const userData = userDoc.data();
-    if (!userData) {
-        return NextResponse.json({ message: 'User profile data is empty' }, { status: 404 });
-    }
-
-    type ApiResponseProfileData = {
-        id: string;
-        name: string | null; 
-        email: string | null;
-        phoneNumber: string | null;
-        location: string | null;
-        profilePictureUrl: string | null;
-        mpesaPhoneNumber: string | null;
-        createdAt: string | null;
-        updatedAt: string | null;
-        nameLastUpdatedAt?: string | null; 
-        locationLastUpdatedAt?: string | null;
-        mpesaLastUpdatedAt?: string | null;
-    };
-
-    const profileData: ApiResponseProfileData = {
-        id: userId,
-        name: userData.name || userData.username || null, 
-        email: userData.email || null,
-        phoneNumber: userData.phoneNumber || null,
-        location: userData.location || null,
-        profilePictureUrl: userData.profilePictureUrl || null,
-        mpesaPhoneNumber: userData.mpesaPhoneNumber || null,
-        createdAt: safeTimestampToString(userData.createdAt),
-        updatedAt: safeTimestampToString(userData.updatedAt),
-        nameLastUpdatedAt: safeTimestampToString(userData.nameLastUpdatedAt || userData.usernameLastUpdatedAt),
-        locationLastUpdatedAt: safeTimestampToString(userData.locationLastUpdatedAt),
-        mpesaLastUpdatedAt: safeTimestampToString(userData.mpesaLastUpdatedAt),
-    };
-
-    return NextResponse.json({ user: profileData }, { status: 200 });
-
-  } catch (error: any) {
-    console.error("API /user/me GET Error:", error);
-    return NextResponse.json({ message: 'Failed to fetch user profile', error: error.message }, { status: 500 });
+    return NextResponse.json({ user }, {
+      headers: {
+        'Cache-Control': 'no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0',
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching user profile:', error);
+    return NextResponse.json(
+      { message: 'Failed to fetch user profile' },
+      { status: 500 }
+    );
   }
 }
-
 
 // --- PATCH Handler ---
 const profileUpdateSchema = z.object({
     name: z.string().min(1, "Name cannot be empty").optional(),
-    location: z.string().optional(), 
-    mpesaPhoneNumber: z.string().optional(), 
-    profilePictureUrl: z.string().url("Invalid profile picture URL").optional(),
+    location: z.string().optional().nullable(), // Allow explicit null to clear
+    mpesaPhoneNumber: z.string().optional().nullable(), // Allow explicit null to clear
+    image: z.string().url("Invalid profile picture URL").optional().nullable(), // Maps to profilePictureUrl
 }).strict();
 
-
 export async function PATCH(req: Request) {
-    console.log("--- API /user/me PATCH START ---");
+    console.log("--- API PATCH /api/user/me (Prisma) START ---");
     try {
-        if (!adminDb) {
-            console.error("API /user/me PATCH Error: Firebase Admin DB is not initialized.");
-            return NextResponse.json({ message: 'Server configuration error.' }, { status: 500 });
-        }
-
         const session = await getServerSession(authOptions);
-        if (!session || !session.user?.id) {
-            console.warn("API PATCH /user/me: Unauthorized.");
+        if (!session?.user?.id) {
             return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
         }
         const userId = session.user.id;
         console.log(`API PATCH /user/me: Authenticated as user ${userId}`);
-        const userRef = adminDb.collection('users').doc(userId);
 
-        const userDoc = await userRef.get();
-        if (!userDoc.exists) {
-             console.warn(`API PATCH /user/me: User profile not found for ID: ${userId}`);
+        const currentUser = await prisma.user.findUnique({ where: { id: userId } });
+        if (!currentUser) {
              return NextResponse.json({ message: 'User profile not found' }, { status: 404 });
         }
-        // Fetch raw data; conversion to string happens before sending response
-        const currentRawData = userDoc.data(); 
-        if (!currentRawData) {
-             console.warn(`API PATCH /user/me: User profile data is empty for ID: ${userId}`);
-             return NextResponse.json({ message: 'User profile data unavailable' }, { status: 404 });
-        }
-        console.log("API PATCH /user/me: Current user data fetched.");
 
         let body;
-        try {
-            body = await req.json();
-             console.log("API PATCH /user/me: Request body received:", body);
-        } catch (parseError) {
-            console.error("API PATCH /user/me: Error parsing request body:", parseError);
-            return NextResponse.json({ message: 'Invalid request body.' }, { status: 400 });
-        }
+        try { body = await req.json(); }
+        catch (parseError) { return NextResponse.json({ message: 'Invalid request body.' }, { status: 400 }); }
 
         const validationResult = profileUpdateSchema.safeParse(body);
         if (!validationResult.success) {
-             console.warn("API PATCH /user/me: Validation failed.", validationResult.error.errors);
              return NextResponse.json({ message: 'Invalid input data.', errors: validationResult.error.flatten().fieldErrors }, { status: 400 });
         }
         const validatedData = validationResult.data;
-         console.log("API PATCH /user/me: Validation successful:", validatedData);
-
+        const updateData: {
+            name?: string;
+            nameLastUpdatedAt?: Date;
+            location?: string | null;
+            mpesaPhoneNumber?: string | null;
+            image?: string | null;
+        } = {};
+        let changesMade = false;
         const now = new Date();
         const sixtyDays = 60; 
-        const serverTimestamp = FieldValue.serverTimestamp(); 
-        const updateData: { [key: string]: any } = {}; 
-        let changesMade = false;
 
-        // Check Name 
-        if (validatedData.name !== undefined && validatedData.name !== (currentRawData.name || currentRawData.username)) {
-             console.log(`API PATCH /user/me: Processing name change from "${currentRawData.name || currentRawData.username}" to "${validatedData.name}"`);
-             const lastUpdateFieldRaw = currentRawData.nameLastUpdatedAt || currentRawData.usernameLastUpdatedAt; // Get raw timestamp (Admin Timestamp or null/undefined)
-             
-             // --- FIX: Cooldown check based on Admin Timestamp --- 
-             let lastUpdateDate: Date | null = null;
-             if (lastUpdateFieldRaw instanceof Timestamp) { // Check if it's an Admin Timestamp
-                  try { lastUpdateDate = lastUpdateFieldRaw.toDate(); } catch {} 
-             }
-             // --- End FIX ---
-
-             if (lastUpdateDate && differenceInDays(now, lastUpdateDate) < sixtyDays) {
-                 console.warn(`API PATCH /user/me: Name change blocked due to cooldown.`);
+        // Check Name update & cooldown
+        if (validatedData.name !== undefined && validatedData.name !== currentUser.name) {
+             if (currentUser.nameLastUpdatedAt && differenceInDays(now, currentUser.nameLastUpdatedAt) < sixtyDays) {
                  return NextResponse.json({ message: `Name can only be changed every ${sixtyDays} days.` }, { status: 400 });
              }
              updateData.name = validatedData.name;
-             updateData.nameLastUpdatedAt = serverTimestamp;
+             updateData.nameLastUpdatedAt = now;
              changesMade = true;
-             console.log("API PATCH /user/me: Name update added to payload.");
         }
 
-        // Check Location
-        if (validatedData.location !== undefined && validatedData.location !== (currentRawData.location ?? "")) { 
-            console.log(`API PATCH /user/me: Processing location change from "${currentRawData.location}" to "${validatedData.location}"`);
+        // Check Location update
+        if (validatedData.location !== undefined && validatedData.location !== currentUser.location) {
             updateData.location = validatedData.location;
+            // If location had a cooldown: updateData.locationLastUpdatedAt = now;
             changesMade = true;
-             console.log("API PATCH /user/me: Location update added to payload.");
         }
 
-        // Check Mpesa Number
-        if (validatedData.mpesaPhoneNumber !== undefined && validatedData.mpesaPhoneNumber !== (currentRawData.mpesaPhoneNumber ?? "")) { 
-            console.log(`API PATCH /user/me: Processing Mpesa number change.`);
-             updateData.mpesaPhoneNumber = validatedData.mpesaPhoneNumber;
+        // Check Mpesa Number update
+        if (validatedData.mpesaPhoneNumber !== undefined && validatedData.mpesaPhoneNumber !== currentUser.mpesaPhoneNumber) { 
+            updateData.mpesaPhoneNumber = validatedData.mpesaPhoneNumber;
+            // If mpesa had a cooldown: updateData.mpesaLastUpdatedAt = now;
             changesMade = true;
-            console.log("API PATCH /user/me: Mpesa number update added to payload.");
         }
 
-        // Check Profile Picture URL
-        if (validatedData.profilePictureUrl !== undefined && validatedData.profilePictureUrl !== (currentRawData.profilePictureUrl ?? null)) {
-             console.log(`API PATCH /user/me: Processing profile picture update.`);
-            updateData.profilePictureUrl = validatedData.profilePictureUrl;
+        // Check Profile Picture URL update (maps to 'image' field in Prisma User model)
+        if (validatedData.image !== undefined && validatedData.image !== currentUser.image) {
+            updateData.image = validatedData.image;
             changesMade = true;
-             console.log("API PATCH /user/me: Profile picture update added to payload.");
         }
 
         if (changesMade) {
-            console.log("API PATCH /user/me: Changes detected. Updating Firestore...");
-            updateData.updatedAt = serverTimestamp;
-            await userRef.update(updateData);
-            console.log("API PATCH /user/me: Firestore updated successfully.");
-
-            const updatedDoc = await userRef.get();
-            const updatedRawData = updatedDoc.data();
-
-            // Convert timestamps to strings for the response
-            const responseData = {
-                 id: userId,
-                 name: updatedRawData?.name || updatedRawData?.username || null,
-                 email: updatedRawData?.email || null,
-                 phoneNumber: updatedRawData?.phoneNumber || null,
-                 location: updatedRawData?.location || null,
-                 profilePictureUrl: updatedRawData?.profilePictureUrl || null,
-                 mpesaPhoneNumber: updatedRawData?.mpesaPhoneNumber || null,
-                 createdAt: safeTimestampToString(updatedRawData?.createdAt),
-                 updatedAt: safeTimestampToString(updatedRawData?.updatedAt),
-                 nameLastUpdatedAt: safeTimestampToString(updatedRawData?.nameLastUpdatedAt || updatedRawData?.usernameLastUpdatedAt),
-                 locationLastUpdatedAt: safeTimestampToString(updatedRawData?.locationLastUpdatedAt),
-                 mpesaLastUpdatedAt: safeTimestampToString(updatedRawData?.mpesaLastUpdatedAt),
-            };
-
-            console.log("--- API /user/me PATCH SUCCESS ---");
-            return NextResponse.json({ message: 'Profile updated successfully', user: responseData }, { status: 200 });
+            // updatedAt is automatically handled by Prisma @updatedAt directive
+            const updatedUser = await prisma.user.update({
+                where: { id: userId },
+                data: updateData,
+                select: userProfileSelect // Use the predefined select for consistent response
+            });
+            console.log("--- API PATCH /user/me (Prisma) SUCCESS: Profile updated ---");
+            return NextResponse.json({ message: 'Profile updated successfully', user: updatedUser }, { status: 200 });
         } else {
-             console.log("API PATCH /user/me: No changes detected.");
-            return NextResponse.json({ message: 'No changes detected' }, { status: 200 });
+            console.log("API PATCH /user/me: No changes detected.");
+            const userToReturn = await prisma.user.findUnique({where: {id: userId}, select: userProfileSelect });
+            return NextResponse.json({ message: 'No changes detected', user: userToReturn }, { status: 200 });
         }
 
     } catch (error: any) {
-        console.error("--- API /user/me PATCH FAILED --- Error:", error);
-        if (error instanceof z.ZodError) {
-           return NextResponse.json({ message: 'Invalid input data.', errors: error.errors }, { status: 400 });
+        console.error("--- API PATCH /user/me (Prisma) FAILED --- Error:", error);
+        if (error instanceof PrismaClientKnownRequestError) {
+            // Handle specific Prisma errors if needed
+            if (error.code === 'P2002' && error.meta?.target === 'User_mpesaPhoneNumber_key') { // Example for unique constraint on mpesaPhoneNumber
+                return NextResponse.json({ message: 'M-Pesa phone number is already in use.' }, { status: 409 });
+            }
         }
         return NextResponse.json({ message: 'Failed to update profile', error: error.message }, { status: 500 });
     }

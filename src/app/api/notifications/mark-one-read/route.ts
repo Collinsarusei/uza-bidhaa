@@ -2,8 +2,7 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from '../../auth/[...nextauth]/route';
-import { adminDb } from '@/lib/firebase-admin';
-import { FieldValue } from 'firebase-admin/firestore';
+import prisma from '@/lib/prisma'; // Changed: Use Prisma client
 import * as z from 'zod';
 
 const markOneSchema = z.object({
@@ -11,13 +10,9 @@ const markOneSchema = z.object({
 });
 
 export async function POST(req: Request) {
-    console.log("--- API /notifications/mark-one-read START ---");
+    console.log("--- API /notifications/mark-one-read (Prisma) START ---");
     try {
-        // 1. Authentication & DB Check
-        if (!adminDb) {
-            console.error("API mark-one-read: Firebase Admin DB is not initialized.");
-            return NextResponse.json({ message: 'Server configuration error.' }, { status: 500 });
-        }
+        // 1. Authentication
         const session = await getServerSession(authOptions);
         if (!session || !session.user?.id) {
             console.warn("API mark-one-read: Unauthorized.");
@@ -41,40 +36,47 @@ export async function POST(req: Request) {
         const { notificationId } = validationResult.data;
         console.log(`API mark-one-read: Request to mark notification ID: ${notificationId}`);
 
-        // 3. Get Notification Reference
-        const notificationRef = adminDb.collection('notifications').doc(notificationId);
-
-        // 4. Verify Ownership and Update (Optional but Recommended)
-        // It's good practice to ensure the notification belongs to the user making the request
-        const docSnapshot = await notificationRef.get();
-        if (!docSnapshot.exists) {
-             console.warn(`API mark-one-read: Notification ${notificationId} not found.`);
-            // Return 404 or 200? Returning 200 might be simpler for the client if it tries to mark non-existent ones.
-            return NextResponse.json({ message: 'Notification not found.' }, { status: 404 }); 
-        }
-
-        const notificationData = docSnapshot.data();
-        if (notificationData?.userId !== userId) {
-            console.warn(`API mark-one-read: User ${userId} attempted to mark notification ${notificationId} belonging to ${notificationData?.userId}.`);
-            return NextResponse.json({ message: 'Forbidden' }, { status: 403 }); // Forbidden access
-        }
-
-        // 5. Perform Update if not already read
-        if (notificationData?.isRead === false) {
-            await notificationRef.update({
+        // 3. Perform Update using Prisma
+        // We update the notification only if it belongs to the user and is currently unread.
+        const updatedNotification = await prisma.notification.updateMany({
+            where: {
+                id: notificationId,
+                userId: userId, // Ensures the notification belongs to the authenticated user
+                isRead: false,   // Only update if it's not already read
+            },
+            data: {
                 isRead: true,
-                readAt: FieldValue.serverTimestamp()
-            });
+                readAt: new Date(), // Set readAt to current timestamp
+            },
+        });
+
+        if (updatedNotification.count > 0) {
             console.log(`API mark-one-read: Notification ${notificationId} marked as read for user ${userId}.`);
         } else {
-             console.log(`API mark-one-read: Notification ${notificationId} was already read.`);
+            // This can happen if: a) notification doesn't exist, b) doesn't belong to user, or c) was already read.
+            // To give more specific feedback, you might need a preliminary fetch, but updateMany is more atomic.
+            // For now, we just log it. The client might not need to distinguish these cases.
+            console.log(`API mark-one-read: Notification ${notificationId} not updated (either not found, not owned, or already read).`);
+            // Optional: You could fetch the notification to check existence/ownership if count is 0 to return a more specific error/message.
+            // For example, check if it exists at all:
+            const existingNotification = await prisma.notification.findUnique({ where: { id: notificationId } });
+            if (!existingNotification) {
+                return NextResponse.json({ message: 'Notification not found.' }, { status: 404 });
+            }
+            if (existingNotification.userId !== userId) {
+                return NextResponse.json({ message: 'Forbidden.' }, { status: 403 });
+            }
+            // If it exists and belongs to user, it must have been already read or some other condition failed.
         }
 
-        console.log("--- API /notifications/mark-one-read SUCCESS ---");
+        console.log("--- API /notifications/mark-one-read (Prisma) SUCCESS ---");
+        // Even if the notification was already read (updatedNotification.count === 0 but it exists & is owned), 
+        // it's not an error from the client's perspective of wanting it marked read.
         return NextResponse.json({ message: 'Notification marked as read successfully.' }, { status: 200 });
 
     } catch (error: any) {
-        console.error("--- API /notifications/mark-one-read FAILED --- Error:", error);
+        console.error("--- API /notifications/mark-one-read (Prisma) FAILED --- Error:", error);
+        // Handle potential Prisma errors, e.g., if `notificationId` is not a valid format for the ID type in DB.
         return NextResponse.json({ message: 'Failed to mark notification as read', error: error.message }, { status: 500 });
     }
 }

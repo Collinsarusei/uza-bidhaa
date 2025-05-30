@@ -58,9 +58,9 @@ function FileBuyerDisputeForm() {
         if (!response.ok) throw new Error('Failed to fetch your orders.');
         const data: OrderDisplayItem[] = await response.json();
         const disputableOrders = data.filter(order => 
-            order.status === 'paid_to_platform' || 
-            order.status === 'released_to_seller_balance' || 
-            order.status === 'disputed' 
+            order.status === 'SUCCESSFUL_ESCROW' || 
+            order.status === 'RELEASED_TO_SELLER' || 
+            order.status === 'DISPUTED' 
         );
         setOrders(disputableOrders || []);
       } catch (error) {

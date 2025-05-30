@@ -2,33 +2,13 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from '../../auth/[...nextauth]/route';
-import { adminDb } from '@/lib/firebase-admin';
-import { Earning, UserProfile } from '@/lib/types';
-import { Timestamp } from 'firebase-admin/firestore';
-
-// Helper to convert timestamps
-const safeTimestampToString = (timestamp: any): string | null => {
-    if (timestamp instanceof Timestamp) {
-        try { return timestamp.toDate().toISOString(); } catch { return null; }
-    }
-    if (timestamp instanceof Date) {
-         try { return timestamp.toISOString(); } catch { return null; }
-    }
-    if (typeof timestamp === 'string') {
-         try {
-             if (new Date(timestamp).toISOString() === timestamp) return timestamp;
-         } catch { /* ignore */ }
-    }
-    return null;
-};
+import prisma from '@/lib/prisma';
+import { Prisma } from '@prisma/client';
+import { Decimal } from '@prisma/client/runtime/library';
 
 export async function GET(req: Request) {
-    console.log("--- API GET /api/user/earnings START ---");
+    console.log("--- API GET /api/user/earnings (Prisma - Fetching Earning Records) START ---");
 
-    if (!adminDb) {
-        console.error("API User Earnings GET Error: Firebase Admin DB is not initialized.");
-        return NextResponse.json({ message: 'Server configuration error.' }, { status: 500 });
-    }
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) {
         console.warn("API User Earnings GET: Unauthorized attempt.");
@@ -38,70 +18,55 @@ export async function GET(req: Request) {
     console.log(`API User Earnings GET: Authenticated as user ${currentUserId}`);
 
     try {
-        const userRef = adminDb.collection('users').doc(currentUserId);
-        const earningsRef = userRef.collection('earnings');
-        
-        // Query earnings, order by creation date
-        const earningsQuery = earningsRef.orderBy('createdAt', 'desc');
-        
-        // Fetch earnings and user profile data concurrently
-        const [earningsSnapshot, userDoc] = await Promise.all([
-            earningsQuery.get(),
-            userRef.get()
-        ]);
-
-        console.log(`API User Earnings GET: Found ${earningsSnapshot.size} earnings records for user ${currentUserId}`);
-
-        // Process earnings
-        const earnings: Earning[] = [];
-        earningsSnapshot.forEach(doc => {
-            const data = doc.data() as Omit<Earning, 'id'>;
-            earnings.push({
-                ...data,
-                id: doc.id,
-                createdAt: safeTimestampToString(data.createdAt),
-                // Ensure other potential timestamps are converted if added later
-            });
+        // Fetch user profile data including availableBalance
+        const user = await prisma.user.findUnique({
+            where: { id: currentUserId },
+            select: {
+                availableBalance: true,
+                mpesaPhoneNumber: true, // Keep for profile context in response
+                // Add other relevant profile fields if needed by client on this page
+            }
         });
 
-        // Get available balance and profile info
-        let availableBalance = 0;
-        let userProfileData: Partial<UserProfile> = {};
-        if (userDoc.exists) {
-            const rawProfile = userDoc.data();
-            availableBalance = rawProfile?.availableBalance ?? 0; // Get balance from user doc
-            // Select only needed profile fields (e.g., mpesa number)
-            userProfileData = {
-                 mpesaPhoneNumber: rawProfile?.mpesaPhoneNumber || null,
-                 // Add other fields if needed by frontend
-             };
-             console.log(`API User Earnings GET: User profile found, Balance: ${availableBalance}, Mpesa: ${userProfileData.mpesaPhoneNumber}`);
-        } else {
-             console.warn(`API User Earnings GET: User profile not found for ${currentUserId}. Balance defaults to 0.`);
+        if (!user) {
+            console.warn(`API User Earnings GET: User profile not found for ${currentUserId}.`);
+            return NextResponse.json({ message: 'User profile not found.' }, { status: 404 });
         }
-        
-        // --- Sanity check: Recalculate balance from earnings if needed ---
-        // This can help detect discrepancies if the direct balance field update fails
-        const calculatedBalance = earnings
-            .filter(e => e.status === 'available')
-            .reduce((sum, e) => sum + e.amount, 0);
-        
-        if (Math.abs(availableBalance - calculatedBalance) > 0.01) { // Allow for small float differences
-             console.warn(`API User Earnings GET: Discrepancy detected! User doc balance=${availableBalance}, Calculated balance=${calculatedBalance}. Using calculated balance.`);
-             // Decide how to handle discrepancy - use calculated, log error, fix balance?
-             // availableBalance = calculatedBalance; // Option: Use calculated value for response
-        }
-        // ------------------------------------------------------------------
 
-        console.log("--- API GET /api/user/earnings SUCCESS ---");
+        const availableBalance = user.availableBalance ?? new Decimal(0);
+        const userProfileData = {
+            mpesaPhoneNumber: user.mpesaPhoneNumber || null,
+        };
+        console.log(`API User Earnings GET: User profile found, Balance: ${availableBalance}`);
+
+        // Fetch all Earning records for the user
+        const earningsRecords = await prisma.earning.findMany({
+            where: {
+                userId: currentUserId,
+                status: 'AVAILABLE', // Using string literal instead of enum
+            },
+            include: {
+                //Optionally include related item or payment details if needed for display
+                item: { select: { title: true, id: true } },
+                payment: { select: { id: true, amount: true } }
+            },
+            orderBy: {
+                createdAt: 'desc' 
+            }
+        });
+
+        // Dates in earningsRecords (createdAt, updatedAt) will be serialized to ISO strings by NextResponse.json()
+        console.log(`API User Earnings GET: Found ${earningsRecords.length} earning records.`);
+        console.log("--- API GET /api/user/earnings (Prisma - Fetching Earning Records) SUCCESS ---");
+        
         return NextResponse.json({ 
-            earnings: earnings, 
+            earnings: earningsRecords, 
             availableBalance: availableBalance, 
             profile: userProfileData 
         }, { status: 200 });
 
     } catch (error: any) {
-        console.error("--- API GET /api/user/earnings FAILED --- Error:", error);
+        console.error("--- API GET /api/user/earnings (Prisma) FAILED ---", error);
         return NextResponse.json({ message: 'Failed to fetch user earnings', error: error.message }, { status: 500 });
     }
 }

@@ -27,7 +27,7 @@ import {
 } from "@/components/ui/alert-dialog";
 
 // Use Partial to allow for selected fields from API
-type DisplayUser = Pick<UserProfile, 'id' | 'name' | 'email' | 'phoneNumber' | 'createdAt' | 'isSuspended' | 'location'>;
+type DisplayUser = Pick<UserProfile, 'id' | 'name' | 'email' | 'phoneNumber' | 'createdAt' | 'status' | 'location'>;
 
 export default function AdminUsersPage() {
     const { data: session, status } = useSession();
@@ -196,41 +196,41 @@ export default function AdminUsersPage() {
                                             <TableCell>{user.phoneNumber || 'N/A'}</TableCell>
                                             <TableCell>{formatDate(user.createdAt)}</TableCell>
                                             <TableCell>
-                                                <Badge variant={user.isSuspended ? 'destructive' : 'secondary'}>
-                                                    {user.isSuspended ? 'Suspended' : 'Active'}
+                                                <Badge variant={user.status ? 'destructive' : 'secondary'}>
+                                                    {user.status ? 'Suspended' : 'Active'}
                                                 </Badge>
                                             </TableCell>
                                             <TableCell>
                                                  <AlertDialog>
                                                     <AlertDialogTrigger asChild>
                                                         <Button 
-                                                            variant={user.isSuspended ? "secondary" : "destructive"}
+                                                            variant={user.status ? "secondary" : "destructive"}
                                                             size="sm"
                                                             disabled={processingUserId === user.id || user.id === session?.user?.id}
                                                         >
                                                             {processingUserId === user.id ? <Icons.spinner className="mr-2 h-4 w-4 animate-spin" /> : null}
-                                                            {user.isSuspended ? 'Reactivate' : 'Suspend'}
+                                                            {user.status ? 'Reactivate' : 'Suspend'}
                                                         </Button>
                                                     </AlertDialogTrigger>
                                                     <AlertDialogContent>
                                                         <AlertDialogHeader>
                                                             <AlertDialogTitle>
-                                                                {user.isSuspended ? 'Reactivate User?' : 'Suspend User?'}
+                                                                {user.status ? 'Reactivate User?' : 'Suspend User?'}
                                                             </AlertDialogTitle>
                                                             <AlertDialogDescription>
-                                                                Are you sure you want to {user.isSuspended ? 'reactivate' : 'suspend'} the account for {user.name || user.email}?
-                                                                {user.isSuspended ? ' They will regain access to the platform.' : ' They will lose access to their account.'}
+                                                                Are you sure you want to {user.status ? 'reactivate' : 'suspend'} the account for {user.name || user.email}?
+                                                                {user.status ? ' They will regain access to the platform.' : ' They will lose access to their account.'}
                                                             </AlertDialogDescription>
                                                         </AlertDialogHeader>
                                                         <AlertDialogFooter>
                                                             <AlertDialogCancel disabled={processingUserId === user.id}>Cancel</AlertDialogCancel>
                                                             <AlertDialogAction 
-                                                                onClick={() => handleToggleSuspendUser(user.id, user.isSuspended)} 
+                                                                onClick={() => handleToggleSuspendUser(user.id, user.status === 'SUSPENDED')} 
                                                                 disabled={processingUserId === user.id}
-                                                                className={user.isSuspended ? "" : "bg-destructive hover:bg-destructive/90 text-destructive-foreground"}
+                                                                className={user.status === 'SUSPENDED' ? "" : "bg-destructive hover:bg-destructive/90 text-destructive-foreground"}
                                                             >
                                                                 {processingUserId === user.id ? <Icons.spinner className="mr-2 h-4 w-4 animate-spin" /> : null}
-                                                                Confirm {user.isSuspended ? 'Reactivation' : 'Suspension'}
+                                                                Confirm {user.status ? 'Reactivation' : 'Suspension'}
                                                             </AlertDialogAction>
                                                         </AlertDialogFooter>
                                                     </AlertDialogContent>

@@ -5,7 +5,7 @@ import {
   ArrowLeft,
   ArrowRight,
   BellOff,
-  Check,  // <<< --- ADD THIS LINE --- <<<
+  Check,
   ChevronsUpDown,
   Circle,
   CircleDollarSign,
@@ -44,18 +44,16 @@ import {
   Phone,
   Info,
   Key,
-  Inbox,      // Was already here
-  Bell,       // Was already here
+  Inbox,
+  Bell,
   Bot,
   MapPin,
   LayoutGrid,
-  Package,    // Added for packageSearch replacement
-  AlertCircle,// Added
-  DollarSign, // Added
-  Receipt,    // Added
-  Archive,    // Added as an alternative for listX if needed elsewhere
-  // LucideIcon type can be imported if you want to type the Icons object explicitly
-  // type LucideIcon as LucideIconType // example, if needed
+  Package,
+  AlertCircle,
+  DollarSign,
+  Receipt,
+  Archive,
 } from "lucide-react";
 
 // Re-export all icons for easier import

@@ -25,7 +25,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import type { Payment, Item, DisputeRecord, UserProfile } from '@/lib/types'; // Import DisputeRecord
-import { Link } from 'lucide-react';
+import Link from 'next/link';
 
 // Updated interface to reflect fetching DisputeRecords primarily
 interface DisplayDispute extends DisputeRecord {
@@ -76,7 +76,7 @@ export default function AdminDisputesPage() {
                 throw new Error(errData.message || `Failed to fetch disputes: ${response.status}`);
             }
             const data: DisplayDispute[] = await response.json();
-            setDisputes(data.filter(d => d.status === 'pending_admin')); // Only show pending admin review
+            setDisputes(data.filter(d => d.status === 'PENDING_ADMIN')); // Only show pending admin review
         } catch (err) {
             const message = err instanceof Error ? err.message : 'Could not load disputes.';
             setError(message);

@@ -38,6 +38,8 @@ import { useRouter } from 'next/navigation';
 import { useNotifications } from "@/components/providers/notification-provider";
 import { useToast } from "@/hooks/use-toast";
 import { formatTimestampForDisplay } from '@/lib/date-utils';
+import { TrackingDisplay } from '@/components/items/tracking-display';
+import { PWAInstallButton } from "@/components/pwa-install-button";
 
 function DashboardContent() {
   const { data: session, status } = useSession();
@@ -66,33 +68,79 @@ function DashboardContent() {
       router.push('/');
   };
 
+  const handleSendMessage = async () => {
+    if (!messageRecipient || !messageText.trim() || !session?.user?.id) return;
+    
+    setIsSendingMessage(true);
+    try {
+      const response = await fetch('/api/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recipientId: messageRecipient.sellerId,
+          itemId: messageRecipient.itemId,
+          content: messageText.trim(),
+          itemTitle: messageRecipient.itemTitle,
+          itemImageUrl: messageRecipient.itemImageUrl
+        })
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Failed to send message');
+      }
+
+      toast({
+        title: "Message Sent",
+        description: "Your message has been sent to the seller.",
+        duration: 3000
+      });
+      setIsMessageSheetOpen(false);
+    } catch (error: any) {
+      console.error('Error sending message:', error);
+      toast({
+        title: "Failed to Send Message",
+        description: error.message || "Please try again later.",
+        variant: "destructive",
+        duration: 5000
+      });
+    } finally {
+      setIsSendingMessage(false);
+    }
+  };
+
   useEffect(() => {
     const fetchItems = async () => {
       setIsLoadingItems(true);
       setError(null);
-      const currentUserId = session?.user?.id;
-      const apiUrl = currentUserId ? `/api/items?userId=${currentUserId}` : '/api/items';
       try {
+        const currentUserId = session?.user?.id;
+        const apiUrl = currentUserId ? `/api/items?userId=${currentUserId}` : '/api/items';
+        
         const response = await fetch(apiUrl);
         if (!response.ok) {
-            const errData = await response.json().catch(() => ({message: `HTTP error! status: ${response.status}`}));
-            throw new Error(errData.message || `HTTP error! status: ${response.status}`);
+          const error = await response.json();
+          throw new Error(error.message || `HTTP error! status: ${response.status}`);
         }
+        
         const data = await response.json();
-        setItems(Array.isArray(data) ? data : []); // Ensure data is an array
+        setItems(Array.isArray(data) ? data : []);
       } catch (err) {
          let message = "Failed to fetch items.";
-          if (err instanceof Error) { message = err.message; }
+        if (err instanceof Error) {
+          message = err.message;
+        }
          setError(message);
          console.error("Error fetching items:", err);
       } finally {
         setIsLoadingItems(false);
       }
     };
-    if (status === "authenticated" || status === "unauthenticated") { // Fetch for both states
+
+    if (status === "authenticated" || status === "unauthenticated") {
         fetchItems();
     } else if (status === 'loading') {
-        setIsLoadingItems(true); // Set loading true while session is loading
+      setIsLoadingItems(true);
     }
   }, [session?.user?.id, status]);
 
@@ -110,35 +158,6 @@ function DashboardContent() {
       setMessageRecipient({ sellerId, itemId, itemTitle, itemImageUrl });
       setMessageText("");
       setIsMessageSheetOpen(true);
-  };
-
-  const handleSendMessage = async () => {
-      if (!messageRecipient || !messageText.trim() || !session?.user?.id) return;
-      setIsSendingMessage(true);
-      try {
-          const response = await fetch('/api/messages', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                  recipientId: messageRecipient.sellerId,
-                  itemId: messageRecipient.itemId,
-                  itemTitle: messageRecipient.itemTitle,
-                  itemImageUrl: messageRecipient.itemImageUrl,
-                  text: messageText.trim(),
-              }),
-          });
-          const result = await response.json();
-          if (!response.ok) throw new Error(result.message || 'Failed to send message');
-          toast({ title: "Message Sent", description: "Your message has been sent to the seller." });
-          setIsMessageSheetOpen(false);
-          setMessageText("");
-          setMessageRecipient(null);
-      } catch (err) {
-           const message = err instanceof Error ? err.message : 'Failed to send message.';
-           toast({ title: "Send Error", description: message, variant: "destructive" });
-      } finally {
-          setIsSendingMessage(false);
-      }
   };
 
   const renderHeader = () => (
@@ -266,25 +285,81 @@ function DashboardContent() {
   const renderItemCard = (item: Item) => {
     const timeSinceListed = formatTimestampForDisplay(item.createdAt, 'Date unavailable');
     return (
-        <Card key={item.id} className="flex flex-col overflow-hidden hover:shadow-lg transition-shadow duration-200 ease-in-out">
+        <Card key={item.id} className="flex flex-col overflow-hidden hover:shadow-lg transition-shadow duration-200 ease-in-out h-full">
             <CardHeader className="p-0">
-                <Link href={`/item/${item.id}`} passHref legacyBehavior>
-                    <a className="block relative w-full aspect-square">
-                        {item.mediaUrls && item.mediaUrls.length > 0 ? (<img src={item.mediaUrls[0]} alt={item.title} className="absolute h-full w-full object-cover" />) : (<div className="absolute h-full w-full bg-secondary flex items-center justify-center text-muted-foreground">No Image</div>)}
-                    </a>
+                <Link href={`/item/${item.id}`} className="block relative w-full aspect-[4/3]">
+                    {item.mediaUrls && item.mediaUrls.length > 0 ? (
+                        <img 
+                            src={item.mediaUrls[0]} 
+                            alt={item.title} 
+                            className="absolute h-full w-full object-cover object-center" 
+                        />
+                    ) : (
+                        <div className="absolute h-full w-full bg-secondary flex items-center justify-center text-muted-foreground">
+                            No Image
+                        </div>
+                    )}
                 </Link>
             </CardHeader>
-            <CardContent className="flex-grow p-4 space-y-1">
-                <Link href={`/item/${item.id}`} passHref legacyBehavior><CardTitle className="text-lg hover:underline cursor-pointer">{item.title}</CardTitle></Link>
-                <CardDescription className="text-sm text-muted-foreground">{item.location}</CardDescription>
-                <p className="pt-1 text-lg font-semibold">KES {item.price.toLocaleString()}</p>
-                {item.quantity !== undefined && item.quantity > 1 && (<p className="text-xs text-green-600 dark:text-green-400">{item.quantity} available</p>)}
-                <Badge variant={item.status === 'sold' ? 'destructive' : item.status === 'available' ? 'default' : 'secondary'} className="mt-1">{item.status.charAt(0).toUpperCase() + item.status.slice(1)}</Badge>
-                <p className="text-xs text-muted-foreground pt-1">Listed: {timeSinceListed}</p>
+            <CardContent className="flex-grow p-2 md:p-4 space-y-1">
+                <Link href={`/item/${item.id}`} className="block">
+                    <CardTitle className="line-clamp-2 text-sm md:text-base hover:underline">
+                        {item.title}
+                    </CardTitle>
+                </Link>
+                <CardDescription className="text-xs text-muted-foreground line-clamp-1">
+                    {item.location}
+                </CardDescription>
+                <p className="pt-1 text-sm md:text-base font-semibold">
+                    KES {item.price.toLocaleString()}
+                </p>
+                {item.quantity !== undefined && item.quantity > 1 && (
+                    <p className="text-xs text-green-600 dark:text-green-400">
+                        {item.quantity} available
+                    </p>
+                )}
+                <Badge 
+                    variant={item.status === 'SOLD' ? 'destructive' : item.status === 'AVAILABLE' ? 'default' : 'secondary'} 
+                    className="mt-1 text-xs"
+                >
+                    {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
+                </Badge>
+                <p className="text-xs text-muted-foreground pt-1">
+                    Listed: {timeSinceListed}
+                </p>
             </CardContent>
-            <CardFooter className="p-4 flex flex-col gap-2">
-                <Link href={`/item/${item.id}`} passHref legacyBehavior><Button asChild variant="outline" className="w-full hover:bg-accent hover:text-accent-foreground transition-colors"><a>View Details</a></Button></Link>
-                {session?.user && session.user.id !== item.sellerId ? (<Button className="w-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-0 px-3" onClick={() => handleOpenMessageSheet(item.sellerId, item.id, item.title, item.mediaUrls?.[0] ?? null)}><Icons.mail className="mr-1.5 h-4 w-4 flex-shrink-0" /> <span className="truncate">Message Seller</span></Button>) : !session?.user ? (<TooltipProvider><Tooltip><TooltipTrigger asChild><Button className="w-full px-3" disabled> <Icons.mail className="mr-1.5 h-4 w-4 flex-shrink-0" /> <span className="truncate">Message Seller</span></Button></TooltipTrigger><TooltipContent><p>Log in to message the seller.</p></TooltipContent></Tooltip></TooltipProvider>) : (<Button className="w-full" disabled>Your Listing</Button>)}
+            <CardFooter className="p-2 md:p-4 flex flex-col gap-2">
+                <Link href={`/item/${item.id}`} className="w-full">
+                    <Button variant="outline" size="sm" className="w-full hover:bg-accent hover:text-accent-foreground transition-colors">
+                        View Details
+                    </Button>
+                </Link>
+                {session?.user && session.user.id !== item.sellerId ? (
+                    <Button 
+                        size="sm"
+                        className="w-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-0 px-3" 
+                        onClick={() => handleOpenMessageSheet(item.sellerId, item.id, item.title, item.mediaUrls?.[0] ?? null)}
+                    >
+                        <Icons.mail className="mr-1.5 h-4 w-4 flex-shrink-0" />
+                        <span className="truncate">Message Seller</span>
+                    </Button>
+                ) : !session?.user ? (
+                    <TooltipProvider>
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <Button size="sm" className="w-full px-3" disabled>
+                                    <Icons.mail className="mr-1.5 h-4 w-4 flex-shrink-0" />
+                                    <span className="truncate">Message Seller</span>
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                                <p>Log in to message the seller.</p>
+                            </TooltipContent>
+                        </Tooltip>
+                    </TooltipProvider>
+                ) : (
+                    <Button size="sm" className="w-full" disabled>Your Listing</Button>
+                )}
             </CardFooter>
         </Card>
     );
@@ -299,6 +374,25 @@ function DashboardContent() {
         </Card>
      ))
   );
+
+  const PurchasedItems = ({ items }: { items: Array<{ id: string; status: string }> }) => {
+    const itemsInTransit = items.filter(item => item.status === 'PAID_ESCROW');
+
+    if (itemsInTransit.length === 0) {
+      return null;
+    }
+
+    return (
+      <div className="space-y-6">
+        <h2 className="text-2xl font-bold">Items in Transit</h2>
+        <div className="grid gap-6">
+          {itemsInTransit.map(item => (
+            <TrackingDisplay key={item.id} itemId={item.id} />
+          ))}
+        </div>
+      </div>
+    );
+  };
 
   if ((status === "loading" && !session) || (status === "authenticated" && isLoadingItems && items.length === 0)) {
     return (
@@ -326,7 +420,16 @@ function DashboardContent() {
             {session?.user && (<Link href="/sell" passHref><Button variant="link" className="mt-2 hover:text-primary transition-colors">List an Item</Button></Link>)}
           </div>
          )}
-          {!error && filteredItems.length > 0 && (<div className="grid grid-cols-1 xs:grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">{filteredItems.map(renderItemCard)}</div>)}
+          {!error && filteredItems.length > 0 && (
+            <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2 md:gap-4">
+                {filteredItems.map(renderItemCard)}
+            </div>
+        )}
+      </div>
+      <div className="container mx-auto p-4">
+        <div className="mb-6">
+          <PWAInstallButton />
+        </div>
       </div>
     </div>
   );

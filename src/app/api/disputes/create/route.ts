@@ -2,34 +2,28 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from '@/app/api/auth/[...nextauth]/route';
-import { adminDb } from '@/lib/firebase-admin';
-import { FieldValue } from 'firebase-admin/firestore';
+import prisma from '@/lib/prisma';
 import * as z from 'zod';
-import { Payment, Item, DisputeRecord, UserProfile } from '@/lib/types';
 import { createNotification } from '@/lib/notifications';
-import { v4 as uuidv4 } from 'uuid';
+import { Prisma } from '@prisma/client';
 
 const disputeCreateSchema = z.object({
   paymentId: z.string().min(1, "Payment ID is required"),
-  itemId: z.string().min(1, "Item ID is required"),
+  itemId: z.string().min(1, "Item ID is required"), // Ensure itemId from payment matches item being disputed
   reason: z.string().min(1, "Dispute reason is required"),
   description: z.string().min(1, "Detailed description is required").max(2000, "Description too long"),
 });
 
 export async function POST(req: Request) {
-  console.log("--- API POST /api/disputes/create START ---");
-
-  if (!adminDb) {
-    console.error("Dispute Create Error: Firebase Admin DB not initialized.");
-    return NextResponse.json({ message: 'Server configuration error.' }, { status: 500 });
-  }
+  console.log("--- API POST /api/disputes/create (Prisma) START ---");
 
   const session = await getServerSession(authOptions);
-  if (!session?.user?.id) {
-    console.warn("Dispute Create: Unauthorized attempt.");
-    return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+  if (!session?.user?.id || !session.user.name) {
+    console.warn("Dispute Create: Unauthorized or user name missing.");
+    return NextResponse.json({ message: 'Unauthorized or user data incomplete' }, { status: 401 });
   }
   const filedByUserId = session.user.id;
+  const filedByUserName = session.user.name;
 
   try {
     let body;
@@ -41,111 +35,115 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: 'Invalid input.', errors: validation.error.flatten().fieldErrors }, { status: 400 });
     }
     const { paymentId, itemId, reason, description } = validation.data;
-    console.log(`Dispute Create: User ${filedByUserId} attempting to file dispute for payment ${paymentId}, item ${itemId}`);
+    console.log(`Dispute Create: User ${filedByUserId} attempting dispute for payment ${paymentId}, item ${itemId}`);
 
-    const paymentRef = adminDb.collection('payments').doc(paymentId);
-    const itemRef = adminDb.collection('items').doc(itemId);
-    const disputeId = uuidv4();
-    const disputeRef = adminDb.collection('disputes').doc(disputeId);
+    const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const payment = await tx.payment.findUnique({
+        where: { id: paymentId },
+        include: { item: { select: { id: true, title: true, status: true } } } 
+      });
 
-    const result = await adminDb.runTransaction(async (transaction) => {
-      const paymentDoc = await transaction.get(paymentRef);
-      const itemDoc = await transaction.get(itemRef);
+      if (!payment) throw new Error('Payment record not found.');
+      if (!payment.item) throw new Error('Item record not found for this payment.');
+      if (payment.itemId !== itemId) throw new Error('Item ID mismatch: The item specified does not match the payment record.');
 
-      if (!paymentDoc.exists) throw new Error('Payment record not found.');
-      if (!itemDoc.exists) throw new Error('Item record not found.');
-
-      const paymentData = paymentDoc.data() as Payment;
-      const itemData = itemDoc.data() as Item;
-
-      // Authorization: Ensure the user filing is either the buyer or seller
       let otherPartyUserId: string;
-      if (paymentData.buyerId === filedByUserId) {
-        otherPartyUserId = paymentData.sellerId;
-      } else if (paymentData.sellerId === filedByUserId) {
-        otherPartyUserId = paymentData.buyerId;
+      if (payment.buyerId === filedByUserId) {
+        otherPartyUserId = payment.sellerId;
+      } else if (payment.sellerId === filedByUserId) {
+        otherPartyUserId = payment.buyerId;
       } else {
         throw new Error('Forbidden: You are not a party to this transaction.');
       }
 
-      if (paymentData.status === 'initiated' || paymentData.status === 'cancelled' || paymentData.status === 'refunded') {
-        throw new Error(`Cannot file dispute for payment with status: ${paymentData.status}`);
+      // Prevent filing dispute on payments with terminal or irrelevant statuses
+      const nonDisputableStatuses = [
+        'INITIATED',
+        'CANCELLED',
+        'REFUNDED_TO_BUYER',
+        'RELEASED_TO_SELLER',
+        'FAILED',
+        'DISPUTED'
+      ];
+      if (nonDisputableStatuses.includes(payment.status)) {
+        throw new Error(`Cannot file dispute for payment with status: ${payment.status}`);
       }
-      // Potentially allow disputing 'released_to_seller_balance' for a limited time (e.g., item not as described after release)
-      // For now, let's assume it's mainly for 'paid_to_platform' or already disputed states.
+      if (payment.activeDisputeId) {
+        throw new Error('An active dispute already exists for this payment.');
+      }
 
-      const newDispute: DisputeRecord = {
-        id: disputeId,
-        paymentId,
-        itemId,
-        filedByUserId,
-        otherPartyUserId,
-        reason,
-        description,
-        status: 'pending_admin', // Initial status for admin review
-        createdAt: FieldValue.serverTimestamp() as any, // Cast for type compatibility during set
-        updatedAt: FieldValue.serverTimestamp() as any, // Cast for type compatibility during set
-      };
+      // Create the dispute record
+      const newDispute = await tx.dispute.create({
+        data: {
+          paymentId: paymentId,
+          itemId: itemId,
+          filedByUserId: filedByUserId,
+          otherPartyUserId: otherPartyUserId,
+          reason: reason,
+          description: description,
+          status: 'PENDING_ADMIN',
+        }
+      });
 
-      transaction.set(disputeRef, newDispute);
-      transaction.update(paymentRef, {
-        status: 'disputed',
-        isDisputed: true,
-        disputeId: disputeId, // Link payment to dispute record
-        disputeReason: reason, // Store the high-level reason on payment too
-        disputeFiledBy: filedByUserId,
-        disputeSubmittedAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
+      // Update Payment to link to this new dispute and set status
+      await tx.payment.update({
+        where: { id: paymentId },
+        data: {
+          status: 'DISPUTED',
+          activeDisputeId: newDispute.id,
+        }
       });
-      transaction.update(itemRef, {
-        status: 'disputed', // Also mark the item as disputed
-        updatedAt: FieldValue.serverTimestamp(),
-      });
+
+      // Update Item status to DISPUTED
+      // (Only if it's not already SOLD or DELISTED, though payment status check should prevent this)
+      if (payment.item.status !== 'SOLD' && payment.item.status !== 'DELISTED') {
+        await tx.item.update({
+          where: { id: itemId },
+          data: { status: 'DISPUTED' }
+        });
+      }
       
-      console.log(`Dispute Create: Dispute ${disputeId} created by ${filedByUserId}. Payment ${paymentId} and item ${itemId} statuses updated to 'disputed'.`);
+      console.log(`Dispute Create: Dispute ${newDispute.id} created. Payment ${paymentId} and Item ${itemId} statuses updated.`);
       return { 
         success: true, 
-        disputeId, 
+        disputeId: newDispute.id, 
         otherPartyUserId, 
-        filedByUserName: session.user?.name || filedByUserId,
-        itemTitle: itemData.title || 'the item'
+        itemTitle: payment.item.title || 'the item'
       };
     });
 
     if (result?.success) {
-      // Notify the other party
       await createNotification({
         userId: result.otherPartyUserId,
         type: 'dispute_filed',
-        message: `${result.filedByUserName} has filed a dispute regarding payment for "${result.itemTitle}". An admin will review it.`, 
+        message: `${filedByUserName} filed a dispute regarding "${result.itemTitle}". Admin will review.`,
         relatedItemId: itemId,
         relatedPaymentId: paymentId,
         relatedDisputeId: result.disputeId,
       });
 
-      // Notify Admins (assuming you have a way to get admin user IDs or a topic)
-      // This is a placeholder for admin notification logic
-      const adminsSnapshot = await adminDb.collection('users').where('role', '==', 'admin').get();
-      if (!adminsSnapshot.empty) {
-        adminsSnapshot.forEach(adminDoc => {
-          createNotification({
-            userId: adminDoc.id,
-            type: 'new_dispute_admin',
-            message: `New dispute (#${result.disputeId.substring(0,6)}) filed by ${result.filedByUserName} for item "${result.itemTitle}". Please review.`, 
-            relatedItemId: itemId,
-            relatedPaymentId: paymentId,
-            relatedDisputeId: result.disputeId,
-          }).catch(err => console.error("Failed to send admin dispute notification:", err));
-        });
+      const adminUsers = await prisma.user.findMany({ where: { role: 'ADMIN' } });
+      for (const admin of adminUsers) {
+        await createNotification({
+          userId: admin.id,
+          type: 'new_dispute_admin',
+          message: `New dispute (#${result.disputeId.substring(0,6)}) by ${filedByUserName} for "${result.itemTitle}". Review needed.`,
+          relatedItemId: itemId,
+          relatedPaymentId: paymentId,
+          relatedDisputeId: result.disputeId,
+        }).catch(err => console.error(`Failed to send admin dispute notification to ${admin.id}:`, err));
       }
-      console.log(`Dispute Create: Notifications sent for dispute ${result.disputeId}.`);
-      return NextResponse.json({ message: 'Dispute filed successfully. Admins have been notified.', disputeId: result.disputeId }, { status: 201 });
+      
+      return NextResponse.json({ message: 'Dispute filed successfully. Admins and other party notified.', disputeId: result.disputeId }, { status: 201 });
     }
     throw new Error('Transaction failed to return expected result.');
 
   } catch (error: any) {
-    console.error("--- API POST /api/disputes/create FAILED --- Error:", error);
-    const status = error.message.startsWith('Forbidden') ? 403 : error.message.includes('not found') ? 404 : 400;
-    return NextResponse.json({ message: error.message || 'Failed to file dispute.' }, { status });
+    console.error("--- API POST /api/disputes/create (Prisma) FAILED --- Error:", error);
+    const statusCode = error.message.startsWith('Forbidden') ? 403 
+                     : error.message.includes('not found') ? 404 
+                     : error.message.includes('status:') || error.message.includes('active dispute') ? 400 
+                     : 500;
+    return NextResponse.json({ message: error.message || 'Failed to file dispute.' }, { status: statusCode });
   }
 }

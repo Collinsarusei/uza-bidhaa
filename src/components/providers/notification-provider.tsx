@@ -3,8 +3,6 @@
 
 import React, { createContext, useState, useEffect, useContext, useCallback, useMemo } from 'react';
 import { useSession } from 'next-auth/react';
-import { collection, query, where, onSnapshot, Timestamp as ClientTimestamp, Unsubscribe } from 'firebase/firestore';
-import { db } from '@/lib/firebase'; // Ensure you have firebase-client.ts
 import { useToast } from '@/hooks/use-toast';
 import { Notification } from '@/lib/types';
 import { parseISO, isValid } from 'date-fns';
@@ -33,29 +31,6 @@ interface NotificationProviderProps {
   children: React.ReactNode;
 }
 
-const convertToISOString = (timestamp: any): string | null => {
-    if (!timestamp) return null;
-    try {
-        if (timestamp instanceof ClientTimestamp) {
-            return timestamp.toDate().toISOString();
-        }
-        if (typeof timestamp === 'string') {
-            const parsed = parseISO(timestamp);
-            return isValid(parsed) ? parsed.toISOString() : null;
-        }
-        if (typeof timestamp === 'object' && typeof timestamp.seconds === 'number' && typeof timestamp.nanoseconds === 'number') {
-            return new Date(timestamp.seconds * 1000 + timestamp.nanoseconds / 1000000).toISOString();
-        }
-        if (timestamp instanceof Date && isValid(timestamp)) {
-            return timestamp.toISOString();
-        }
-    } catch (e) {
-        // console.warn("Could not convert timestamp to ISO string:", timestamp, e);
-    }
-    return null;
-};
-
-
 export function NotificationProvider({ children }: NotificationProviderProps) {
   const { data: session, status } = useSession();
   const { toast } = useToast();
@@ -65,162 +40,135 @@ export function NotificationProvider({ children }: NotificationProviderProps) {
   const [processedToastIds, setProcessedToastIds] = useState<Set<string>>(new Set());
 
   const unreadCount = useMemo(() => {
-    return allNotifications.filter(n => !n.isRead).length;
+    return Array.isArray(allNotifications) ? allNotifications.filter(n => !n.isRead).length : 0;
   }, [allNotifications]);
 
-  const fetchAndSetNotifications = useCallback((userId: string) => {
-    setIsLoading(true);
-    setError(null);
-    // console.log(`NotificationProvider: Setting up listener for user ${userId}`);
-    const notificationsRef = collection(db, 'notifications');
-    const q = query(notificationsRef, where("userId", "==", userId)); // Add other conditions like where("archived", "==", false) if needed
+  const fetchNotifications = useCallback(async () => {
+    if (status !== 'authenticated' || !session?.user?.id) return;
+    
+    let retryCount = 0;
+    const maxRetries = 3;
+    
+    const attemptFetch = async (): Promise<void> => {
+      try {
+        setIsLoading(true);
+        const response = await fetch('/api/notifications');
+        if (!response.ok) {
+          throw new Error(`Failed to fetch notifications: ${response.status}`);
+        }
+        const data = await response.json();
+        // Ensure we're setting an array of notifications
+        const notifications = Array.isArray(data.notifications) ? data.notifications : [];
+        setAllNotifications(notifications);
+        setError(null);
 
-    const unsubscribe: Unsubscribe = onSnapshot(q, (snapshot) => {
-      const currentFetchedNotifications: Notification[] = [];
-      const newToastableNotifications: Notification[] = [];
-
-      snapshot.forEach((doc) => {
-        const rawData = doc.data();
-        const notificationId = doc.id;
-
-        const data: Notification = {
-            id: notificationId,
-            userId: rawData.userId,
-            type: rawData.type,
-            message: rawData.message,
-            relatedItemId: rawData.relatedItemId,
-            relatedMessageId: rawData.relatedMessageId,
-            relatedUserId: rawData.relatedUserId,
-            isRead: rawData.isRead ?? false,
-            createdAt: convertToISOString(rawData.createdAt),
-            readAt: convertToISOString(rawData.readAt),
-        };
-        currentFetchedNotifications.push(data);
-
-        const createdAtDate = data.createdAt ? parseISO(data.createdAt) : null;
-        const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
-        if (
-            !data.isRead &&
+        // Show toasts for new unread notifications
+        const newToastableNotifications = notifications.filter((n: Notification) => {
+          const createdAtDate = n.createdAt ? parseISO(n.createdAt) : null;
+          const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+          return (
+            !n.isRead &&
             createdAtDate &&
             isValid(createdAtDate) &&
             createdAtDate > fiveMinutesAgo &&
-            !processedToastIds.has(notificationId)
-          ) {
-           newToastableNotifications.push(data);
+            !processedToastIds.has(n.id)
+          );
+        });
+
+        if (newToastableNotifications.length > 0) {
+          const updatedToastIds = new Set(processedToastIds);
+          newToastableNotifications.forEach((n: Notification) => {
+            toast({
+              title: n.type.replace(/_/g, ' ').replace(/\b\w/g, (l: string) => l.toUpperCase()),
+              description: n.message,
+            });
+            updatedToastIds.add(n.id);
+          });
+          setProcessedToastIds(prev => new Set([...prev, ...newToastableNotifications.map((n: Notification) => n.id)]));
         }
-      });
-
-      currentFetchedNotifications.sort((a, b) => {
-         const timeA = a.createdAt ? parseISO(a.createdAt).getTime() : 0;
-         const timeB = b.createdAt ? parseISO(b.createdAt).getTime() : 0;
-         return timeB - timeA;
-      });
-
-      setAllNotifications(currentFetchedNotifications);
-      setIsLoading(false);
-
-      if (newToastableNotifications.length > 0) {
-         const updatedToastIds = new Set(processedToastIds);
-         newToastableNotifications.forEach(n => {
-             toast({
-                 title: n.type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
-                 description: n.message,
-             });
-             updatedToastIds.add(n.id);
-         });
-         setProcessedToastIds(updatedToastIds);
+      } catch (err) {
+        console.error('Error fetching notifications:', err);
+        if (retryCount < maxRetries) {
+          retryCount++;
+          console.log(`Retrying notification fetch (${retryCount}/${maxRetries})...`);
+          await new Promise(resolve => setTimeout(resolve, 1000 * retryCount)); // Exponential backoff
+          return attemptFetch();
+        }
+        setError(err instanceof Error ? err.message : 'Failed to fetch notifications');
+      } finally {
+        setIsLoading(false);
       }
+    };
 
-      const currentIds = new Set(currentFetchedNotifications.map(n => n.id));
-         setProcessedToastIds(prev => {
-             const updated = new Set(prev);
-             for (const id of updated) {
-                 if (!currentIds.has(id)) {
-                     updated.delete(id);
-                 }
-             }
-             return updated;
-         });
-
-    }, (err) => {
-      console.error("Notification listener error:", err);
-      setError(err.message || "Failed to load notifications.");
-      setIsLoading(false);
-    });
-    return unsubscribe;
-  }, [toast]);
+    await attemptFetch();
+  }, [status, session?.user?.id, toast]);
 
   useEffect(() => {
-    let unsubscribe: Unsubscribe | null = null;
     if (status === 'authenticated' && session?.user?.id) {
-      unsubscribe = fetchAndSetNotifications(session.user.id);
+      fetchNotifications();
+      // Set up polling for new notifications every minute
+      const interval = setInterval(fetchNotifications, 60000);
+      return () => clearInterval(interval);
     } else if (status === 'unauthenticated') {
       setAllNotifications([]);
       setProcessedToastIds(new Set());
-      setIsLoading(false);
       setError(null);
-    } else {
-      setIsLoading(true);
     }
-
-    return () => {
-      if (unsubscribe) {
-        // console.log("NotificationProvider: Unsubscribing listener.");
-        unsubscribe();
-      }
-    };
-  }, [status, session?.user?.id, fetchAndSetNotifications]);
+  }, [status, session?.user?.id, fetchNotifications]);
 
   const markAllAsRead = useCallback(async () => {
     if (status !== 'authenticated' || !session?.user?.id || unreadCount === 0) {
-        return;
+      return;
     }
     try {
-        const response = await fetch('/api/notifications/mark-read', { method: 'POST' });
-        if (!response.ok) {
-            const result = await response.json().catch(() => ({}));
-            throw new Error(result.message || 'Failed to mark notifications as read via API');
-        }
-        toast({ title: "Notifications Marked", description: "All caught up!" });
+      const response = await fetch('/api/notifications/mark-read', { method: 'POST' });
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(result.message || 'Failed to mark notifications as read via API');
+      }
+      toast({ title: "Notifications Marked", description: "All caught up!" });
+      // Refresh notifications after marking all as read
+      fetchNotifications();
     } catch (error) {
-        console.error("MarkAllAsRead API Error:", error);
-        toast({ title: "Error", description: "Could not mark notifications as read.", variant: "destructive" });
+      console.error("MarkAllAsRead API Error:", error);
+      toast({ title: "Error", description: "Could not mark notifications as read.", variant: "destructive" });
     }
-  }, [status, session?.user?.id, unreadCount, toast]);
+  }, [status, session?.user?.id, unreadCount, toast, fetchNotifications]);
 
   const markOneAsRead = useCallback(async (notificationId: string) => {
-     if (status !== 'authenticated' || !session?.user?.id) return;
-     try {
-         const response = await fetch('/api/notifications/mark-one-read', {
-             method: 'POST',
-             headers: { 'Content-Type': 'application/json' },
-             body: JSON.stringify({ notificationId }),
-         });
-         if (!response.ok) {
-             const result = await response.json().catch(() => ({}));
-             throw new Error(result.message || 'Failed to mark notification as read');
-         }
-     } catch (err) {
-         console.error("markOneAsRead API error:", err);
-         toast({ title: "Error", description: "Could not mark notification as read.", variant: "destructive"});
-     }
-  }, [status, session?.user?.id, toast]);
+    if (status !== 'authenticated' || !session?.user?.id) return;
+    try {
+      const response = await fetch('/api/notifications/mark-one-read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notificationId }),
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(result.message || 'Failed to mark notification as read');
+      }
+      // Refresh notifications after marking one as read
+      fetchNotifications();
+    } catch (err) {
+      console.error("markOneAsRead API error:", err);
+      toast({ title: "Error", description: "Could not mark notification as read.", variant: "destructive" });
+    }
+  }, [status, session?.user?.id, toast, fetchNotifications]);
 
   const refetchNotifications = useCallback(() => {
-     if (status === 'authenticated' && session?.user?.id) {
-         // No direct refetch, listener handles updates.
-     }
-  }, [status, session?.user?.id]);
-
+    if (status === 'authenticated' && session?.user?.id) {
+      fetchNotifications();
+    }
+  }, [status, session?.user?.id, fetchNotifications]);
 
   const contextValue = useMemo(() => ({
-     notifications: allNotifications,
-     unreadCount,
-     isLoading,
-     error,
-     markAllAsRead,
-     markOneAsRead,
-     refetchNotifications,
+    notifications: allNotifications,
+    unreadCount,
+    isLoading,
+    error,
+    markAllAsRead,
+    markOneAsRead,
+    refetchNotifications,
   }), [allNotifications, unreadCount, isLoading, error, markAllAsRead, markOneAsRead, refetchNotifications]);
 
   return (

@@ -33,9 +33,9 @@ export function NotificationsContent() {
             const errData = await response.json().catch(() => ({}));
             throw new Error(errData.message || `HTTP error! status: ${response.status}`);
           }
-          const data: NotificationType[] = await response.json();
-          console.log(`NotificationsContent: Fetched ${data.length} notifications.`);
-          setNotifications(data);
+          const data = await response.json();
+          console.log(`NotificationsContent: Fetched ${data.notifications.length} notifications.`);
+          setNotifications(data.notifications);
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Failed to fetch notifications.';
           setError(message);

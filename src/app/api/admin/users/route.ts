@@ -1,76 +1,71 @@
 // src/app/api/admin/users/route.ts
-'use server';
-
 import { NextResponse } from 'next/server';
-import { adminDb } from '@/lib/firebase-admin';
+import prisma from '@/lib/prisma';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from '@/app/api/auth/[...nextauth]/route';
-import { UserProfile } from '@/lib/types';
-import { Timestamp } from 'firebase-admin/firestore';
 
-async function isAdmin(userId: string | undefined): Promise<boolean> {
-    if (!userId) return false;
-    const adminUserEmail = process.env.ADMIN_EMAIL;
-    if (adminUserEmail) {
-        const session = await getServerSession(authOptions);
-        return session?.user?.email === adminUserEmail;
-    }
-    return !!userId; // Fallback, NOT SECURE for production
+// Define the structure for the admin user list response
+interface AdminUserListItem {
+    id: string;
+    name: string | null;
+    email: string | null;
+    phoneNumber: string | null;
+    createdAt: Date | string;
+    status: 'ACTIVE' | 'SUSPENDED' | 'BANNED';
+    location: string | null;
+    role: 'USER' | 'ADMIN';
+    kycVerified: boolean;
+    phoneVerified: boolean;
 }
 
-const safeTimestampToString = (timestamp: any): string | null => {
-    if (timestamp instanceof Timestamp) {
-        try { return timestamp.toDate().toISOString(); } catch { return null; }
-    }
-    if (timestamp instanceof Date) {
-         try { return timestamp.toISOString(); } catch { return null; }
-    }
-    if (typeof timestamp === 'string') {
-         try {
-             if (new Date(timestamp).toISOString() === timestamp) return timestamp;
-         } catch { /* ignore */ }
-    }
-    return null;
-};
-
-
-export async function GET() {
-    console.log("--- API GET /api/admin/users START ---");
-
-    if (!adminDb) {
-        console.error("API Admin Users GET Error: Firebase Admin DB not initialized.");
-        return NextResponse.json({ message: 'Server configuration error.' }, { status: 500 });
-    }
+export async function GET(request: Request) {
+    console.log("--- API GET /api/admin/users (Prisma) START ---");
 
     const session = await getServerSession(authOptions);
-    if (!(await isAdmin(session?.user?.id))) {
-        console.warn("API Admin Users GET: Unauthorized attempt.");
-        return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+    if (!session?.user?.id || (session.user as any).role !== 'ADMIN') {
+        console.warn("API Admin Users GET: Unauthorized or non-admin attempt.");
+        return NextResponse.json({ message: 'Forbidden: Admin access required' }, { status: 403 });
     }
+    console.log(`API Admin Users GET: Authorized admin ${session.user.id} fetching users.`);
 
     try {
-        const usersRef = adminDb.collection('users');
-        const snapshot = await usersRef.orderBy('createdAt', 'desc').get();
-
-        const users: Partial<UserProfile>[] = []; // Return partial to exclude sensitive fields like password
-        snapshot.forEach(doc => {
-            const data = doc.data() as UserProfile;
-            users.push({
-                id: doc.id,
-                name: data.name,
-                email: data.email,
-                phoneNumber: data.phoneNumber,
-                createdAt: safeTimestampToString(data.createdAt),
-                isSuspended: data.isSuspended ?? false,
-                location: data.location,
-            });
+        const usersFromDb = await prisma.user.findMany({
+            orderBy: {
+                createdAt: 'desc',
+            },
+            select: { // Select specific fields to return to the admin
+                id: true,
+                name: true,
+                email: true,
+                phoneNumber: true,
+                createdAt: true,
+                status: true,     // UserStatus enum (ACTIVE, SUSPENDED, BANNED)
+                location: true,
+                role: true,       // UserRole enum (USER, ADMIN)
+                image: true,     // Profile picture
+                kycVerified: true,
+                phoneVerified: true,
+                mpesaPhoneNumber: true,
+                // Exclude sensitive fields like 'password'
+                // Include other fields as necessary for admin view
+                _count: { // Example: if you want to show how many items a user has
+                    select: { items: true }
+                }
+            }
         });
+
+        // Transform if needed, though direct selection is often good enough.
+        // The main transformation is that Date objects will become ISO strings in the JSON response.
+        const users: AdminUserListItem[] = usersFromDb.map((user: any) => ({
+            ...user,
+            isSuspended: user.status === 'SUSPENDED',
+        })) as AdminUserListItem[];
 
         console.log(`API Admin Users GET: Found ${users.length} users.`);
         return NextResponse.json(users, { status: 200 });
 
     } catch (error: any) {
-        console.error("--- API GET /api/admin/users FAILED --- Error:", error);
+        console.error("--- API GET /api/admin/users (Prisma) FAILED ---", error);
         return NextResponse.json({ message: 'Failed to fetch users', error: error.message }, { status: 500 });
     }
 }

@@ -1,112 +1,107 @@
 // src/app/api/admin/platform-fees/route.ts
-'use server';
-
 import { NextResponse } from 'next/server';
-import { adminDb } from '@/lib/firebase-admin';
+import prisma from '@/lib/prisma';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from '@/app/api/auth/[...nextauth]/route';
-import { PlatformSettings, PlatformFeeRecord } from '@/lib/types';
-import { Timestamp, FieldValue, DocumentData } from 'firebase-admin/firestore'; // Import DocumentData
+import { Prisma } from '@prisma/client';
+import { Decimal } from '@prisma/client/runtime/library';
 
-// Reusable admin check function
-async function isAdmin(userId: string | undefined): Promise<boolean> {
-    if (!userId) return false;
-    // Check if adminDb is initialized before using it
-    if (!adminDb) {
-        console.error("isAdmin check failed: adminDb is null.");
-        return false;
-    }
-    try {
-        // Use non-null assertion because we checked !adminDb above
-        const userDoc = await adminDb!.collection('users').doc(userId).get();
-        return userDoc.exists && userDoc.data()?.role === 'admin';
-    } catch (error) {
-        console.error("Error checking admin role:", error);
-        return false;
-    }
+// Define the enriched platform fee record structure for the response
+interface EnrichedPlatformFeeRecord {
+    id: string;
+    relatedPaymentId: string;
+    relatedItemId: string;
+    sellerId: string;
+    amount: Decimal;
+    appliedFeePercentage: Decimal;
+    appliedFeeRuleId: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+    payment?: Partial<{
+        id: string;
+        amount: Decimal;
+        createdAt: Date;
+        item?: Partial<{
+            id: string;
+            title: string;
+        }>;
+    }>;
+    item?: Partial<{
+        id: string;
+        title: string;
+    }>;
+    seller?: Partial<{
+        id: string;
+        name: string | null;
+        email: string | null;
+    }>;
+    appliedFeeRule?: Partial<{
+        id: string;
+        name: string;
+        feePercentage: Decimal;
+    }>;
 }
 
-// Helper to convert timestamps before sending
-const safeTimestampToString = (timestamp: any): string | null => {
-    if (timestamp instanceof Timestamp) {
-        try { return timestamp.toDate().toISOString(); } catch { return null; }
-    }
-    if (timestamp instanceof Date) {
-         try { return timestamp.toISOString(); } catch { return null; }
-    }
-    if (typeof timestamp === 'string') {
-         try {
-             if (new Date(timestamp).toISOString() === timestamp) return timestamp;
-         } catch { /* ignore */ }
-    }
-    return null;
-};
+export async function GET(request: Request) {
+    console.log("--- API GET /api/admin/platform-fees (Prisma) START ---");
 
-export async function GET() {
-    console.log("--- API GET /api/admin/platform-fees START ---");
-
-    // Check if adminDb is initialized
-    if (!adminDb) {
-        console.error("API Admin Platform Fees GET Error: Firebase Admin DB not initialized.");
-        return NextResponse.json({ message: 'Server configuration error.' }, { status: 500 });
-    }
-
-    // Authentication
     const session = await getServerSession(authOptions);
-    // isAdmin function now also checks for null adminDb internally
-    if (!(await isAdmin(session?.user?.id))) {
-        console.warn("API Admin Platform Fees GET: Unauthorized attempt.");
-        return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+    if (!session?.user?.id || (session.user as any).role !== 'ADMIN') {
+        console.warn("API /admin/platform-fees: Unauthorized or non-admin attempt.");
+        return NextResponse.json({ message: 'Forbidden: Admin access required' }, { status: 403 });
     }
+    console.log(`API /admin/platform-fees: Authorized admin ${session.user.id} fetching platform fee data.`);
 
     try {
-        // Use non-null assertion because we checked !adminDb above
-        const settingsDocRef = adminDb!.collection('settings').doc('platformFee');
-        const settingsDocSnap = await settingsDocRef.get();
-        const platformSettings = settingsDocSnap.data() as PlatformSettings | undefined;
-        const totalPlatformFees = platformSettings?.totalPlatformFees ?? 0;
-
-        // 2. Fetch Fee Records
-        const feesRef = adminDb!.collection('platformFees'); // Use non-null assertion
-        const feesQuery = feesRef.orderBy('createdAt', 'desc'); // Order by most recent
-        const feesSnapshot = await feesQuery.get();
-
-        const feeRecords: PlatformFeeRecord[] = [];
-        feesSnapshot.forEach(doc => {
-            // Get raw data as DocumentData which includes all fields from Firestore
-            const rawData = doc.data() as DocumentData;
-
-            // Construct the PlatformFeeRecord by accessing fields from rawData
-            const feeRecord: PlatformFeeRecord = {
-                id: doc.id,
-                amount: rawData.amount, // Access directly from rawData
-                relatedPaymentId: rawData.relatedPaymentId, // Access directly from rawData
-                relatedItemId: rawData.relatedItemId, // Access directly from rawData
-                sellerId: rawData.sellerId, // Access directly from rawData
-                createdAt: safeTimestampToString(rawData.createdAt), // Access createdAt from rawData and convert
-            };
-
-            // Optional: Add runtime checks if these fields might genuinely be missing in some documents
-            // e.g., if (typeof rawData.amount !== 'number') { /* handle error or skip */ }
-
-            feeRecords.push(feeRecord);
+        // 1. Fetch Platform Settings (total fees and default percentage)
+        const platformSettings = await prisma.platformSetting.findUnique({
+            where: { id: 'global_settings' },
         });
 
-        console.log(`API Admin Platform Fees GET: Found ${feeRecords.length} fee records. Total Balance: ${totalPlatformFees}`);
+        const totalPlatformFeesCollected = platformSettings?.totalPlatformFees ?? new Decimal(0);
+        const defaultPlatformFeePercentage = platformSettings?.defaultFeePercentage ?? new Decimal(0);
 
-        // 3. Return Combined Data
+        // 2. Fetch all PlatformFee records with relevant details
+        const feeRecordsRaw = await prisma.platformFee.findMany({
+            include: {
+                payment: {
+                    select: {
+                        id: true,
+                        amount: true, // Original payment amount
+                        createdAt: true,
+                        item: { select: { id: true, title: true } } // Item related to the payment
+                    }
+                },
+                // Item is directly related to PlatformFee as well as through Payment.
+                // Choose one source or include if they might differ (shouldn't if data is consistent)
+                item: { 
+                    select: { id: true, title: true }
+                },
+                seller: {
+                    select: { id: true, name: true, email: true }
+                },
+                appliedFeeRule: {
+                    select: { id: true, name: true, feePercentage: true }
+                }
+            },
+            orderBy: {
+                createdAt: 'desc',
+            }
+        });
+
+        // Dates from Prisma will be Date objects; NextResponse.json() serializes them to ISO strings.
+        const feeRecords: EnrichedPlatformFeeRecord[] = feeRecordsRaw as EnrichedPlatformFeeRecord[];
+
+        console.log(`API Admin Platform Fees GET: Found ${feeRecords.length} fee records. Total Balance: ${totalPlatformFeesCollected}`);
+
         return NextResponse.json({
-            totalBalance: totalPlatformFees,
+            totalBalance: totalPlatformFeesCollected,
+            defaultFeePercentage: defaultPlatformFeePercentage,
             records: feeRecords,
         }, { status: 200 });
 
     } catch (error: any) {
-        console.error("--- API GET /api/admin/platform-fees FAILED --- Error:", error);
+        console.error("--- API GET /api/admin/platform-fees (Prisma) FAILED --- Error:", error);
         return NextResponse.json({ message: 'Failed to fetch platform fee data', error: error.message }, { status: 500 });
     }
 }
-
-// POST could be used later for marking fees as 'withdrawn' from the platform,
-// but this would likely just update a record status, not perform actual financial transaction.
-// Example:
-// export async function POST(req: Request) { ... logic to update a fee record's status ... }

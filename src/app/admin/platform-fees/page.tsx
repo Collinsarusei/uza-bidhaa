@@ -77,10 +77,11 @@ export default function AdminPlatformFeesPage() {
         }
     }, [isAuthorized, status, fetchPlatformFees]);
 
-    const formatDate = (dateString: string | null | undefined) => {
+    const formatDate = (dateString: string | Date | null | undefined) => {
         if (!dateString) return 'N/A';
         try {
-            return format(parseISO(dateString), 'PPpp');
+            const date = typeof dateString === 'string' ? parseISO(dateString) : dateString;
+            return format(date, 'PPpp');
         } catch {
             return 'Invalid Date';
         }

@@ -14,7 +14,19 @@ import { useToast } from "@/hooks/use-toast";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useRouter } from 'next/navigation';
 
-interface OrderDisplayItem extends Payment {
+enum PaymentStatus {
+  INITIATED = 'INITIATED',
+  SUCCESSFUL_ESCROW = 'SUCCESSFUL_ESCROW',
+  PENDING_CONFIRMATION = 'PENDING_CONFIRMATION',
+  RELEASED_TO_SELLER = 'RELEASED_TO_SELLER',
+  REFUNDED_TO_BUYER = 'REFUNDED_TO_BUYER',
+  DISPUTED = 'DISPUTED',
+  CANCELLED = 'CANCELLED',
+  FAILED = 'FAILED'
+}
+
+interface OrderDisplayItem extends Omit<Payment, 'status'> {
+    status: PaymentStatus;
     itemDetails?: Partial<Item>; 
 }
 
@@ -25,28 +37,26 @@ export default function MyOrdersPage() {
   const [orders, setOrders] = useState<OrderDisplayItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [confirmingPaymentId, setConfirmingPaymentId] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchOrders = async () => {
-      if (status !== 'authenticated' || !session?.user?.id) {
-          setIsLoading(false);
-          return; 
-      }
+      if (!session?.user?.id) return;
+
       setIsLoading(true);
       setError(null);
       try {
-        console.log("MyOrders: Fetching orders...");
-        const response = await fetch(`/api/user/orders`); 
+        const response = await fetch(`/api/user/orders?userId=${session.user.id}`);
         if (!response.ok) {
-             const errData = await response.json().catch(() => ({}));
-            throw new Error(errData.message || `HTTP error! status: ${response.status}`);
+          const error = await response.json();
+          throw new Error(error.message || `HTTP error! status: ${response.status}`);
         }
-        const data: OrderDisplayItem[] = await response.json();
-        console.log(`MyOrders: Fetched ${data.length} orders.`);
-        setOrders(data || []);
+        const data = await response.json();
+        setOrders(data);
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to fetch your orders.';
+        let message = "Failed to fetch orders.";
+        if (err instanceof Error) {
+          message = err.message;
+        }
         setError(message);
         console.error("Error fetching orders:", err);
       } finally {
@@ -54,104 +64,134 @@ export default function MyOrdersPage() {
       }
     };
 
+    if (status === "authenticated") {
     fetchOrders();
-  }, [status, session?.user?.id]);
+    }
+  }, [session?.user?.id, status]);
 
-  const handleConfirmReceipt = async (paymentId: string) => {
-      if (!paymentId) return;
-      setConfirmingPaymentId(paymentId);
+  const handleConfirmReceipt = async (orderId: string) => {
       try {
-           console.log(`MyOrders: Confirming receipt for payment ${paymentId}...`);
-           const response = await fetch('/api/payment/confirm-receipt', {
+      const response = await fetch(`/api/orders/${orderId}/confirm`, {
                method: 'POST',
-               headers: { 'Content-Type': 'application/json' },
-               body: JSON.stringify({ paymentId })
+        headers: { 'Content-Type': 'application/json' }
            });
-           const result = await response.json();
+
            if (!response.ok) {
-               throw new Error(result.message || 'Failed to confirm receipt.');
+        const error = await response.json();
+        throw new Error(error.message || 'Failed to confirm receipt');
            }
-           console.log(`MyOrders: Receipt confirmed for ${paymentId}.`);
-           toast({ title: "Success", description: "Payment released to seller." });
+
+      // Update the order status locally
            setOrders(prevOrders => 
                prevOrders.map(order => 
-                    order.id === paymentId ? { ...order, status: 'released_to_seller_balance' } : order
+          order.id === orderId 
+            ? { ...order, status: PaymentStatus.RELEASED_TO_SELLER }
+            : order
                )
            );
-      } catch (err) {
-            const message = err instanceof Error ? err.message : 'Failed to confirm receipt.';
-            console.error("Confirm Receipt Error:", err);
-            toast({ title: "Error", description: message, variant: "destructive" });
-      } finally {
-            setConfirmingPaymentId(null); 
-      }
+
+      toast({
+        title: "Receipt Confirmed",
+        description: "Thank you for confirming your receipt.",
+        duration: 3000
+      });
+    } catch (error: any) {
+      console.error('Error confirming receipt:', error);
+      toast({
+        title: "Error",
+        description: error.message || "Failed to confirm receipt. Please try again.",
+        variant: "destructive",
+        duration: 5000
+      });
+    }
   };
 
-  const formatDate = (dateString: string | null | undefined): string => {
-        if (!dateString) return 'N/A';
-        try { return format(new Date(dateString), 'PP'); } 
-        catch { return 'Invalid Date'; }
+  const handleDisputeOrder = async (orderId: string) => {
+    try {
+      const response = await fetch(`/api/orders/${orderId}/dispute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Failed to initiate dispute');
+      }
+
+      // Update the order status locally
+      setOrders(prevOrders => 
+        prevOrders.map(order => 
+          order.id === orderId 
+            ? { ...order, status: PaymentStatus.DISPUTED }
+            : order
+        )
+      );
+
+      toast({
+        title: "Dispute Initiated",
+        description: "Our team will review your dispute and contact you soon.",
+        duration: 5000
+      });
+    } catch (error: any) {
+      console.error('Error initiating dispute:', error);
+      toast({
+        title: "Error",
+        description: error.message || "Failed to initiate dispute. Please try again.",
+        variant: "destructive",
+        duration: 5000
+      });
+    }
     };
 
+  const getStatusVariant = (status: PaymentStatus) => {
+    switch (status) {
+      case PaymentStatus.RELEASED_TO_SELLER:
+        return 'default';
+      case PaymentStatus.DISPUTED:
+        return 'destructive';
+      case PaymentStatus.PENDING_CONFIRMATION:
+        return 'secondary';
+      default:
+        return 'outline';
+    }
+  };
+
   const renderOrderCard = (order: OrderDisplayItem) => {
-    const canConfirm = order.status === 'paid_to_platform';
-    const isConfirming = confirmingPaymentId === order.id;
+    const item = order.itemDetails;
+    if (!item) return null;
 
     return (
-        <Card key={order.id} className="mb-4 overflow-hidden">
-            <CardHeader className="bg-muted/50 p-4 border-b">
-                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
-                    <div>
-                        <CardTitle className="text-lg">Order #{order.id.substring(0, 8)}</CardTitle>
-                        <CardDescription>Placed on: {formatDate(order.createdAt)}</CardDescription>
-                    </div>
-                    <Badge 
-                        variant={ 
-                            order.status === 'released_to_seller_balance' ? 'secondary' : 
-                            order.status === 'paid_to_platform' ? 'secondary' : 
-                            order.status === 'disputed' ? 'destructive' : 'outline'
-                        }
-                    >
-                        Status: {order.status.replace(/_/g, ' ')}
-                    </Badge>
-                </div>
-            </CardHeader>
-            <CardContent className="p-4 flex flex-col sm:flex-row gap-4 items-start">
-                {order.itemDetails?.mediaUrls?.[0] ? (
-                    <img 
-                        src={order.itemDetails.mediaUrls[0]}
-                        alt={order.itemDetails.title || 'Item image'}
-                        className="w-24 h-24 object-cover rounded-md border flex-shrink-0" 
-                    />
-                ) : (
-                    <div className="w-24 h-24 bg-secondary rounded-md flex items-center justify-center text-muted-foreground text-xs flex-shrink-0">
-                         No Image
-                    </div>
-                )}
-                <div className="flex-grow mt-2 sm:mt-0">
-                     <Link href={`/item/${order.itemId}`} className="hover:underline">
-                         <h3 className="font-semibold">{order.itemDetails?.title || 'Item Details Unavailable'}</h3>
-                     </Link>
-                     <p className="text-sm text-muted-foreground">Seller ID: {order.sellerId.substring(0, 8)}...</p>
-                     <p className="text-lg font-medium mt-1">KES {order.amount.toLocaleString()}</p>
-                 </div>
-            </CardContent>
-            {canConfirm && (
-                 <CardFooter className="p-4 bg-muted/50 border-t flex flex-col sm:flex-row sm:justify-end gap-2">
-                    {canConfirm && (
-                        <Button 
-                            className="w-full sm:w-auto"
-                            onClick={() => handleConfirmReceipt(order.id)}
-                            disabled={isConfirming}
-                            size="sm"
-                        >
-                            {isConfirming && <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />}
-                            Confirm Receipt
-                        </Button>
-                    )}
-                 </CardFooter>
-            )}
-        </Card>
+      <Card key={order.id} className="overflow-hidden">
+        <CardHeader className="p-2 md:p-4">
+          <div className="flex justify-between items-center">
+            <CardTitle className="text-sm md:text-base">Order #{order.id.substring(0, 8)}</CardTitle>
+            <Badge variant={getStatusVariant(order.status)} className="text-xs">
+              {order.status.replace(/_/g, ' ')}
+            </Badge>
+          </div>
+          <CardDescription className="text-xs">
+            {order.createdAt ? format(new Date(order.createdAt), 'PPp') : 'N/A'}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="p-2 md:p-4 flex flex-col sm:flex-row gap-2 md:gap-4 items-start">
+          {item.mediaUrls && item.mediaUrls.length > 0 ? (
+            <img 
+              src={item.mediaUrls[0]} 
+              alt={item.title} 
+              className="w-20 h-20 md:w-24 md:h-24 object-cover rounded-md flex-shrink-0"
+            />
+          ) : (
+            <div className="w-20 h-20 md:w-24 md:h-24 bg-secondary rounded-md flex items-center justify-center text-muted-foreground flex-shrink-0">
+              No Image
+            </div>
+          )}
+          <div className="flex-grow space-y-1">
+            <h3 className="font-medium text-sm md:text-base">{item.title}</h3>
+            <p className="text-xs md:text-sm text-muted-foreground">KES {order.amount.toLocaleString()}</p>
+            <p className="text-xs md:text-sm text-muted-foreground">Seller: {item.seller?.name || 'Unknown'}</p>
+          </div>
+        </CardContent>
+      </Card>
     );
   };
 
@@ -198,8 +238,13 @@ export default function MyOrdersPage() {
         </div>
       );
   }
+
   if (status === 'unauthenticated') {
-       return <div className="container mx-auto p-4 md:p-6 text-center">Please log in to view your orders.</div>;
+    return (
+      <div className="container mx-auto p-4 md:p-6 text-center">
+        Please log in to view your orders.
+      </div>
+    );
   }
 
   return (
@@ -222,7 +267,9 @@ export default function MyOrdersPage() {
             </Alert>
       )}
       {!isLoading && !error && orders.length === 0 && (
-          <p className="text-center text-muted-foreground mt-10">You haven't placed any orders yet.</p>
+        <p className="text-center text-muted-foreground mt-10">
+          You haven't placed any orders yet.
+        </p>
       )}
       {!isLoading && !error && orders.length > 0 && (
           <div>

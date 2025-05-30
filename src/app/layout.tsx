@@ -1,40 +1,45 @@
-import type { Metadata } from 'next';
-import { Geist, Geist_Mono } from 'next/font/google';
+import { Inter } from 'next/font/google';
+import NextAuthSessionProvider from '@/components/providers/session-provider';
+import { NotificationProvider } from '@/components/providers/notification-provider';
+import { Footer } from '@/components/layout/footer';
+import { Toaster } from '@/components/ui/toaster';
+import { registerServiceWorker } from '@/lib/register-sw';
 import './globals.css';
-import { Toaster } from "@/components/ui/toaster";
-import NextAuthSessionProvider from "@/components/providers/session-provider";
-import { NotificationProvider } from "@/components/providers/notification-provider"; 
-import { Footer } from "@/components/layout/footer"; // Import the Footer
 
-const geistSans = Geist({
-  variable: '--font-geist-sans',
+const inter = Inter({
   subsets: ['latin'],
+  variable: '--font-sans',
 });
 
-const geistMono = Geist_Mono({
-  variable: '--font-geist-mono',
-  subsets: ['latin'],
-});
-
-export const metadata: Metadata = {
-  title: 'Uza Bidhaa marketplace',
-  description: 'Your one-stop online marketplace',
+export const metadata = {
+  title: 'Uza Bidhaa - Kenyan Marketplace',
+  description: 'Buy and sell items in Kenya',
+  manifest: '/manifest.json',
 };
 
 export default function RootLayout({
   children,
-}: Readonly<{
+}: {
   children: React.ReactNode;
-}>) {
+}) {
+  if (typeof window !== 'undefined') {
+    registerServiceWorker();
+  }
+
   return (
-    <html lang="en" className="h-full">
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased flex flex-col min-h-screen`}>
+    <html lang="en" className={inter.variable}>
+      <head>
+        <link rel="manifest" href="/manifest.json" />
+        <meta name="theme-color" content="#000000" />
+        <link rel="apple-touch-icon" href="/images/web-app-manifest-192x192.png" />
+      </head>
+      <body className="min-h-screen bg-background font-sans antialiased flex flex-col">
         <NextAuthSessionProvider>
           <NotificationProvider>
-            <div className="flex-grow"> {/* Main content wrapper */}
-              {children} 
-            </div>
-            <Footer /> {/* Add Footer here */}
+            <main className="flex-1">
+              {children}
+            </main>
+            <Footer />
             <Toaster />
           </NotificationProvider>
         </NextAuthSessionProvider>
