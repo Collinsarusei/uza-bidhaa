@@ -1,52 +1,54 @@
-'use client';
+import { Suspense } from 'react';
+import { getServerSession } from 'next-auth/next';
+import { authOptions } from '@/app/api/auth/[...nextauth]/route';
+import prisma from '@/lib/prisma';
+import { ItemDetails } from '@/components/items/item-details';
+import { Skeleton } from '@/components/ui/skeleton';
 
-import { useSession } from 'next-auth/react';
-import { useRouter } from 'next/navigation';
-import { TrackingForm } from '@/components/items/tracking-form';
-import { TrackingDisplay } from '@/components/items/tracking-display';
+export default async function ItemPage({ params }: { params: { itemId: string } }) {
+  const session = await getServerSession(authOptions);
+  
+  const item = await prisma.item.findUnique({
+    where: { id: params.itemId },
+    include: {
+      seller: {
+        select: {
+          id: true,
+          name: true,
+          image: true,
+          email: true,
+        },
+      },
+      tracking: true,
+    },
+  });
 
-interface ItemDetailsProps {
-  item: {
-    id: string;
-    sellerId: string;
-    status: string;
-    tracking?: {
-      trackingNumber: string;
-      carrier: string;
-      estimatedDeliveryDays: number;
-      notes?: string;
-      status: 'IN_TRANSIT' | 'DELAYED' | 'DELIVERED';
-    };
+  if (!item) {
+    return (
+      <div className="container mx-auto p-4 md:p-6 max-w-4xl text-center text-muted-foreground">
+        <p>Item not found.</p>
+      </div>
+    );
+  }
+
+  // Transform the data to match expected types
+  const transformedItem = {
+    ...item,
+    price: item.price.toString(),
+    createdAt: item.createdAt.toISOString(),
+    updatedAt: item.updatedAt.toISOString(),
+    tracking: item.tracking ? {
+      trackingNumber: item.tracking.trackingNumber,
+      carrier: item.tracking.carrier,
+      estimatedDeliveryDays: item.tracking.estimatedDeliveryDays,
+      notes: item.tracking.notes || undefined,
+      status: item.tracking.status as 'IN_TRANSIT' | 'DELAYED' | 'DELIVERED'
+    } : undefined
   };
-}
-
-export default function ItemDetails({ item }: ItemDetailsProps) {
-  const { data: session } = useSession();
-  const router = useRouter();
 
   return (
-    <div className="container mx-auto py-8">
-      {/* ... other item details ... */}
-      
-      {item.status === 'PAID_ESCROW' && (
-        <div className="mt-6">
-          {session?.user?.id === item.sellerId ? (
-            <div className="space-y-4">
-              <h3 className="text-lg font-semibold">Update Tracking Information</h3>
-              <TrackingForm 
-                itemId={item.id} 
-                initialData={item.tracking}
-                onSuccess={() => {
-                  // Refresh item data
-                  router.refresh();
-                }}
-              />
-            </div>
-          ) : (
-            <TrackingDisplay itemId={item.id} />
-          )}
-        </div>
-      )}
-    </div>
+    <Suspense fallback={<Skeleton className="h-[500px] w-full" />}>
+      <ItemDetails item={transformedItem} session={session} />
+    </Suspense>
   );
 } 
