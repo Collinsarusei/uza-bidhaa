@@ -5,13 +5,14 @@ import prisma from '@/lib/prisma';
 import { ItemDetails } from '@/components/items/item-details';
 import { Skeleton } from '@/components/ui/skeleton';
 
-type Params = {
+interface PageProps {
   params: {
     itemId: string;
   };
-};
+  searchParams: { [key: string]: string | string[] | undefined };
+}
 
-export default async function Page({ params }: Params) {
+export default async function Page({ params }: PageProps) {
   const session = await getServerSession(authOptions);
 
   const item = await prisma.item.findUnique({
