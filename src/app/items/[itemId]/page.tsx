@@ -1,18 +1,15 @@
-import React, { Suspense } from 'react';
+import { Suspense } from 'react';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/app/api/auth/[...nextauth]/route';
 import prisma from '@/lib/prisma';
 import { ItemDetails } from '@/components/items/item-details';
 import { Skeleton } from '@/components/ui/skeleton';
 
-// Properly typed props for dynamic route
-interface ItemPageProps {
-  params: {
-    itemId: string;
-  };
-}
-
-export default async function ItemPage({ params }: ItemPageProps): Promise<JSX.Element> {
+export default async function Page({
+  params,
+}: {
+  params: { itemId: string };
+}): Promise<JSX.Element> {
   const session = await getServerSession(authOptions);
 
   const item = await prisma.item.findUnique({
@@ -38,7 +35,6 @@ export default async function ItemPage({ params }: ItemPageProps): Promise<JSX.E
     );
   }
 
-  // Transform the data to match expected types
   const transformedItem = {
     ...item,
     price: item.price.toString(),
