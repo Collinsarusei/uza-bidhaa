@@ -15,17 +15,19 @@ const trackingSchema = z.object({
 // POST /api/items/[itemId]/tracking - Add or update tracking information
 export async function POST(
   request: Request,
-  { params }: { params: { itemId: string } }
+  context: any
 ) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
     return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
   }
 
+  const itemId = context.params?.itemId;
+
   try {
     const item = await prisma.item.findUnique({
-      where: { id: params.itemId },
-      include: { 
+      where: { id: itemId },
+      include: {
         seller: true,
         payments: {
           where: {
@@ -50,19 +52,18 @@ export async function POST(
     const validatedData = trackingSchema.parse(body);
 
     const tracking = await prisma.itemTracking.upsert({
-      where: { itemId: params.itemId },
+      where: { itemId },
       update: {
         ...validatedData,
         lastUpdated: new Date(),
       },
       create: {
-        itemId: params.itemId,
+        itemId,
         ...validatedData,
         lastUpdated: new Date(),
       },
     });
 
-    // Create notification for the buyer
     const successfulPayment = item.payments[0];
     if (successfulPayment?.buyer) {
       let notificationMessage = '';
@@ -110,17 +111,19 @@ export async function POST(
 // GET /api/items/[itemId]/tracking - Get tracking information
 export async function GET(
   request: Request,
-  { params }: { params: { itemId: string } }
+  context: any
 ) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
     return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
   }
 
+  const itemId = context.params?.itemId;
+
   try {
     const item = await prisma.item.findUnique({
-      where: { id: params.itemId },
-      include: { 
+      where: { id: itemId },
+      include: {
         seller: true,
         payments: {
           where: {
@@ -137,14 +140,13 @@ export async function GET(
       return NextResponse.json({ message: 'Item not found' }, { status: 404 });
     }
 
-    // Only seller and buyer can view tracking information
     const successfulPayment = item.payments[0];
     if (item.sellerId !== session.user.id && successfulPayment?.buyer?.id !== session.user.id) {
       return NextResponse.json({ message: 'Unauthorized to view tracking information' }, { status: 403 });
     }
 
     const tracking = await prisma.itemTracking.findUnique({
-      where: { itemId: params.itemId },
+      where: { itemId },
     });
 
     return NextResponse.json(tracking);
@@ -155,4 +157,4 @@ export async function GET(
       { status: 500 }
     );
   }
-} 
+}
