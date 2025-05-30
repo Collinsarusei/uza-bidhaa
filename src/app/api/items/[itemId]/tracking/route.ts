@@ -25,7 +25,17 @@ export async function POST(
   try {
     const item = await prisma.item.findUnique({
       where: { id: params.itemId },
-      include: { seller: true }
+      include: { 
+        seller: true,
+        payments: {
+          where: {
+            status: 'SUCCESSFUL_ESCROW'
+          },
+          include: {
+            buyer: true
+          }
+        }
+      }
     });
 
     if (!item) {
@@ -53,14 +63,32 @@ export async function POST(
     });
 
     // Create notification for the buyer
-    await prisma.notification.create({
-      data: {
-        userId: item.buyerId!,
-        type: 'tracking_updated',
-        message: `Tracking information has been updated for your item "${item.title}"`,
-        relatedItemId: item.id,
-      },
-    });
+    const successfulPayment = item.payments[0];
+    if (successfulPayment?.buyer) {
+      let notificationMessage = '';
+      switch (validatedData.status) {
+        case 'IN_TRANSIT':
+          notificationMessage = `Your item "${item.title}" has been shipped and is in transit. Tracking number: ${validatedData.trackingNumber}`;
+          break;
+        case 'DELAYED':
+          notificationMessage = `There's a delay in the delivery of your item "${item.title}". ${validatedData.notes ? `Reason: ${validatedData.notes}` : ''}`;
+          break;
+        case 'DELIVERED':
+          notificationMessage = `Your item "${item.title}" has been delivered!`;
+          break;
+        default:
+          notificationMessage = `Tracking information has been updated for your item "${item.title}"`;
+      }
+
+      await prisma.notification.create({
+        data: {
+          userId: successfulPayment.buyer.id,
+          type: 'tracking_updated',
+          message: notificationMessage,
+          relatedItemId: item.id,
+        },
+      });
+    }
 
     return NextResponse.json(tracking);
   } catch (error) {
@@ -92,7 +120,17 @@ export async function GET(
   try {
     const item = await prisma.item.findUnique({
       where: { id: params.itemId },
-      include: { seller: true, buyer: true }
+      include: { 
+        seller: true,
+        payments: {
+          where: {
+            status: 'SUCCESSFUL_ESCROW'
+          },
+          include: {
+            buyer: true
+          }
+        }
+      }
     });
 
     if (!item) {
@@ -100,7 +138,8 @@ export async function GET(
     }
 
     // Only seller and buyer can view tracking information
-    if (item.sellerId !== session.user.id && item.buyerId !== session.user.id) {
+    const successfulPayment = item.payments[0];
+    if (item.sellerId !== session.user.id && successfulPayment?.buyer?.id !== session.user.id) {
       return NextResponse.json({ message: 'Unauthorized to view tracking information' }, { status: 403 });
     }
 
