@@ -4,17 +4,11 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from '@/app/api/auth/[...nextauth]/route'; // Adjust path as necessary
 import prisma from '@/lib/prisma';
 
-type RouteContext = {
-    params: {
-        conversationId: string;
-    };
-};
-
 export async function POST(
     request: NextRequest,
-    context: RouteContext
+    { params }: { params: { conversationId: string } }
 ) {
-    const { conversationId } = context.params;
+    const { conversationId } = params;
     console.log(`--- API POST /api/conversations/${conversationId}/mark-as-read (Prisma) START ---`);
 
     const session = await getServerSession(authOptions);

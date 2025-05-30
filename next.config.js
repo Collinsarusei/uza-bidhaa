@@ -1,9 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  swcMinify: true,
   images: {
-    domains: ['utfs.io'],
+    domains: ['utfs.io', 'uploadthing.com'],
     remotePatterns: [
       {
         protocol: 'https',
