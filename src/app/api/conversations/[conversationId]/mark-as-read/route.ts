@@ -1,14 +1,20 @@
 // src/app/api/conversations/[conversationId]/mark-as-read/route.ts
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from '@/app/api/auth/[...nextauth]/route'; // Adjust path as necessary
 import prisma from '@/lib/prisma';
 
+type RouteContext = {
+    params: {
+        conversationId: string;
+    };
+};
+
 export async function POST(
-    req: Request,
-    { params }: { params: { conversationId: string } }
+    request: NextRequest,
+    context: RouteContext
 ) {
-    const { conversationId } = params;
+    const { conversationId } = context.params;
     console.log(`--- API POST /api/conversations/${conversationId}/mark-as-read (Prisma) START ---`);
 
     const session = await getServerSession(authOptions);
