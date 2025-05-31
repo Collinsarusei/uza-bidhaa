@@ -5,6 +5,10 @@ import { authOptions } from '@/app/api/auth/[...nextauth]/route';
 import prisma from '@/lib/prisma';
 import { createNotification } from '@/lib/notifications'; // Ensure this is correctly imported and migrated
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const fetchCache = 'force-no-store';
+
 interface RouteContext {
   params: {
     id?: string; // Conversation ID from the route parameter
