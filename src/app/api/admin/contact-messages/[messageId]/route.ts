@@ -16,17 +16,22 @@ interface RouteContext {
 
 export async function PATCH(
   req: Request,
-  context: any
+  context: RouteContext
 ) {
   try {
     const session = await getServerSession(authOptions);
 
     if (!session?.user) {
-      return new NextResponse('Unauthorized', { status: 401 });
+      return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
     }
 
-    if (session.user.email !== process.env.NEXT_PUBLIC_ADMIN_EMAIL) {
-      return new NextResponse('Forbidden', { status: 403 });
+    // Check if user is admin using role
+    if ((session.user as any).role !== 'ADMIN') {
+      return NextResponse.json({ message: 'Forbidden' }, { status: 403 });
+    }
+
+    if (!context.params?.messageId) {
+      return NextResponse.json({ message: 'Message ID is required' }, { status: 400 });
     }
 
     const body = await req.json();
@@ -43,11 +48,12 @@ export async function PATCH(
 
     return NextResponse.json(message);
   } catch (error) {
+    console.error('Error updating contact message:', error);
+    
     if (error instanceof z.ZodError) {
-      return new NextResponse('Invalid request data', { status: 400 });
+      return NextResponse.json({ message: 'Invalid request data', errors: error.errors }, { status: 400 });
     }
 
-    console.error('Error updating contact message:', error);
-    return new NextResponse('Internal Server Error', { status: 500 });
+    return NextResponse.json({ message: 'Internal Server Error' }, { status: 500 });
   }
 } 
