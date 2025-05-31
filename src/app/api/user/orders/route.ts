@@ -5,6 +5,10 @@ import { authOptions } from '../../auth/[...nextauth]/route';
 import prisma from '@/lib/prisma';
 import { Prisma, PaymentStatus } from '@prisma/client';
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const fetchCache = 'force-no-store';
+
 // Define the structure for the response, if needed for type safety on client
 interface UserOrder {
     id: string;
@@ -33,6 +37,13 @@ export async function GET(req: Request) {
 
     const { searchParams } = new URL(req.url);
     const userId = searchParams.get('userId') || session.user.id;
+    
+    // Validate userId if provided in query params
+    if (searchParams.get('userId') && searchParams.get('userId') !== session.user.id) {
+        console.warn(`API User Orders GET: User ${session.user.id} attempted to access orders for user ${userId}`);
+        return NextResponse.json({ message: 'Forbidden: Cannot access other users\' orders' }, { status: 403 });
+    }
+
     console.log(`API User Orders GET: Fetching orders for user ${userId}`);
 
     try {
@@ -59,7 +70,17 @@ export async function GET(req: Request) {
             return NextResponse.json([], { status: 200 });
         }
 
-        const ordersToReturn: UserOrder[] = userOrders as unknown as UserOrder[];
+        // Type-safe conversion
+        const ordersToReturn: UserOrder[] = userOrders.map(order => ({
+            ...order,
+            amount: order.amount as Prisma.Decimal,
+            status: order.status as PaymentStatus,
+            item: order.item ? {
+                id: order.item.id,
+                title: order.item.title,
+                mediaUrls: order.item.mediaUrls
+            } : null
+        }));
 
         console.log(`API User Orders GET: Found ${ordersToReturn.length} orders for user ${userId}`);
         console.log("--- API GET /api/user/orders (Prisma) SUCCESS ---");
@@ -67,6 +88,16 @@ export async function GET(req: Request) {
 
     } catch (error: any) {
         console.error("--- API GET /api/user/orders (Prisma) FAILED ---", error);
-        return NextResponse.json({ message: 'Failed to fetch user orders', error: error.message }, { status: 500 });
+        if (error instanceof Prisma.PrismaClientKnownRequestError) {
+            return NextResponse.json({ 
+                message: 'Database error occurred', 
+                code: error.code,
+                meta: error.meta 
+            }, { status: 500 });
+        }
+        return NextResponse.json({ 
+            message: 'Failed to fetch user orders', 
+            error: error.message 
+        }, { status: 500 });
     }
 }
