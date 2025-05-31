@@ -3,18 +3,24 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from '@/app/api/auth/[...nextauth]/route';
 import prisma from '@/lib/prisma';
+import { Prisma, PaymentStatus } from '@prisma/client';
 
-// Define the expected response structure
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const fetchCache = 'force-no-store';
+
+// Define the expected response structure with proper types
 interface EligibleSaleForDispute {
     id: string;
     buyerId: string;
     sellerId: string;
     itemId: string;
-    amount: number;
-    status: string;
+    amount: Prisma.Decimal;
+    status: PaymentStatus;
     createdAt: Date;
     updatedAt: Date;
     item: {
+        id: string;
         title: string;
         mediaUrls: string[];
     } | null;
@@ -41,10 +47,9 @@ export async function GET(request: Request) {
             include: {
                 item: {
                     select: {
+                        id: true,
                         title: true,
                         mediaUrls: true,
-                        // Include any other item fields useful for displaying the sale
-                        id: true, 
                     }
                 }
             },
@@ -58,21 +63,34 @@ export async function GET(request: Request) {
             return NextResponse.json([], { status: 200 });
         }
 
-        // The structure from Prisma with include already matches closely what you need.
-        // If specific transformation is needed, map it here.
-        // For now, assuming direct use is fine.
+        // Type-safe conversion with proper Prisma types
         const transactions: EligibleSaleForDispute[] = eligiblePayments.map(payment => ({
             ...payment,
-            amount: Number(payment.amount),
-            status: payment.status.toString()
+            amount: payment.amount as Prisma.Decimal,
+            status: payment.status as PaymentStatus,
+            item: payment.item ? {
+                id: payment.item.id,
+                title: payment.item.title,
+                mediaUrls: payment.item.mediaUrls
+            } : null
         }));
         
         console.log(`API /user/sales-for-dispute: Found ${transactions.length} eligible transactions for seller ${sellerId}`);
+        console.log("--- API GET /api/user/sales-for-dispute (Prisma) SUCCESS ---");
         return NextResponse.json(transactions, { status: 200 });
 
     } catch (error: any) {
         console.error("--- API GET /api/user/sales-for-dispute (Prisma) FAILED --- Error:", error);
-        // Handle potential Prisma-specific errors if necessary
-        return NextResponse.json({ message: 'Failed to fetch seller transactions for dispute.', error: error.message }, { status: 500 });
+        if (error instanceof Prisma.PrismaClientKnownRequestError) {
+            return NextResponse.json({ 
+                message: 'Database error occurred', 
+                code: error.code,
+                meta: error.meta 
+            }, { status: 500 });
+        }
+        return NextResponse.json({ 
+            message: 'Failed to fetch seller transactions for dispute', 
+            error: error.message 
+        }, { status: 500 });
     }
 }
