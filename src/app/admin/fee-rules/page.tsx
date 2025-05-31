@@ -67,7 +67,9 @@ export default function AdminFeeRulesPage() {
         if (!isAuthorized) return;
         
         try {
-            const response = await fetch('/api/admin/fee-rules');
+            const response = await fetch('/api/admin/fee-rules', {
+                cache: 'no-store'
+            });
             if (!response.ok) {
                 throw new Error('Failed to fetch fee rules');
             }
@@ -108,7 +110,8 @@ export default function AdminFeeRulesPage() {
             const response = await fetch(url, {
                 method,
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify(payload),
+                cache: 'no-store'
             });
 
             if (!response.ok) {
@@ -151,7 +154,8 @@ export default function AdminFeeRulesPage() {
 
         try {
             const response = await fetch(`/api/admin/fee-rules/${ruleId}`, {
-                method: 'DELETE'
+                method: 'DELETE',
+                cache: 'no-store'
             });
 
             if (!response.ok) {
