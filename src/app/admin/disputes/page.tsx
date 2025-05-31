@@ -56,34 +56,25 @@ export default function AdminDisputesPage() {
         }
     }, [status, router, session]);
 
-    const fetchDisputes = useCallback(async () => {
-        if (!isAuthorized) {
-            setIsLoading(false);
-            return;
+    const fetchDisputes = async () => {
+      try {
+        const response = await fetch('/api/admin/disputes', {
+          cache: 'no-store',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+        if (!response.ok) {
+          throw new Error('Failed to fetch disputes');
         }
-        setIsLoading(true);
-        setError(null);
-        try {
-            // This API endpoint should now return enriched DisputeRecord data
-            const response = await fetch('/api/admin/disputes'); 
-            if (!response.ok) {
-                const errData = await response.json().catch(() => ({}));
-                 if (response.status === 401 || response.status === 403) {
-                     setIsAuthorized(false);
-                     setError("You are not authorized to view this page.");
-                     return;
-                 }
-                throw new Error(errData.message || `Failed to fetch disputes: ${response.status}`);
-            }
-            const data: DisplayDispute[] = await response.json();
-            setDisputes(data.filter(d => d.status === 'PENDING_ADMIN')); // Only show pending admin review
-        } catch (err) {
-            const message = err instanceof Error ? err.message : 'Could not load disputes.';
-            setError(message);
-        } finally {
-            setIsLoading(false);
-        }
-    }, [isAuthorized]);
+        const data = await response.json();
+        setDisputes(data);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load disputes');
+      } finally {
+        setIsLoading(false);
+      }
+    };
 
     useEffect(() => {
         if (isAuthorized === true) {
@@ -107,8 +98,10 @@ export default function AdminDisputesPage() {
             // These backend APIs should also update the DisputeRecord status
             const response = await fetch(`/api/admin/payments/${dispute.paymentId}/admin-${action}`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ disputeId: dispute.id }) // Send disputeId for backend to update
+                cache: 'no-store',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
             });
             const result = await response.json();
             if (!response.ok) {

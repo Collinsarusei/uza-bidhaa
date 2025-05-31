@@ -48,7 +48,12 @@ export default function AdminPlatformFeesPage() {
         setIsLoading(true);
         setError(null);
         try {
-            const response = await fetch('/api/admin/platform-fees');
+            const response = await fetch('/api/admin/platform-fees', {
+                cache: 'no-store',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+            });
             if (!response.ok) {
                 const errData = await response.json().catch(() => ({}));
                  if (response.status === 401 || response.status === 403) {

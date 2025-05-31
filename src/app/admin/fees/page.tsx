@@ -51,7 +51,12 @@ export default function AdminFeesPage() {
             setIsLoading(true);
             setError(null);
             try {
-                const response = await fetch('/api/admin/fees');
+                const response = await fetch('/api/admin/fees', {
+                    cache: 'no-store',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                });
                 if (!response.ok) {
                     if (response.status === 401 || response.status === 403) {
                          setIsAuthorized(false);
@@ -99,6 +104,7 @@ export default function AdminFeesPage() {
         try {
             const response = await fetch('/api/admin/fees', {
                 method: 'POST',
+                cache: 'no-store',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ feePercentage: feeValue }),
             });

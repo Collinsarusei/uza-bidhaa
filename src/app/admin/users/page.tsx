@@ -49,33 +49,25 @@ export default function AdminUsersPage() {
         }
     }, [status, router, session]);
 
-    const fetchUsers = useCallback(async () => {
-        if (!isAuthorized) {
-            setIsLoading(false);
-            return;
+    const fetchUsers = async () => {
+      try {
+        const response = await fetch('/api/admin/users', {
+          cache: 'no-store',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+        if (!response.ok) {
+          throw new Error('Failed to fetch users');
         }
-        setIsLoading(true);
-        setError(null);
-        try {
-            const response = await fetch('/api/admin/users');
-            if (!response.ok) {
-                const errData = await response.json().catch(() => ({}));
-                 if (response.status === 401 || response.status === 403) {
-                     setIsAuthorized(false);
-                     setError("You are not authorized to view this page.");
-                     return;
-                 }
-                throw new Error(errData.message || `Failed to fetch users: ${response.status}`);
-            }
-            const data = await response.json();
-            setUsers(data);
-        } catch (err) {
-            const message = err instanceof Error ? err.message : 'Could not load users.';
-            setError(message);
-        } finally {
-            setIsLoading(false);
-        }
-    }, [isAuthorized]);
+        const data = await response.json();
+        setUsers(data);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load users');
+      } finally {
+        setIsLoading(false);
+      }
+    };
 
     useEffect(() => {
         if (isAuthorized === true) {

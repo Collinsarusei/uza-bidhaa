@@ -1,8 +1,10 @@
 // src/app/api/admin/disputes/route.ts
 import { NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
-import { authOptions } from '@/app/api/auth/[...nextauth]/route';
+import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/prisma';
+
+export const dynamic = 'force-dynamic';
 
 // Define the enriched dispute structure for the response
 interface DisplayDispute {

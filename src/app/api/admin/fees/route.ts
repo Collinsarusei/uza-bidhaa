@@ -7,6 +7,8 @@ import * as z from 'zod';
 import { Prisma } from '@prisma/client';
 import { Decimal, PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
 
+export const dynamic = 'force-dynamic';
+
 // Schema for creating/updating a FeeRule
 const feeRuleSchema = z.object({
     name: z.string().min(1, "Rule name is required"),

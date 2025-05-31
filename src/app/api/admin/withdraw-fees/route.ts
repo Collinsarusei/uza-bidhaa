@@ -37,6 +37,8 @@ const withdrawalRequestSchema = z.object({
     path: ["payoutDetails"],
 });
 
+export const dynamic = 'force-dynamic';
+
 export async function POST(req: Request) {
     console.log("--- API POST /api/admin/withdraw-fees (Prisma) START ---");
 
