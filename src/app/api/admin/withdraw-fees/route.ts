@@ -8,6 +8,10 @@ import { Prisma, AdminFeeWithdrawalStatus } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 import { v4 as uuidv4 } from 'uuid'; // For Paystack reference if needed, Prisma IDs are CUIDs
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const fetchCache = 'force-no-store';
+
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 const MIN_PLATFORM_WITHDRAWAL = 100; 
 const PAYSTACK_MPESA_BANK_CODE_KENYA = 'MPESA';
@@ -36,8 +40,6 @@ const withdrawalRequestSchema = z.object({
     message: "Invalid payout details for the selected method.",
     path: ["payoutDetails"],
 });
-
-export const dynamic = 'force-dynamic';
 
 export async function POST(req: Request) {
     console.log("--- API POST /api/admin/withdraw-fees (Prisma) START ---");

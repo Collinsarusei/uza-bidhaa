@@ -5,6 +5,9 @@ import prisma from '@/lib/prisma';
 import { z } from 'zod';
 
 export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const fetchCache = 'force-no-store';
+
 
 const updateMessageSchema = z.object({
   status: z.enum(['PENDING', 'IN_PROGRESS', 'RESOLVED']),

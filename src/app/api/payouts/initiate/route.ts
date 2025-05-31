@@ -7,7 +7,12 @@ import { createNotification } from '@/lib/notifications';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 import { v4 as uuidv4 } from 'uuid'; 
-import * as z from 'zod'; 
+import * as z from 'zod';
+
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const fetchCache = 'force-no-store';
+
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 const PAYSTACK_MPESA_BANK_CODE_KENYA = 'MPESA'; 

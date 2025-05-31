@@ -8,6 +8,10 @@ import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
 import { differenceInDays, parseISO } from 'date-fns';
 import * as z from 'zod';
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const fetchCache = 'force-no-store';
+
 // Helper function to select user fields for API response (excluding sensitive data)
 const userProfileSelect = {
     id: true,

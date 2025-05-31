@@ -7,6 +7,8 @@ import * as z from 'zod';
 import { Decimal } from '@prisma/client/runtime/library';
 
 export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const fetchCache = 'force-no-store';
 
 // Schema for updating a FeeRule (all fields optional)
 const feeRuleUpdateSchema = z.object({
