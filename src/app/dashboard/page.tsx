@@ -117,7 +117,9 @@ function DashboardContent() {
         const currentUserId = session?.user?.id;
         const apiUrl = currentUserId ? `/api/items?userId=${currentUserId}` : '/api/items';
         
-        const response = await fetch(apiUrl);
+        const response = await fetch(apiUrl, {
+            cache: 'no-store'
+        });
         if (!response.ok) {
           const error = await response.json();
           throw new Error(error.message || `HTTP error! status: ${response.status}`);

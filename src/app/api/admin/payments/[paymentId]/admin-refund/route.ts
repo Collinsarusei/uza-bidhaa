@@ -6,6 +6,10 @@ import { authOptions } from '@/app/api/auth/[...nextauth]/route'; // Adjust path
 import { createNotification } from '@/lib/notifications';
 import { Prisma } from '@prisma/client';
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const fetchCache = 'force-no-store';
+
 interface AdminRefundParams {
     params: {
         paymentId: string;

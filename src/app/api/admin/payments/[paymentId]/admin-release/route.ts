@@ -7,6 +7,10 @@ import { createNotification } from '@/lib/notifications';
 import { Prisma } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const fetchCache = 'force-no-store';
+
 // Tiered fee calculation function (ensure this is consistent, ideally from a shared lib)
 async function calculateTieredPlatformFee(amount: Decimal): Promise<{
     fee: Decimal;

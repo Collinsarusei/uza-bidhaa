@@ -5,6 +5,10 @@ import prisma from "@/lib/prisma";
 import { createNotification } from "@/lib/notifications";
 import { PaymentStatus, ItemStatus } from "@prisma/client";
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const fetchCache = 'force-no-store';
+
 export async function GET(req: Request, context: any) {
     console.log("API GET /api/payments/[paymentId] (Prisma): Received request");
     

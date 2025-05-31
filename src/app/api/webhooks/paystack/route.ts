@@ -6,6 +6,10 @@ import { Prisma } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 import { createNotification } from '@/lib/notifications';
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const fetchCache = 'force-no-store';
+
 const PaymentStatus = {
   INITIATED: 'INITIATED',
   PENDING: 'PENDING',

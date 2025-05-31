@@ -8,6 +8,10 @@ import { Decimal } from '@prisma/client/runtime/library';
 import { v4 as uuidv4 } from 'uuid'; // Still used for Paystack reference if not using Prisma ID for it
 import * as z from 'zod';
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const fetchCache = 'force-no-store';
+
 // --- Environment Variables & Constants ---
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 const APP_BASE_URL = process.env.NEXT_PUBLIC_APP_URL || '';
