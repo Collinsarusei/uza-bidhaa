@@ -6,6 +6,10 @@ import prisma from '@/lib/prisma';
 import { generateToken } from '@/lib/jwt';
 import { rateLimit } from '@/lib/rate-limit';
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const fetchCache = 'force-no-store';
+
 // Input validation schema
 const registerSchema = z.object({
   name: z.string()

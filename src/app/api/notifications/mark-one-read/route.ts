@@ -5,6 +5,10 @@ import { authOptions } from '../../auth/[...nextauth]/route';
 import prisma from '@/lib/prisma'; // Changed: Use Prisma client
 import * as z from 'zod';
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const fetchCache = 'force-no-store';
+
 const markOneSchema = z.object({
     notificationId: z.string().min(1, "Notification ID is required"),
 });

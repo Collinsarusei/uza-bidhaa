@@ -4,6 +4,10 @@ import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { ItemStatus } from "@prisma/client";
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const fetchCache = 'force-no-store';
+
 export async function GET(req: Request, context: any) {
     console.log("API GET /api/users/[userId] (Prisma): Received request");
     

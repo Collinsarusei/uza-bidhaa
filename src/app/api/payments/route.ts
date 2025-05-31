@@ -4,6 +4,10 @@ import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { createNotification } from "@/lib/notifications";
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const fetchCache = 'force-no-store';
+
 export async function GET(req: Request) {
     console.log("API GET /api/payments (Prisma): Received request");
     

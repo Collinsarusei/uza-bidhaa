@@ -8,6 +8,10 @@ import { createNotification } from '@/lib/notifications';
 import { Prisma } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const fetchCache = 'force-no-store';
+
 const confirmSchema = z.object({
     paymentId: z.string().min(1, "Payment ID is required"),
 });

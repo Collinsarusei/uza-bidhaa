@@ -5,6 +5,10 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from '@/app/api/auth/[...nextauth]/route';
 import * as z from 'zod';
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const fetchCache = 'force-no-store';
+
 // Validation schemas
 const createItemSchema = z.object({
   title: z.string().min(1, "Title is required"),

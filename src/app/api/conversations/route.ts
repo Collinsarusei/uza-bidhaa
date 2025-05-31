@@ -6,6 +6,10 @@ import prisma from '@/lib/prisma';
 import { Prisma } from '@prisma/client';
 import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const fetchCache = 'force-no-store';
+
 export async function GET(req: Request) {
     console.log("--- API GET /api/conversations (Prisma) START ---");
 

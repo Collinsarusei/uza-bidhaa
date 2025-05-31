@@ -6,6 +6,10 @@ import { adminAuth } from "../../../../lib/firebase-admin";
 import CredentialsProvider from "next-auth/providers/credentials";
 import bcrypt from "bcrypt";
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const fetchCache = 'force-no-store';
+
 interface AppUser extends NextAuthUser {
   id: string;
   name?: string | null;

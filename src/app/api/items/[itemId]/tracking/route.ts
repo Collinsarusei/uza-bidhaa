@@ -4,6 +4,10 @@ import { authOptions } from '@/app/api/auth/[...nextauth]/route';
 import prisma from '@/lib/prisma';
 import { z } from 'zod';
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const fetchCache = 'force-no-store';
+
 const trackingSchema = z.object({
   trackingNumber: z.string().min(1, "Tracking number is required"),
   carrier: z.string().min(1, "Carrier is required"),

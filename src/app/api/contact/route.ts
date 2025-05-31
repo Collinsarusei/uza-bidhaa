@@ -4,6 +4,10 @@ import { authOptions } from '@/app/api/auth/[...nextauth]/route';
 import prisma from '@/lib/prisma';
 import * as z from 'zod';
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const fetchCache = 'force-no-store';
+
 const contactSchema = z.object({
   subject: z.string().min(1, "Subject is required").max(200, "Subject too long"),
   message: z.string().min(1, "Message is required").max(2000, "Message too long"),

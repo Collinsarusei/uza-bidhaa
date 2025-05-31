@@ -7,6 +7,10 @@ import * as z from 'zod';
 import { createNotification } from '@/lib/notifications';
 import { Prisma } from '@prisma/client';
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const fetchCache = 'force-no-store';
+
 const disputeCreateSchema = z.object({
   paymentId: z.string().min(1, "Payment ID is required"),
   itemId: z.string().min(1, "Item ID is required"), // Ensure itemId from payment matches item being disputed

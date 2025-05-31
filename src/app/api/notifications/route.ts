@@ -7,6 +7,10 @@ import prisma from '@/lib/prisma'; // Changed: Use Prisma client
 // but Prisma's generated types will be used internally for DB interactions.
 // We expect Prisma Date fields to be serialized to ISO strings by NextResponse.json()
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const fetchCache = 'force-no-store';
+
 // GET /api/notifications - Fetch notifications for the authenticated user
 export async function GET(req: Request) {
     console.log("API GET /api/notifications (Prisma): Received request");

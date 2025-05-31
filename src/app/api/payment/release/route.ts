@@ -9,6 +9,10 @@ import { Payment, Earning, PlatformSettingData, Item } from '@/lib/types';
 import { v4 as uuidv4 } from 'uuid';
 import { createNotification } from '@/lib/notifications';
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const fetchCache = 'force-no-store';
+
 // Type assertion for adminDb
 const typedAdminDb = adminDb as Firestore;
 

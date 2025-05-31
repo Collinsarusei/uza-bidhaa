@@ -2,6 +2,10 @@
 import { createRouteHandler } from "uploadthing/next"; // <--- CORRECTED IMPORT NAME
 import { ourFileRouter } from "./core";
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const fetchCache = 'force-no-store';
+
 // Export routes for Next App Router
 export const { GET, POST } = createRouteHandler({ // <--- CORRECTED FUNCTION NAME
   router: ourFileRouter,
