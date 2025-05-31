@@ -14,6 +14,51 @@ interface RouteContext {
   };
 }
 
+export async function GET(
+  req: Request,
+  context: RouteContext
+) {
+  try {
+    const session = await getServerSession(authOptions);
+
+    if (!session?.user) {
+      return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+    }
+
+    // Check if user is admin using role
+    if ((session.user as any).role !== 'ADMIN') {
+      return NextResponse.json({ message: 'Forbidden' }, { status: 403 });
+    }
+
+    if (!context.params?.messageId) {
+      return NextResponse.json({ message: 'Message ID is required' }, { status: 400 });
+    }
+
+    const message = await prisma.contactMessage.findUnique({
+      where: {
+        id: context.params.messageId,
+      },
+      include: {
+        user: {
+          select: {
+            name: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    if (!message) {
+      return NextResponse.json({ message: 'Message not found' }, { status: 404 });
+    }
+
+    return NextResponse.json(message);
+  } catch (error) {
+    console.error('Error fetching contact message:', error);
+    return NextResponse.json({ message: 'Internal Server Error' }, { status: 500 });
+  }
+}
+
 export async function PATCH(
   req: Request,
   context: RouteContext
@@ -43,6 +88,14 @@ export async function PATCH(
       },
       data: {
         status: validatedData.status,
+      },
+      include: {
+        user: {
+          select: {
+            name: true,
+            email: true,
+          },
+        },
       },
     });
 
