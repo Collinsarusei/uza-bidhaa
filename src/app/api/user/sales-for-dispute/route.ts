@@ -8,7 +8,7 @@ import { Prisma, PaymentStatus } from '@prisma/client';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const fetchCache = 'force-no-store';
-
+export const revalidate = 0;
 // Define the expected response structure with proper types
 interface EligibleSaleForDispute {
     id: string;

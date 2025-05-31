@@ -6,6 +6,7 @@ import prisma from '@/lib/prisma';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const fetchCache = 'force-no-store';
+export const revalidate = 0;
 
 export async function POST(
   request: NextRequest,

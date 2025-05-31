@@ -7,7 +7,7 @@ import { authOptions } from '@/app/api/auth/[...nextauth]/route';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const fetchCache = 'force-no-store';
-
+export const revalidate = 0;
 // Define the structure for the admin user list response
 interface AdminUserListItem {
     id: string;

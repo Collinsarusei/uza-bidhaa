@@ -9,7 +9,7 @@ import { createNotification } from '@/lib/notifications';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const fetchCache = 'force-no-store';
-
+export const revalidate = 0;
 const PaymentStatus = {
   INITIATED: 'INITIATED',
   PENDING: 'PENDING',

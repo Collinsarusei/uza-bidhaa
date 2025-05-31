@@ -7,6 +7,7 @@ import { z } from 'zod';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const fetchCache = 'force-no-store';
+export const revalidate = 0;
 
 const trackingSchema = z.object({
   trackingNumber: z.string().min(1, "Tracking number is required"),

@@ -10,6 +10,7 @@ import * as z from 'zod';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const fetchCache = 'force-no-store';
+export const revalidate = 0;
 
 
 interface RouteContext {

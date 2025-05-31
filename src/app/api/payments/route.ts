@@ -7,6 +7,7 @@ import { createNotification } from "@/lib/notifications";
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const fetchCache = 'force-no-store';
+export const revalidate = 0;
 
 export async function GET(req: Request) {
     console.log("API GET /api/payments (Prisma): Received request");

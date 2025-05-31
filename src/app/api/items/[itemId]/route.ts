@@ -3,10 +3,12 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from '@/app/api/auth/[...nextauth]/route';
 import prisma from '@/lib/prisma';
 import { Prisma, ItemStatus } from '@prisma/client';
+import { handleApiError, validateAuth, validateResourceAccess, AppError } from '@/lib/error-handling';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const fetchCache = 'force-no-store';
+export const revalidate = 0;
 
 interface ItemParams {
     params: {
@@ -48,7 +50,7 @@ export async function GET(req: Request, context: ItemParams) {
     console.log(`--- API GET /api/items/${itemId} (Prisma) START ---`);
 
     if (!itemId) {
-        return NextResponse.json({ message: 'Missing item ID' }, { status: 400 });
+        throw new AppError('Missing item ID', 400);
     }
 
     try {
@@ -68,8 +70,7 @@ export async function GET(req: Request, context: ItemParams) {
         });
 
         if (!item) {
-            console.log(`API /items/${itemId}: Item not found`);
-            return NextResponse.json({ message: 'Item not found' }, { status: 404 });
+            throw new AppError('Item not found', 404);
         }
 
         // Type-safe conversion
@@ -90,19 +91,8 @@ export async function GET(req: Request, context: ItemParams) {
         console.log("--- API GET /api/items/[itemId] (Prisma) SUCCESS ---");
         return NextResponse.json(itemResponse, { status: 200 });
 
-    } catch (error: any) {
-        console.error(`--- API GET /api/items/${itemId} (Prisma) FAILED --- Error:`, error);
-        if (error instanceof Prisma.PrismaClientKnownRequestError) {
-            return NextResponse.json({ 
-                message: 'Database error occurred', 
-                code: error.code,
-                meta: error.meta 
-            }, { status: 500 });
-        }
-        return NextResponse.json({ 
-            message: 'Failed to fetch item details', 
-            error: error.message 
-        }, { status: 500 });
+    } catch (error) {
+        return handleApiError(error);
     }
 }
 
@@ -111,30 +101,23 @@ export async function PATCH(req: Request, context: ItemParams) {
     console.log(`--- API PATCH /api/items/${itemId} (Prisma) START ---`);
 
     if (!itemId) {
-        return NextResponse.json({ message: 'Missing item ID' }, { status: 400 });
-    }
-
-    const session = await getServerSession(authOptions);
-    if (!session?.user?.id) {
-        console.warn(`API /items/${itemId}: Unauthorized attempt to update item`);
-        return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+        throw new AppError('Missing item ID', 400);
     }
 
     try {
+        const userId = validateAuth(await getServerSession(authOptions));
         const requestBody = await req.json();
+        
         const item = await prisma.item.findUnique({
             where: { id: itemId },
             select: { sellerId: true }
         });
 
         if (!item) {
-            return NextResponse.json({ message: 'Item not found' }, { status: 404 });
+            throw new AppError('Item not found', 404);
         }
 
-        if (item.sellerId !== session.user.id) {
-            console.warn(`API /items/${itemId}: User ${session.user.id} attempted to update item owned by ${item.sellerId}`);
-            return NextResponse.json({ message: 'Forbidden: Cannot update another user\'s item' }, { status: 403 });
-        }
+        validateResourceAccess(userId, item.sellerId);
 
         const updatedItem = await prisma.item.update({
             where: { id: itemId },
@@ -170,19 +153,8 @@ export async function PATCH(req: Request, context: ItemParams) {
         console.log("--- API PATCH /api/items/[itemId] (Prisma) SUCCESS ---");
         return NextResponse.json(itemResponse, { status: 200 });
 
-    } catch (error: any) {
-        console.error(`--- API PATCH /api/items/${itemId} (Prisma) FAILED --- Error:`, error);
-        if (error instanceof Prisma.PrismaClientKnownRequestError) {
-            return NextResponse.json({ 
-                message: 'Database error occurred', 
-                code: error.code,
-                meta: error.meta 
-            }, { status: 500 });
-        }
-        return NextResponse.json({ 
-            message: 'Failed to update item', 
-            error: error.message 
-        }, { status: 500 });
+    } catch (error) {
+        return handleApiError(error);
     }
 }
 
@@ -191,34 +163,25 @@ export async function DELETE(req: Request, context: ItemParams) {
     console.log(`--- API DELETE /api/items/${itemId} (Prisma) START ---`);
 
     if (!itemId) {
-        return NextResponse.json({ message: 'Missing item ID' }, { status: 400 });
-    }
-
-    const session = await getServerSession(authOptions);
-    if (!session?.user?.id) {
-        console.warn(`API /items/${itemId}: Unauthorized attempt to delete item`);
-        return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+        throw new AppError('Missing item ID', 400);
     }
 
     try {
+        const userId = validateAuth(await getServerSession(authOptions));
+        
         const item = await prisma.item.findUnique({
             where: { id: itemId },
             select: { sellerId: true, status: true }
         });
 
         if (!item) {
-            return NextResponse.json({ message: 'Item not found' }, { status: 404 });
+            throw new AppError('Item not found', 404);
         }
 
-        if (item.sellerId !== session.user.id) {
-            console.warn(`API /items/${itemId}: User ${session.user.id} attempted to delete item owned by ${item.sellerId}`);
-            return NextResponse.json({ message: 'Forbidden: Cannot delete another user\'s item' }, { status: 403 });
-        }
+        validateResourceAccess(userId, item.sellerId);
 
         if (item.status !== 'AVAILABLE') {
-            return NextResponse.json({ 
-                message: 'Cannot delete item that is not in AVAILABLE status' 
-            }, { status: 400 });
+            throw new AppError('Cannot delete item that is not in AVAILABLE status', 400);
         }
 
         await prisma.item.delete({
@@ -229,18 +192,7 @@ export async function DELETE(req: Request, context: ItemParams) {
         console.log("--- API DELETE /api/items/[itemId] (Prisma) SUCCESS ---");
         return NextResponse.json({ message: 'Item deleted successfully' }, { status: 200 });
 
-    } catch (error: any) {
-        console.error(`--- API DELETE /api/items/${itemId} (Prisma) FAILED --- Error:`, error);
-        if (error instanceof Prisma.PrismaClientKnownRequestError) {
-            return NextResponse.json({ 
-                message: 'Database error occurred', 
-                code: error.code,
-                meta: error.meta 
-            }, { status: 500 });
-        }
-        return NextResponse.json({ 
-            message: 'Failed to delete item', 
-            error: error.message 
-        }, { status: 500 });
+    } catch (error) {
+        return handleApiError(error);
     }
 } 

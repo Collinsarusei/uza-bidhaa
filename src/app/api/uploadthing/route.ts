@@ -5,6 +5,7 @@ import { ourFileRouter } from "./core";
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const fetchCache = 'force-no-store';
+export const revalidate = 0;
 
 // Export routes for Next App Router
 export const { GET, POST } = createRouteHandler({ // <--- CORRECTED FUNCTION NAME

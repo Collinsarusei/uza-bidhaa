@@ -9,6 +9,7 @@ import { rateLimit } from '@/lib/rate-limit';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const fetchCache = 'force-no-store';
+export const revalidate = 0;
 
 // Input validation schema
 const registerSchema = z.object({

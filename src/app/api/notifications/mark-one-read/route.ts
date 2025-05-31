@@ -8,6 +8,7 @@ import * as z from 'zod';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const fetchCache = 'force-no-store';
+export const revalidate = 0;
 
 const markOneSchema = z.object({
     notificationId: z.string().min(1, "Notification ID is required"),

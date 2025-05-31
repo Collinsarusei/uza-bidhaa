@@ -11,6 +11,7 @@ import { v4 as uuidv4 } from 'uuid'; // For Paystack reference if needed, Prisma
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const fetchCache = 'force-no-store';
+export const revalidate = 0;
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 const MIN_PLATFORM_WITHDRAWAL = 100; 

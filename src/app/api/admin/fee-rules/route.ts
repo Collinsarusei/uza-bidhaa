@@ -9,6 +9,7 @@ import { Decimal, PrismaClientKnownRequestError } from '@prisma/client/runtime/l
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const fetchCache = 'force-no-store';
+export const revalidate = 0;
 
 // Schema for creating/updating a FeeRule
 const feeRuleSchema = z.object({

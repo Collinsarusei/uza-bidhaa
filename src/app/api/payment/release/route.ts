@@ -12,6 +12,7 @@ import { createNotification } from '@/lib/notifications';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const fetchCache = 'force-no-store';
+export const revalidate = 0;
 
 // Type assertion for adminDb
 const typedAdminDb = adminDb as Firestore;

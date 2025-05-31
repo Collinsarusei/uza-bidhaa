@@ -10,7 +10,7 @@ import prisma from '@/lib/prisma'; // Changed: Use Prisma client
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const fetchCache = 'force-no-store';
-
+export const revalidate = 0;
 // GET /api/notifications - Fetch notifications for the authenticated user
 export async function GET(req: Request) {
     console.log("API GET /api/notifications (Prisma): Received request");

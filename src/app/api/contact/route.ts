@@ -7,6 +7,7 @@ import * as z from 'zod';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const fetchCache = 'force-no-store';
+export const revalidate = 0;
 
 const contactSchema = z.object({
   subject: z.string().min(1, "Subject is required").max(200, "Subject too long"),

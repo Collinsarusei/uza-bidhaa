@@ -9,7 +9,7 @@ import { Decimal } from '@prisma/client/runtime/library';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const fetchCache = 'force-no-store';
-
+export const revalidate = 0;
 
 export async function GET(req: Request) {
     console.log("--- API GET /api/user/earnings (Prisma - Fetching Earning Records) START ---");

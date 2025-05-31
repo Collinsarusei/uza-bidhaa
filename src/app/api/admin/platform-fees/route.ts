@@ -9,7 +9,7 @@ import { Decimal } from '@prisma/client/runtime/library';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const fetchCache = 'force-no-store';
-
+export const revalidate = 0;
 // Define the enriched platform fee record structure for the response
 interface EnrichedPlatformFeeRecord {
     id: string;

@@ -8,6 +8,7 @@ import { Prisma, PaymentStatus } from '@prisma/client';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const fetchCache = 'force-no-store';
+export const revalidate = 0;
 
 // Define the structure for the response, if needed for type safety on client
 interface UserOrder {

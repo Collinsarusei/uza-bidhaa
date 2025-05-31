@@ -12,7 +12,7 @@ import * as z from 'zod';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const fetchCache = 'force-no-store';
-
+export const revalidate = 0;
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 const PAYSTACK_MPESA_BANK_CODE_KENYA = 'MPESA'; 
