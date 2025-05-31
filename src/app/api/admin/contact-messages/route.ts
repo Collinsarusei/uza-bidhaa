@@ -1,17 +1,20 @@
 import { NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
+import { getServerSession } from 'next-auth/next';
+import { authOptions } from '@/app/api/auth/[...nextauth]/route';
 import prisma from '@/lib/prisma';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    const session = await getServerSession();
+    const session = await getServerSession(authOptions);
 
     if (!session?.user) {
-      return new NextResponse('Unauthorized', { status: 401 });
+      return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
     }
 
-    if (session.user.email !== process.env.NEXT_PUBLIC_ADMIN_EMAIL) {
-      return new NextResponse('Forbidden', { status: 403 });
+    if ((session.user as any).role !== 'ADMIN') {
+      return NextResponse.json({ message: 'Forbidden' }, { status: 403 });
     }
 
     const messages = await prisma.contactMessage.findMany({
@@ -31,6 +34,6 @@ export async function GET() {
     return NextResponse.json(messages);
   } catch (error) {
     console.error('Error fetching contact messages:', error);
-    return new NextResponse('Internal Server Error', { status: 500 });
+    return NextResponse.json({ message: 'Internal Server Error' }, { status: 500 });
   }
 } 

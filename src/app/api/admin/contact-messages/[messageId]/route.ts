@@ -4,6 +4,8 @@ import { authOptions } from '@/app/api/auth/[...nextauth]/route';
 import prisma from '@/lib/prisma';
 import { z } from 'zod';
 
+export const dynamic = 'force-dynamic';
+
 const updateMessageSchema = z.object({
   status: z.enum(['PENDING', 'IN_PROGRESS', 'RESOLVED']),
 });

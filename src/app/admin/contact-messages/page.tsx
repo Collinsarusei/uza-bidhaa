@@ -62,7 +62,12 @@ export default function AdminContactMessagesPage() {
 
     const fetchMessages = async () => {
       try {
-        const response = await fetch('/api/admin/contact-messages');
+        const response = await fetch('/api/admin/contact-messages', {
+          cache: 'no-store',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
         if (!response.ok) {
           throw new Error('Failed to fetch messages');
         }
@@ -85,6 +90,7 @@ export default function AdminContactMessagesPage() {
     try {
       const response = await fetch(`/api/admin/contact-messages/${messageId}`, {
         method: 'PATCH',
+        cache: 'no-store',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: newStatus }),
       });
