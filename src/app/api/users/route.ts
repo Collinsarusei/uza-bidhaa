@@ -39,8 +39,7 @@ export async function GET(req: Request) {
                     createdAt: true,
                     _count: {
                         select: {
-                            items: true,
-                            reviews: true
+                            items: true
                         }
                     }
                 }

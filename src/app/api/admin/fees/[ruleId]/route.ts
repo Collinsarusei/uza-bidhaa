@@ -4,7 +4,8 @@ import prisma from '@/lib/prisma';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from '@/app/api/auth/[...nextauth]/route'; // Adjust path as needed
 import * as z from 'zod';
-import { Prisma, PrismaClientKnownRequestError } from '@prisma/client';
+import { Prisma } from '@prisma/client';
+import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
 
 interface RouteContext {
     params: {
@@ -82,7 +83,7 @@ export async function PUT(request: Request, context: any) {
             const minAmount = dataToUpdate.minAmount ?? existingRule.minAmount;
             const maxAmount = dataToUpdate.maxAmount === undefined ? existingRule.maxAmount : dataToUpdate.maxAmount; // handles explicit null
 
-            if (maxAmount !== null && minAmount !== null && minAmount.gt(maxAmount)) {
+            if (maxAmount !== null && minAmount !== null && minAmount > maxAmount) {
                 return NextResponse.json({ message: "Min amount cannot be greater than max amount" }, { status: 400 });
             }
         }

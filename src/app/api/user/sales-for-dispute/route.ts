@@ -61,7 +61,11 @@ export async function GET(request: Request) {
         // The structure from Prisma with include already matches closely what you need.
         // If specific transformation is needed, map it here.
         // For now, assuming direct use is fine.
-        const transactions: EligibleSaleForDispute[] = eligiblePayments as EligibleSaleForDispute[];
+        const transactions: EligibleSaleForDispute[] = eligiblePayments.map(payment => ({
+            ...payment,
+            amount: Number(payment.amount),
+            status: payment.status.toString()
+        }));
         
         console.log(`API /user/sales-for-dispute: Found ${transactions.length} eligible transactions for seller ${sellerId}`);
         return NextResponse.json(transactions, { status: 200 });

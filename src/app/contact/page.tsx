@@ -11,7 +11,7 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { useSession } from 'next-auth/react';
-import { Mail, MessageCircle } from 'lucide-react'; // Using lucide-react for specific icons
+import { Mail, MessageSquare } from 'lucide-react'; // Using lucide-react for specific icons
 
 const faqItems = [
   {
@@ -83,7 +83,7 @@ export default function ContactFaqPage() {
               </div>
             </div>
             <div className="flex items-center space-x-3">
-              <MessageCircle className="h-6 w-6 text-primary" /> 
+              <MessageSquare className="h-6 w-6 text-primary" /> 
               <div>
                 <p className="font-medium text-gray-700 dark:text-gray-300">WhatsApp Support</p>
                 <a 

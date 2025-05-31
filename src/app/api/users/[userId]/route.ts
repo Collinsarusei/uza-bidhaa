@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { ItemStatus } from "@prisma/client";
 
 export async function GET(req: Request, context: any) {
     console.log("API GET /api/users/[userId] (Prisma): Received request");
@@ -24,7 +25,7 @@ export async function GET(req: Request, context: any) {
                 image: true,
                 createdAt: true,
                 items: {
-                    where: { status: 'available' },
+                    where: { status: ItemStatus.AVAILABLE },
                     select: {
                         id: true,
                         title: true,
@@ -38,8 +39,7 @@ export async function GET(req: Request, context: any) {
                 },
                 _count: {
                     select: {
-                        items: true,
-                        reviews: true
+                        items: true
                     }
                 }
             }

@@ -3,6 +3,7 @@ import { authOptions } from "@/lib/auth";
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { createNotification } from "@/lib/notifications";
+import { PaymentStatus, ItemStatus } from "@prisma/client";
 
 export async function GET(req: Request, context: any) {
     console.log("API GET /api/payments/[paymentId] (Prisma): Received request");
@@ -24,7 +25,6 @@ export async function GET(req: Request, context: any) {
                         id: true,
                         title: true,
                         sellerId: true,
-                        buyerId: true,
                         status: true,
                         mediaUrls: true
                     }
@@ -92,7 +92,6 @@ export async function PATCH(req: Request, context: any) {
                 status: true,
                 buyerId: true,
                 sellerId: true,
-                releaseCode: true,
                 item: {
                     select: {
                         id: true,
@@ -119,14 +118,9 @@ export async function PATCH(req: Request, context: any) {
                 return NextResponse.json({ message: 'Only buyer can release payment' }, { status: 403 });
             }
 
-            if (!releaseCode || releaseCode !== payment.releaseCode) {
-                console.warn(`API Payments PATCH: Invalid release code for payment ${paymentId}.`);
-                return NextResponse.json({ message: 'Invalid release code' }, { status: 400 });
-            }
-
-            if (payment.status !== 'completed') {
+            if (payment.status !== PaymentStatus.SUCCESSFUL_ESCROW) {
                 console.warn(`API Payments PATCH: Cannot release payment ${paymentId} with status ${payment.status}.`);
-                return NextResponse.json({ message: 'Payment must be completed before release' }, { status: 400 });
+                return NextResponse.json({ message: 'Payment must be in escrow before release' }, { status: 400 });
             }
         }
 
@@ -147,7 +141,7 @@ export async function PATCH(req: Request, context: any) {
         if (status === 'released') {
             await prisma.item.update({
                 where: { id: payment.item.id },
-                data: { status: 'sold' }
+                data: { status: ItemStatus.SOLD }
             });
 
             await createNotification({

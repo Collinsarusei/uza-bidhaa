@@ -4,7 +4,7 @@ import prisma from '@/lib/prisma';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from '@/app/api/auth/[...nextauth]/route'; // Adjust path as needed
 import * as z from 'zod';
-import { Prisma } from '@prisma/client';
+import { Prisma, AdminFeeWithdrawalStatus } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 import { v4 as uuidv4 } from 'uuid'; // For Paystack reference if needed, Prisma IDs are CUIDs
 
@@ -163,7 +163,7 @@ export async function POST(req: Request) {
         }
 
         let finalPaystackStatus = transferResult.data.status;
-        let withdrawalPrismaStatus = 'PENDING';
+        let withdrawalPrismaStatus: AdminFeeWithdrawalStatus = 'PENDING';
         if (finalPaystackStatus === 'success' || finalPaystackStatus === 'pending') {
             withdrawalPrismaStatus = 'PROCESSING';
         }

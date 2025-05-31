@@ -57,14 +57,8 @@ export async function GET(req: Request) {
             },
         });
 
-        const processedConversations = conversations.map((conv: {
-            participantsInfo: { userId: string; lastReadAt: Date | null }[];
-            messages: { createdAt: Date; senderId: string; content: string }[];
-            item?: { mediaUrls?: string[] };
-            itemImageUrl?: string;
-            lastMessageSnippet?: string;
-        }) => {
-            const currentUserParticipantInfo = conv.participantsInfo.find((p: { userId: string }) => p.userId === currentUserId);
+        const processedConversations = conversations.map((conv) => {
+            const currentUserParticipantInfo = conv.participantsInfo.find((p) => p.userId === currentUserId);
             const lastMessage = conv.messages.length > 0 ? conv.messages[0] : null;
             let unreadMessages = false;
 
@@ -84,10 +78,9 @@ export async function GET(req: Request) {
             
             return {
                 ...conv,
-                itemImageUrl: conv.item?.mediaUrls?.[0] || conv.itemImageUrl,
+                itemImageUrl: conv.item?.mediaUrls?.[0] || conv.itemImageUrl || null,
                 lastMessageSnippet: lastMessage?.content || conv.lastMessageSnippet,
                 lastMessageSenderId: lastMessage?.senderId,
-                // participantsInfo: undefined, // Decide if client needs this raw data
                 messages: undefined, 
                 unread: unreadMessages,
             };
