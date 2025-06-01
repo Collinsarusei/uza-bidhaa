@@ -24,11 +24,8 @@ interface RouteParams {
 
 export async function GET(req: Request, context: RouteParams) {
   const { messageId } = context.params;
-  // console.log(`--- API GET /api/admin/contact-messages/${messageId} (Prisma) START ---`); // Optional: keep for runtime debugging if needed
-
   try {
     const adminId = validateAdmin(await getServerSession(authOptions));
-
     const message = await prisma.contactMessage.findUnique({
       where: { id: messageId },
       include: {
@@ -40,11 +37,9 @@ export async function GET(req: Request, context: RouteParams) {
         },
       },
     });
-
     if (!message) {
       throw new AppError('Message not found', 404);
     }
-
     const messageWithDates = {
       ...message,
       createdAt: message.createdAt,
@@ -52,9 +47,6 @@ export async function GET(req: Request, context: RouteParams) {
       status: message.status as 'PENDING' | 'READ' | 'RESPONDED',
       user: message.user || { name: null, email: null }
     };
-
-    // console.log(`API /admin/contact-messages/${messageId}: Message found successfully`);
-    // console.log("--- API GET /api/admin/contact-messages/[messageId] (Prisma) SUCCESS ---");
     return NextResponse.json(messageWithDates, { status: 200 });
   } catch (error) {
     return handleApiError(error);
@@ -63,20 +55,15 @@ export async function GET(req: Request, context: RouteParams) {
 
 export async function PATCH(req: Request, context: RouteParams) {
   const { messageId } = context.params;
-  // console.log(`--- API PATCH /api/admin/contact-messages/${messageId} (Prisma) START ---`);
-
   try {
     const adminId = validateAdmin(await getServerSession(authOptions));
     const requestBody = await req.json();
-
     const message = await prisma.contactMessage.findUnique({
       where: { id: messageId }
     });
-
     if (!message) {
       throw new AppError('Message not found', 404);
     }
-
     const updatedMessage = await prisma.contactMessage.update({
       where: { id: messageId },
       data: requestBody,
@@ -89,9 +76,6 @@ export async function PATCH(req: Request, context: RouteParams) {
         },
       },
     });
-
-    // console.log(`API /admin/contact-messages/${messageId}: Message updated successfully`);
-    // console.log("--- API PATCH /api/admin/contact-messages/[messageId] (Prisma) SUCCESS ---");
     return NextResponse.json(updatedMessage, { status: 200 });
   } catch (error) {
     return handleApiError(error);
@@ -100,25 +84,17 @@ export async function PATCH(req: Request, context: RouteParams) {
 
 export async function DELETE(req: Request, context: RouteParams) {
   const { messageId } = context.params;
-  // console.log(`--- API DELETE /api/admin/contact-messages/${messageId} (Prisma) START ---`);
-
   try {
     const adminId = validateAdmin(await getServerSession(authOptions));
-
     const message = await prisma.contactMessage.findUnique({
       where: { id: messageId }
     });
-
     if (!message) {
       throw new AppError('Message not found', 404);
     }
-
     await prisma.contactMessage.delete({
       where: { id: messageId }
     });
-
-    // console.log(`API /admin/contact-messages/${messageId}: Message deleted successfully`);
-    // console.log("--- API DELETE /api/admin/contact-messages/[messageId] (Prisma) SUCCESS ---");
     return NextResponse.json({ message: 'Message deleted successfully' }, { status: 200 });
   } catch (error) {
     return handleApiError(error);

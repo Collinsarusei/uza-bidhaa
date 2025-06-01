@@ -7,6 +7,14 @@ declare global {
   var prisma: PrismaClient | undefined;
 }
 
+const dbUrl = process.env.DATABASE_URL;
+if (!dbUrl) {
+  // This error will be caught during build or server start if DATABASE_URL is missing.
+  // It's good to have an early, clear indicator.
+  console.error('CRITICAL_ERROR_PRISMA: DATABASE_URL environment variable is not defined.');
+  throw new Error('DATABASE_URL environment variable is not defined. PrismaClient cannot be initialized.');
+}
+
 let prismaInstance: PrismaClient;
 
 if (global.prisma) {
@@ -18,8 +26,7 @@ if (global.prisma) {
     });
   } catch (error: any) {
     console.error(`PrismaClient Initialization Error: ${error.message}`);
-    // Depending on the environment, you might want to handle this more gracefully
-    // or ensure the application doesn't start/build if Prisma fails.
+    // Re-throwing the error is important to make the build/runtime fail clearly if Prisma can't init
     throw new Error(`Failed to initialize Prisma Client: ${error.message}`);
   }
 }

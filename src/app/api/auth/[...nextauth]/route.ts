@@ -4,7 +4,7 @@ import { PrismaAdapter } from "@next-auth/prisma-adapter";
 import prisma from "../../../../lib/prisma"; 
 import { adminAuth } from "../../../../lib/firebase-admin"; 
 import CredentialsProvider from "next-auth/providers/credentials";
-import bcrypt from "bcrypt";
+import bcrypt from "bcryptjs"; // Changed from "bcrypt" to "bcryptjs"
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -101,6 +101,7 @@ export const authOptions: AuthOptions = {
           if (!user.password) {
             throw new Error("This account is likely setup for social or phone login.");
           }
+          // bcrypt.compare will now use bcryptjs
           const isValidPassword = await bcrypt.compare(credentials.password, user.password);
           if (!isValidPassword) {
             throw new Error("Incorrect password.");
