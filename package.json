@@ -5,11 +5,11 @@
   "scripts": {
     "dev": "next dev --turbopack -p 9002",
     "dev:no-cache": "next dev --no-cache",
-    "build": "next build",
+    "build": "prisma generate && next build",
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "build:prod": "NODE_ENV=production next build",
+    "build:prod": "NODE_ENV=production prisma generate && NODE_ENV=production next build",
     "start:prod": "NODE_ENV=production next start"
   },
   "dependencies": {
