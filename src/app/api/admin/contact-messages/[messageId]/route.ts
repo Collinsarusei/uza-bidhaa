@@ -1,3 +1,5 @@
+console.log('VERCEL_BUILD_DEBUG: TOP OF /api/admin/contact-messages/[messageId]/route.ts');
+
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/app/api/auth/[...nextauth]/route';
@@ -13,6 +15,7 @@ export const dynamicParams = true; // Explicitly allow all dynamic segments
 
 // Explicitly tell Next.js not to try to statically generate this route
 export async function generateStaticParams() {
+  console.log('VERCEL_BUILD_DEBUG: generateStaticParams in /api/admin/contact-messages/[messageId]/route.ts CALLED');
   return []; // Return empty array to indicate no static paths
 }
 
@@ -23,6 +26,7 @@ interface RouteParams {
 }
 
 export async function GET(req: Request, context: RouteParams) {
+  console.log('VERCEL_BUILD_DEBUG: GET handler in /api/admin/contact-messages/[messageId]/route.ts CALLED');
   const { messageId } = context.params;
   console.log(`--- API GET /api/admin/contact-messages/${messageId} (Prisma) START ---`);
 
@@ -62,6 +66,7 @@ export async function GET(req: Request, context: RouteParams) {
 }
 
 export async function PATCH(req: Request, context: RouteParams) {
+  console.log('VERCEL_BUILD_DEBUG: PATCH handler in /api/admin/contact-messages/[messageId]/route.ts CALLED');
   const { messageId } = context.params;
   console.log(`--- API PATCH /api/admin/contact-messages/${messageId} (Prisma) START ---`);
 
@@ -99,6 +104,7 @@ export async function PATCH(req: Request, context: RouteParams) {
 }
 
 export async function DELETE(req: Request, context: RouteParams) {
+  console.log('VERCEL_BUILD_DEBUG: DELETE handler in /api/admin/contact-messages/[messageId]/route.ts CALLED');
   const { messageId } = context.params;
   console.log(`--- API DELETE /api/admin/contact-messages/${messageId} (Prisma) START ---`);
 
