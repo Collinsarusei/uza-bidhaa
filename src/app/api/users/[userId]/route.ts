@@ -8,6 +8,12 @@ export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const fetchCache = 'force-no-store';
 export const revalidate = 0;
+export const dynamicParams = true; // Explicitly allow all dynamic segments
+
+// Explicitly tell Next.js not to try to statically generate this route
+export async function generateStaticParams() {
+  return []; // Return empty array to indicate no static paths
+}
 
 export async function GET(req: Request, context: any) {
     console.log("API GET /api/users/[userId] (Prisma): Received request");
@@ -112,4 +118,4 @@ export async function PUT(req: Request, context: any) {
         console.error("API Users PUT Error (Prisma):", error);
         return NextResponse.json({ message: 'Failed to update user', error: error.message }, { status: 500 });
     }
-} 
+}

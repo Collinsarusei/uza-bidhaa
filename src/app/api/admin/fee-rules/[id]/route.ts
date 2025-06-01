@@ -12,6 +12,12 @@ export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const fetchCache = 'force-no-store';
 export const revalidate = 0;
+export const dynamicParams = true; // Explicitly allow all dynamic segments
+
+// Explicitly tell Next.js not to try to statically generate this route
+export async function generateStaticParams() {
+  return []; // Return empty array to indicate no static paths
+}
 
 interface RouteParams {
     params: {
@@ -134,4 +140,4 @@ export async function DELETE(request: Request, context: RouteParams) {
     } catch (error) {
         return handleApiError(error);
     }
-} 
+}

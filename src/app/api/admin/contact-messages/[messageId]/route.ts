@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/app/api/auth/[...nextauth]/route';
 import prisma from '@/lib/prisma';
-import { Prisma } from '@prisma/client';
 import { handleApiError, validateAdmin, AppError } from '@/lib/error-handling';
 
 // Required Next.js configuration for dynamic API routes
@@ -10,6 +9,7 @@ export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const fetchCache = 'force-no-store';
 export const revalidate = 0;
+export const dynamicParams = true; // Explicitly allow all dynamic segments
 
 // Explicitly tell Next.js not to try to statically generate this route
 export async function generateStaticParams() {
@@ -123,4 +123,4 @@ export async function DELETE(req: Request, context: RouteParams) {
   } catch (error) {
     return handleApiError(error);
   }
-} 
+}

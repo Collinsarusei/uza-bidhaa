@@ -65,12 +65,11 @@ export async function GET(req: Request) {
             prisma.contactMessage.count({ where })
         ]);
 
+        // Corrected mapping: Let TypeScript infer the type of 'message' from Prisma's result
         const messagesWithDates: ContactMessage[] = messages.map(message => ({
-            ...message,
-            createdAt: message.createdAt,
-            updatedAt: message.updatedAt,
-            status: message.status as 'PENDING' | 'READ' | 'RESPONDED',
-            user: message.user || { name: null, email: null }
+            ...message, // This will spread all fields fetched by Prisma
+            status: message.status as 'PENDING' | 'READ' | 'RESPONDED', // Ensure status type matches interface
+            user: message.user || { name: null, email: null } // Handle potential null user if necessary, though include should provide it
         }));
 
         console.log(`API /admin/contact-messages: Found ${messagesWithDates.length} messages`);
@@ -150,10 +149,10 @@ export async function PATCH(req: Request) {
 
         const messageWithDates: ContactMessage = {
             ...updatedMessage,
-            createdAt: updatedMessage.createdAt,
-            updatedAt: updatedMessage.updatedAt,
+            createdAt: updatedMessage.createdAt, // Redundant if updatedMessage is fully typed and spread
+            updatedAt: updatedMessage.updatedAt, // Redundant
             status: updatedMessage.status as 'PENDING' | 'READ' | 'RESPONDED',
-            user: updatedMessage.user || { name: null, email: null }
+            user: updatedMessage.user || { name: null, email: null } // Fallback for safety
         };
 
         console.log(`API /admin/contact-messages: Message ${messageId} updated successfully`);
@@ -174,4 +173,4 @@ export async function PATCH(req: Request) {
             error: error.message 
         }, { status: 500 });
     }
-} 
+}

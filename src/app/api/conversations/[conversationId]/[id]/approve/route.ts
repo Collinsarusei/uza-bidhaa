@@ -1,4 +1,4 @@
-// src/app/api/conversations/[id]/approve/route.ts
+// src/app/api/conversations/[conversationId]/[id]/approve/route.ts
 import { NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from '@/app/api/auth/[...nextauth]/route';
@@ -9,15 +9,22 @@ export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const fetchCache = 'force-no-store';
 export const revalidate = 0;
+export const dynamicParams = true; // Explicitly allow all dynamic segments
+
+// Explicitly tell Next.js not to try to statically generate this route
+export async function generateStaticParams() {
+  return []; // Return empty array to indicate no static paths
+}
 
 interface RouteContext {
   params: {
-    id?: string; // Conversation ID from the route parameter
+    conversationId?: string;
+    id?: string; // Second dynamic parameter, though not used in this logic
   };
 }
 
-export async function PATCH(req: Request, context: any) {
-    const { id: conversationId } = context.params;
+export async function PATCH(req: Request, context: RouteContext) { // Use RouteContext
+    const { conversationId } = context.params; // Correctly get conversationId
     console.log(`--- API PATCH /api/conversations/${conversationId}/approve (Prisma) START ---`);
 
     if (!conversationId) {
@@ -37,7 +44,7 @@ export async function PATCH(req: Request, context: any) {
         const conversation = await prisma.conversation.findUnique({
             where: { id: conversationId },
             include: {
-                participants: { select: { id: true } }, // To check if current user is a participant
+                participants: { select: { id: true } }, // Corrected: Select 'id' from related User model
                 item: { select: { title: true, id: true } } // For notification context
             }
         });
@@ -47,7 +54,14 @@ export async function PATCH(req: Request, context: any) {
             return NextResponse.json({ message: 'Conversation not found' }, { status: 404 });
         }
 
-        const isParticipant = conversation.participants.some((p: { id: string }) => p.id === currentUserId);
+        // Check if current user is a participant by looking at the ConversationParticipant table records
+        const isParticipant = await prisma.conversationParticipant.findFirst({
+            where: {
+                conversationId: conversationId,
+                userId: currentUserId
+            }
+        });
+
         if (!isParticipant) {
              console.warn(`API Approve ${conversationId}: User ${currentUserId} forbidden. Not a participant.`);
             return NextResponse.json({ message: 'Forbidden' }, { status: 403 });
@@ -58,6 +72,7 @@ export async function PATCH(req: Request, context: any) {
             return NextResponse.json({ message: 'Conversation already approved' }, { status: 200 }); 
         }
 
+        // Ensure the person approving is NOT the initiator of the conversation
         if (conversation.initiatorId === currentUserId) {
              console.warn(`API Approve ${conversationId}: Initiator ${currentUserId} cannot approve.`);
             return NextResponse.json({ message: 'Only the recipient can approve this conversation' }, { status: 403 });
@@ -80,7 +95,7 @@ export async function PATCH(req: Request, context: any) {
                     userId: updatedConversation.initiatorId,
                     type: 'conversation_approved',
                     message: `${currentUserName} approved your conversation about "${conversation.item?.title || 'the item'}".`,
-                    relatedItemId: conversation.item?.id, // Use conversation.item.id
+                    relatedItemId: conversation.item?.id,
                     // relatedConversationId: conversationId, // Optional: if you add this to Notification model
                 });
                 console.log(`API Approve ${conversationId}: Notification sent to initiator ${updatedConversation.initiatorId}`);
