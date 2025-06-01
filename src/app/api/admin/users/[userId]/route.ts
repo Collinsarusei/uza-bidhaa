@@ -4,18 +4,18 @@ import prisma from '@/lib/prisma';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from '@/app/api/auth/[...nextauth]/route';
 import { Prisma } from '@prisma/client';
-import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
+import { handleApiError, validateAdmin, AppError } from '@/lib/error-handling';
 import * as z from 'zod';
 
+// Required Next.js configuration for dynamic API routes
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const fetchCache = 'force-no-store';
 export const revalidate = 0;
 
-
-interface RouteContext {
+interface RouteParams {
     params: {
-      userId: string; 
+        userId: string;
     };
 }
 
@@ -29,23 +29,20 @@ const adminUserUpdateSchema = z.object({
 });
 
 // GET a single user by ID (Admin only)
-export async function GET(request: Request, context: any) {
+export async function GET(request: Request, context: RouteParams) {
     const { userId: targetUserId } = context.params;
     console.log(`--- API GET /api/admin/users/${targetUserId} (Prisma) START ---`);
 
-    const session = await getServerSession(authOptions);
-    if (!session?.user?.id || (session.user as any).role !== 'ADMIN') {
-        return NextResponse.json({ message: 'Forbidden: Admin access required' }, { status: 403 });
-    }
-
-    if (!targetUserId) {
-        return NextResponse.json({ message: 'Missing target user ID' }, { status: 400 });
-    }
-
     try {
+        const adminId = validateAdmin(await getServerSession(authOptions));
+
+        if (!targetUserId) {
+            throw new AppError('Missing target user ID', 400);
+        }
+
         const user = await prisma.user.findUnique({
             where: { id: targetUserId },
-            select: { // Select fields appropriate for admin view, exclude password
+            select: {
                 id: true,
                 name: true,
                 email: true,
@@ -68,72 +65,71 @@ export async function GET(request: Request, context: any) {
         });
 
         if (!user) {
-            return NextResponse.json({ message: 'User not found' }, { status: 404 });
+            throw new AppError('User not found', 404);
         }
+
+        console.log(`API /admin/users/${targetUserId}: User found successfully`);
+        console.log("--- API GET /api/admin/users/[userId] (Prisma) SUCCESS ---");
         return NextResponse.json(user, { status: 200 });
-    } catch (error: any) {
-        console.error(`--- API GET /api/admin/users/${targetUserId} (Prisma) FAILED ---`, error);
-        return NextResponse.json({ message: 'Failed to fetch user', error: error.message }, { status: 500 });
+
+    } catch (error) {
+        return handleApiError(error);
     }
 }
 
-
 // PATCH/PUT to update a user's status or role (Admin only)
-export async function PUT(req: Request, context: any) {
+export async function PUT(req: Request, context: RouteParams) {
     const { userId: targetUserId } = context.params;
     console.log(`--- API PUT /api/admin/users/${targetUserId} (Prisma) START ---`);
 
-    if (!targetUserId) {
-        return NextResponse.json({ message: 'Missing target user ID' }, { status: 400 });
-    }
-
-    const session = await getServerSession(authOptions);
-    if (!session?.user?.id || (session.user as any).role !== 'ADMIN') {
-        return NextResponse.json({ message: 'Forbidden: Admin access required' }, { status: 403 });
-    }
-    const adminUserId = session.user.id;
-
-    // Prevent admin from modifying their own critical fields like role or status to avoid self-lockout
-    // This check might need to be more sophisticated for multiple admins scenarios
-    if (targetUserId === adminUserId) {
-        const bodyForSelfCheck = await req.clone().json();
-        if (bodyForSelfCheck.role && bodyForSelfCheck.role !== 'ADMIN') {
-             return NextResponse.json({ message: 'Admin cannot revoke their own admin role.' }, { status: 403 });
-        }
-        if (bodyForSelfCheck.status && bodyForSelfCheck.status !== 'ADMIN' && bodyForSelfCheck.status !== 'ACTIVE') {
-             return NextResponse.json({ message: 'Admin cannot change their own status to non-active/non-admin via this route.' }, { status: 403 });
-        }
-    }
-
     try {
+        const adminId = validateAdmin(await getServerSession(authOptions));
+
+        if (!targetUserId) {
+            throw new AppError('Missing target user ID', 400);
+        }
+
+        // Prevent admin from modifying their own critical fields like role or status to avoid self-lockout
+        if (targetUserId === adminId) {
+            const bodyForSelfCheck = await req.clone().json();
+            if (bodyForSelfCheck.role && bodyForSelfCheck.role !== 'ADMIN') {
+                throw new AppError('Admin cannot revoke their own admin role', 403);
+            }
+            if (bodyForSelfCheck.status && bodyForSelfCheck.status !== 'ACTIVE') {
+                throw new AppError('Admin cannot change their own status to non-active', 403);
+            }
+        }
+
         const body = await req.json();
         const validation = adminUserUpdateSchema.safeParse(body);
 
         if (!validation.success) {
-            return NextResponse.json({ message: 'Invalid input', errors: validation.error.flatten().fieldErrors }, { status: 400 });
+            throw new AppError('Invalid input', 400);
         }
         
         const dataToUpdate = validation.data;
         if (Object.keys(dataToUpdate).length === 0) {
-            return NextResponse.json({ message: 'No fields provided for update.' }, { status: 400 });
+            throw new AppError('No fields provided for update', 400);
         }
 
         const updatedUser = await prisma.user.update({
             where: { id: targetUserId },
             data: dataToUpdate,
-            select: { // Return selected fields, excluding password
-                id: true, name: true, email: true, status: true, role: true, updatedAt: true 
+            select: {
+                id: true,
+                name: true,
+                email: true,
+                status: true,
+                role: true,
+                updatedAt: true 
             }
         });
         
-        console.log(`Admin User Update: User ${targetUserId} updated by admin ${adminUserId}. New data:`, dataToUpdate);
-        return NextResponse.json({ message: 'User updated successfully.', user: updatedUser }, { status: 200 });
+        console.log(`API /admin/users/${targetUserId}: User updated successfully`);
+        console.log("--- API PUT /api/admin/users/[userId] (Prisma) SUCCESS ---");
+        return NextResponse.json({ message: 'User updated successfully', user: updatedUser }, { status: 200 });
 
-    } catch (error: any) {
-        console.error(`--- API PUT /api/admin/users/${targetUserId} (Prisma) FAILED ---`, error);
-        if (error instanceof PrismaClientKnownRequestError && error.code === 'P2025') {
-            return NextResponse.json({ message: 'User not found for update.' }, { status: 404 });
-        }
-        return NextResponse.json({ message: error.message || 'Failed to update user.' }, { status: 500 });
+    } catch (error) {
+        return handleApiError(error);
     }
 }

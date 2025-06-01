@@ -2,38 +2,33 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/app/api/auth/[...nextauth]/route';
 import prisma from '@/lib/prisma';
-import { z } from 'zod';
 import { Prisma } from '@prisma/client';
+import { handleApiError, validateAdmin, AppError } from '@/lib/error-handling';
 
+// Required Next.js configuration for dynamic API routes
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const fetchCache = 'force-no-store';
 export const revalidate = 0;
 
-const updateMessageSchema = z.object({
-  status: z.enum(['PENDING', 'IN_PROGRESS', 'RESOLVED']),
-});
+// Explicitly tell Next.js not to try to statically generate this route
+export async function generateStaticParams() {
+  return []; // Return empty array to indicate no static paths
+}
 
-interface RouteContext {
+interface RouteParams {
   params: {
     messageId: string;
   };
 }
 
-export async function GET(
-  req: Request,
-  context: RouteContext
-) {
+export async function GET(req: Request, context: RouteParams) {
   const { messageId } = context.params;
   console.log(`--- API GET /api/admin/contact-messages/${messageId} (Prisma) START ---`);
 
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.id || (session.user as any).role !== 'ADMIN') {
-    console.warn(`API /admin/contact-messages/${messageId}: Unauthorized or not admin attempt.`);
-    return NextResponse.json({ message: 'Forbidden: Admin access required' }, { status: 403 });
-  }
-
   try {
+    const adminId = validateAdmin(await getServerSession(authOptions));
+
     const message = await prisma.contactMessage.findUnique({
       where: { id: messageId },
       include: {
@@ -47,7 +42,7 @@ export async function GET(
     });
 
     if (!message) {
-      return NextResponse.json({ message: 'Message not found' }, { status: 404 });
+      throw new AppError('Message not found', 404);
     }
 
     const messageWithDates = {
@@ -61,52 +56,30 @@ export async function GET(
     console.log(`API /admin/contact-messages/${messageId}: Message found successfully`);
     console.log("--- API GET /api/admin/contact-messages/[messageId] (Prisma) SUCCESS ---");
     return NextResponse.json(messageWithDates, { status: 200 });
-  } catch (error: any) {
-    console.error(`--- API GET /api/admin/contact-messages/${messageId} (Prisma) FAILED --- Error:`, error);
-    if (error instanceof Prisma.PrismaClientKnownRequestError) {
-      return NextResponse.json({ 
-        message: 'Database error occurred', 
-        code: error.code,
-        meta: error.meta 
-      }, { status: 500 });
-    }
-    return NextResponse.json({ 
-      message: 'Failed to fetch contact message', 
-      error: error.message 
-    }, { status: 500 });
+  } catch (error) {
+    return handleApiError(error);
   }
 }
 
-export async function PATCH(
-  req: Request,
-  context: RouteContext
-) {
+export async function PATCH(req: Request, context: RouteParams) {
+  const { messageId } = context.params;
+  console.log(`--- API PATCH /api/admin/contact-messages/${messageId} (Prisma) START ---`);
+
   try {
-    const session = await getServerSession(authOptions);
+    const adminId = validateAdmin(await getServerSession(authOptions));
+    const requestBody = await req.json();
 
-    if (!session?.user) {
-      return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+    const message = await prisma.contactMessage.findUnique({
+      where: { id: messageId }
+    });
+
+    if (!message) {
+      throw new AppError('Message not found', 404);
     }
 
-    // Check if user is admin using role
-    if ((session.user as any).role !== 'ADMIN') {
-      return NextResponse.json({ message: 'Forbidden' }, { status: 403 });
-    }
-
-    if (!context.params?.messageId) {
-      return NextResponse.json({ message: 'Message ID is required' }, { status: 400 });
-    }
-
-    const body = await req.json();
-    const validatedData = updateMessageSchema.parse(body);
-
-    const message = await prisma.contactMessage.update({
-      where: {
-        id: context.params.messageId,
-      },
-      data: {
-        status: validatedData.status,
-      },
+    const updatedMessage = await prisma.contactMessage.update({
+      where: { id: messageId },
+      data: requestBody,
       include: {
         user: {
           select: {
@@ -117,14 +90,37 @@ export async function PATCH(
       },
     });
 
-    return NextResponse.json(message);
+    console.log(`API /admin/contact-messages/${messageId}: Message updated successfully`);
+    console.log("--- API PATCH /api/admin/contact-messages/[messageId] (Prisma) SUCCESS ---");
+    return NextResponse.json(updatedMessage, { status: 200 });
   } catch (error) {
-    console.error('Error updating contact message:', error);
-    
-    if (error instanceof z.ZodError) {
-      return NextResponse.json({ message: 'Invalid request data', errors: error.errors }, { status: 400 });
+    return handleApiError(error);
+  }
+}
+
+export async function DELETE(req: Request, context: RouteParams) {
+  const { messageId } = context.params;
+  console.log(`--- API DELETE /api/admin/contact-messages/${messageId} (Prisma) START ---`);
+
+  try {
+    const adminId = validateAdmin(await getServerSession(authOptions));
+
+    const message = await prisma.contactMessage.findUnique({
+      where: { id: messageId }
+    });
+
+    if (!message) {
+      throw new AppError('Message not found', 404);
     }
 
-    return NextResponse.json({ message: 'Internal Server Error' }, { status: 500 });
+    await prisma.contactMessage.delete({
+      where: { id: messageId }
+    });
+
+    console.log(`API /admin/contact-messages/${messageId}: Message deleted successfully`);
+    console.log("--- API DELETE /api/admin/contact-messages/[messageId] (Prisma) SUCCESS ---");
+    return NextResponse.json({ message: 'Message deleted successfully' }, { status: 200 });
+  } catch (error) {
+    return handleApiError(error);
   }
 } 

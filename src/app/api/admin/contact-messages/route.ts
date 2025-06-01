@@ -4,11 +4,16 @@ import { authOptions } from '@/app/api/auth/[...nextauth]/route';
 import prisma from '@/lib/prisma';
 import { Prisma } from '@prisma/client';
 
+// Required Next.js configuration for dynamic API routes
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const fetchCache = 'force-no-store';
 export const revalidate = 0;
 
+// Explicitly tell Next.js not to try to statically generate this route
+export async function generateStaticParams() {
+  return []; // Return empty array to indicate no static paths
+}
 
 interface ContactMessage {
     id: string;
