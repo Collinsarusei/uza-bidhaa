@@ -13,7 +13,7 @@ export async function GET() {
     try {
         const session = await getServerSession(authOptions);
         
-        if (!session?.user || session.user.email !== process.env.NEXT_PUBLIC_ADMIN_EMAIL) {
+        if (!session?.user?.id || (session.user as any).role !== 'ADMIN') {
             return new NextResponse('Unauthorized', { status: 401 });
         }
 
@@ -30,7 +30,7 @@ export async function PUT(req: Request) {
     try {
         const session = await getServerSession(authOptions);
         
-        if (!session?.user || session.user.email !== process.env.NEXT_PUBLIC_ADMIN_EMAIL) {
+        if (!session?.user?.id || (session.user as any).role !== 'ADMIN') {
             return new NextResponse('Unauthorized', { status: 401 });
         }
 

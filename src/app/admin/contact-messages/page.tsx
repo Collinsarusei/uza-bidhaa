@@ -34,7 +34,7 @@ interface ContactMessage {
   userId: string;
   subject: string;
   message: string;
-  status: 'PENDING' | 'IN_PROGRESS' | 'RESOLVED';
+  status: 'PENDING' | 'READ' | 'RESPONDED';
   createdAt: string;
   updatedAt: string;
   user?: {
@@ -140,9 +140,9 @@ export default function AdminContactMessagesPage() {
     switch (status) {
       case 'PENDING':
         return 'secondary';
-      case 'IN_PROGRESS':
+      case 'READ':
         return 'default';
-      case 'RESOLVED':
+      case 'RESPONDED':
         return 'default';
       default:
         return 'secondary';
@@ -254,17 +254,17 @@ export default function AdminContactMessagesPage() {
                             <div className="grid gap-4 py-4">
                               <Button
                                 variant="outline"
-                                onClick={() => handleStatusUpdate(message.id, 'IN_PROGRESS')}
-                                disabled={processingMessageId === message.id || message.status === 'IN_PROGRESS'}
+                                onClick={() => handleStatusUpdate(message.id, 'READ')}
+                                disabled={processingMessageId === message.id || message.status === 'READ'}
                               >
-                                Mark as In Progress
+                                Mark as Read
                               </Button>
                               <Button
                                 variant="outline"
-                                onClick={() => handleStatusUpdate(message.id, 'RESOLVED')}
-                                disabled={processingMessageId === message.id || message.status === 'RESOLVED'}
+                                onClick={() => handleStatusUpdate(message.id, 'RESPONDED')}
+                                disabled={processingMessageId === message.id || message.status === 'RESPONDED'}
                               >
-                                Mark as Resolved
+                                Mark as Responded
                               </Button>
                             </div>
                             <AlertDialogFooter>

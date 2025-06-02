@@ -226,7 +226,11 @@ export default function MessagesPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           conversationId: selectedConversation.id,
-          content: messageText,
+          recipientId,
+          itemId: itemIdToSend,
+          text: messageText,
+          itemTitle: selectedConversation.itemTitle,
+          itemImageUrl: selectedConversation.itemImageUrl,
         }),
       });
 

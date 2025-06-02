@@ -20,7 +20,7 @@ export default function AdminLayout({
   const { data: session, status } = useSession();
   const router = useRouter();
 
-  const isAdminUser = session?.user?.email === process.env.NEXT_PUBLIC_ADMIN_EMAIL;
+  const isAdminUser = (session?.user as any)?.role === 'ADMIN';
 
   useEffect(() => {
     if (status === 'loading') return;
@@ -51,6 +51,7 @@ export default function AdminLayout({
     { href: '/admin/withdraw-platform-fees', label: 'Withdraw Fees', icon: <Icons.send /> },
     { href: '/admin/disputes', label: 'Dispute Management', icon: <Icons.shieldAlert /> },
     { href: '/admin/users', label: 'User Management', icon: <Icons.users /> },
+    { href: '/admin/contact-messages', label: 'Contact Messages', icon: <Icons.messageSquare /> },
   ];
 
   return (
