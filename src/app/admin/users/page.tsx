@@ -42,7 +42,7 @@ export default function AdminUsersPage() {
 
     useEffect(() => {
         if (status === 'authenticated') {
-             setIsAuthorized(session?.user?.email === process.env.NEXT_PUBLIC_ADMIN_EMAIL);
+             setIsAuthorized((session?.user as any)?.role === 'ADMIN');
         } else if (status === 'unauthenticated') {
             setIsAuthorized(false);
             router.push('/auth');

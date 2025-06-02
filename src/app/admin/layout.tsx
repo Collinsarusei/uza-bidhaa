@@ -46,7 +46,7 @@ export default function AdminLayout({
 
   const navItems = [
     { href: '/admin', label: 'Dashboard', icon: <Icons.layoutGrid /> },
-    { href: '/admin/fees', label: 'Fee % Setting', icon: <Icons.settings /> }, 
+    { href: '/admin/fee-rules', label: 'Fee % Setting', icon: <Icons.settings /> }, 
     { href: '/admin/platform-fees', label: 'Platform Fees Log', icon: <Icons.circleDollarSign /> }, 
     { href: '/admin/withdraw-platform-fees', label: 'Withdraw Fees', icon: <Icons.send /> },
     { href: '/admin/disputes', label: 'Dispute Management', icon: <Icons.shieldAlert /> },

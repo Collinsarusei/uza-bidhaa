@@ -29,16 +29,12 @@ export default function AdminFeesPage() {
 
 
     useEffect(() => {
-        // Rudimentary admin check - replace with proper role-based auth in a real app
-        // This is just a placeholder for the UI behavior
+        // Basic admin authorization check
         if (status === 'authenticated') {
-            // Example: Check if user's email matches an admin email from env (NOT secure)
-            // Or, better, check a custom claim if you've set one up.
-            // For this example, we'll just assume authenticated user is admin if no specific check.
-            setIsAuthorized(true); 
+            setIsAuthorized((session?.user as any)?.role === 'ADMIN');
         } else if (status === 'unauthenticated') {
             setIsAuthorized(false);
-            router.push('/auth'); // Redirect if not logged in
+            router.push('/auth');
         }
     }, [status, router, session]);
 
