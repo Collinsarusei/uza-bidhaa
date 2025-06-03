@@ -93,8 +93,7 @@ export default function MessagesPage() {
     if (!currentUserId) return { inbox, incoming };
 
     allConversations.forEach(conv => {
-      const isInitiator = conv.initiatorId === currentUserId;
-      if (isInitiator) {
+      if (conv.approved) {
         inbox.push(conv);
       } else {
         incoming.push(conv);
