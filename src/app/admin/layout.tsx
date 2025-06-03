@@ -58,43 +58,43 @@ export default function AdminLayout({
 
   const NavContent = () => (
     <>
-      <div className="mb-6">
-        <Link href="/dashboard" className="text-lg font-semibold flex items-center gap-2 text-primary hover:underline">
-          <Icons.arrowLeft className="h-5 w-5" />
-          Back to Main Site
-        </Link>
-      </div>
-      <nav className="flex-grow">
-        <ul className="space-y-2">
-          {navItems.map((item) => (
-            <li key={item.href}>
-              <Link href={item.href} passHref>
-                <Button
-                  variant={pathname === item.href ? 'secondary' : 'ghost'}
-                  className={cn(
-                    "w-full justify-start",
-                    pathname === item.href && "font-semibold"
-                  )}
+        <div className="mb-6">
+          <Link href="/dashboard" className="text-lg font-semibold flex items-center gap-2 text-primary hover:underline">
+            <Icons.arrowLeft className="h-5 w-5" />
+            Back to Main Site
+          </Link>
+        </div>
+        <nav className="flex-grow">
+          <ul className="space-y-2">
+            {navItems.map((item) => (
+              <li key={item.href}>
+                <Link href={item.href} passHref>
+                  <Button
+                    variant={pathname === item.href ? 'secondary' : 'ghost'}
+                    className={cn(
+                      "w-full justify-start",
+                      pathname === item.href && "font-semibold"
+                    )}
                   onClick={() => setIsMobileMenuOpen(false)}
-                >
-                  {item.icon && React.cloneElement(item.icon as React.ReactElement, { className: "mr-2 h-4 w-4" })}
-                  {item.label}
-                </Button>
-              </Link>
-            </li>
-          ))}
-        </ul>
-      </nav>
-      <div className="mt-auto">
-        <Button 
-          variant="default" 
-          className="w-full bg-orange-500 hover:bg-orange-600 text-white" 
-          onClick={() => router.push('/dashboard')}
-        >
+                  >
+                    {item.icon && React.cloneElement(item.icon as React.ReactElement, { className: "mr-2 h-4 w-4" })}
+                    {item.label}
+                  </Button>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </nav>
+        <div className="mt-auto">
+             <Button 
+                variant="default" 
+                className="w-full bg-orange-500 hover:bg-orange-600 text-white" 
+                onClick={() => router.push('/dashboard')}
+             >
           <Icons.layoutGrid className="mr-2 h-4 w-4" />
-          Back to Marketplace
-        </Button>
-      </div>
+                 Back to Marketplace
+             </Button>
+        </div>
     </>
   );
 

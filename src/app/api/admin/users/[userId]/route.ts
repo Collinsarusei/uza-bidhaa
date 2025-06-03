@@ -83,58 +83,47 @@ export async function GET(request: Request, context: RouteParams) {
 }
 
 // PATCH/PUT to update a user's status or role (Admin only)
-export async function PUT(req: Request, context: RouteParams) {
-    const { userId: targetUserId } = context.params;
-    console.log(`--- API PUT /api/admin/users/${targetUserId} (Prisma) START ---`);
+export async function PUT(req: Request, { params }: { params: { userId: string } }) {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+        return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+    }
 
     try {
-        const adminId = validateAdmin(await getServerSession(authOptions));
+        const admin = await prisma.user.findUnique({
+            where: { id: session.user.id },
+            select: { role: true }
+        });
 
-        if (!targetUserId) {
-            throw new AppError('Missing target user ID', 400);
+        if (!admin || admin.role !== 'ADMIN') {
+            return NextResponse.json({ message: 'Forbidden' }, { status: 403 });
         }
 
-        // Prevent admin from modifying their own critical fields like role or status to avoid self-lockout
-        if (targetUserId === adminId) {
-            const bodyForSelfCheck = await req.clone().json();
-            if (bodyForSelfCheck.role && bodyForSelfCheck.role !== 'ADMIN') {
-                throw new AppError('Admin cannot revoke their own admin role', 403);
-            }
-            if (bodyForSelfCheck.status && bodyForSelfCheck.status !== 'ACTIVE') {
-                throw new AppError('Admin cannot change their own status to non-active', 403);
-            }
-        }
-
+        const { userId } = params;
         const body = await req.json();
-        const validation = adminUserUpdateSchema.safeParse(body);
+        const { status } = body;
 
-        if (!validation.success) {
-            throw new AppError('Invalid input', 400);
-        }
-        
-        const dataToUpdate = validation.data;
-        if (Object.keys(dataToUpdate).length === 0) {
-            throw new AppError('No fields provided for update', 400);
+        if (!status || !['ACTIVE', 'SUSPENDED'].includes(status)) {
+            return NextResponse.json({ message: 'Invalid status' }, { status: 400 });
         }
 
         const updatedUser = await prisma.user.update({
-            where: { id: targetUserId },
-            data: dataToUpdate,
+            where: { id: userId },
+            data: { status },
             select: {
                 id: true,
                 name: true,
                 email: true,
-                status: true,
                 role: true,
-                updatedAt: true 
+                status: true,
+                createdAt: true,
+                updatedAt: true,
             }
         });
-        
-        console.log(`API /admin/users/${targetUserId}: User updated successfully`);
-        console.log("--- API PUT /api/admin/users/[userId] (Prisma) SUCCESS ---");
-        return NextResponse.json({ message: 'User updated successfully', user: updatedUser }, { status: 200 });
 
+        return NextResponse.json({ user: updatedUser });
     } catch (error) {
-        return handleApiError(error);
+        console.error('Error updating user:', error);
+        return NextResponse.json({ message: 'Failed to update user' }, { status: 500 });
     }
 }

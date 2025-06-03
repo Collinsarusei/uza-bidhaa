@@ -16,6 +16,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
 import { UserProfile } from '@/lib/types';
 import { cn } from '@/lib/utils';
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { UploadButton } from "@uploadthing/react";
+import type { OurFileRouter } from "@/app/api/uploadthing/core";
+import { Icons } from "@/components/icons";
 
 type UserRole = 'USER' | 'ADMIN';
 
@@ -157,8 +161,42 @@ export default function ProfilePage() {
         <TabsContent value="general">
           <Card>
             <CardHeader>
-              <CardTitle>General Information</CardTitle>
-              <CardDescription>Update your personal information and preferences</CardDescription>
+              <div className="flex items-center gap-4 mb-4">
+                <div className="relative">
+                  <Avatar className="h-20 w-20">
+                    <AvatarImage src={userData?.image || undefined} alt={userData?.name || "User profile picture"} />
+                    <AvatarFallback>{userData?.name?.charAt(0)?.toUpperCase() || 'U'}</AvatarFallback>
+                  </Avatar>
+                  <div className="absolute bottom-0 right-0">
+                    <UploadButton<OurFileRouter, "profilePictureUploader">
+                      endpoint="profilePictureUploader"
+                      onClientUploadComplete={(res) => {
+                        if (res && res.length > 0) {
+                          setUserData(prev => prev ? { ...prev, image: res[0].url } : null);
+                          toast({ title: "Success", description: "Profile picture updated successfully." });
+                        }
+                      }}
+                      onUploadError={(error: Error) => {
+                        toast({ title: "Error", description: error.message, variant: "destructive" });
+                      }}
+                      appearance={{
+                        button: "rounded-full h-8 w-8 p-0 bg-primary text-primary-foreground",
+                      }}
+                      content={{
+                        button({ ready, isUploading }) {
+                          if (isUploading) return <Icons.spinner className="h-4 w-4 animate-spin" />;
+                          return <Icons.edit className="h-4 w-4" />;
+                        },
+                        allowedContent: () => null
+                      }}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <CardTitle>General Information</CardTitle>
+                  <CardDescription>Update your personal information and preferences</CardDescription>
+                </div>
+              </div>
             </CardHeader>
             <CardContent>
               <Form {...form}>

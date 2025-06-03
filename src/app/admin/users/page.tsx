@@ -92,24 +92,24 @@ export default function AdminUsersPage() {
     }, [isAuthorized, status, fetchUsers]);
 
 
-    const handleToggleSuspendUser = async (userId: string, currentSuspendedStatus: boolean | undefined) => {
+    const handleToggleSuspendUser = async (userId: string, currentStatus: string | undefined) => {
         if (userId === session?.user?.id) {
             toast({ title: "Action Denied", description: "Admin cannot suspend their own account.", variant: "destructive" });
             return;
         }
         setProcessingUserId(userId);
-        const newSuspendedStatus = !(currentSuspendedStatus ?? false);
+        const newStatus = currentStatus === 'SUSPENDED' ? 'ACTIVE' : 'SUSPENDED';
         try {
             const response = await fetch(`/api/admin/users/${userId}`, {
-                method: 'PATCH',
+                method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ isSuspended: newSuspendedStatus }),
+                body: JSON.stringify({ status: newStatus }),
             });
             const result = await response.json();
             if (!response.ok) {
                 throw new Error(result.message || `Failed to update user status.`);
             }
-            toast({ title: "Success", description: `User ${newSuspendedStatus ? 'suspended' : 'reactivated'}.` });
+            toast({ title: "Success", description: `User ${newStatus === 'SUSPENDED' ? 'suspended' : 'reactivated'}.` });
             fetchUsers(); // Refresh data
         } catch (err) {
             const message = err instanceof Error ? err.message : `Could not update user status.`;
@@ -157,8 +157,8 @@ export default function AdminUsersPage() {
             <header>
                 <h1 className="text-2xl md:text-3xl font-bold">User Management</h1>
                 <p className="text-sm md:text-base text-muted-foreground">
-                    View and manage registered users on the platform.
-                </p>
+                View and manage registered users on the platform.
+            </p>
             </header>
 
             {isLoading && (
@@ -190,20 +190,20 @@ export default function AdminUsersPage() {
                         ) : (
                             <div className="overflow-x-auto -mx-4 md:mx-0">
                                 <div className="inline-block min-w-full align-middle">
-                                    <Table>
-                                        <TableHeader>
-                                            <TableRow>
+                            <Table>
+                                <TableHeader>
+                                    <TableRow>
                                                 <TableHead className="whitespace-nowrap">Name</TableHead>
                                                 <TableHead className="whitespace-nowrap">Email</TableHead>
                                                 <TableHead className="hidden md:table-cell">Phone</TableHead>
                                                 <TableHead className="whitespace-nowrap">Role</TableHead>
                                                 <TableHead className="whitespace-nowrap">Joined</TableHead>
                                                 <TableHead className="text-right whitespace-nowrap">Actions</TableHead>
-                                            </TableRow>
-                                        </TableHeader>
-                                        <TableBody>
-                                            {users.map((user) => (
-                                                <TableRow key={user.id}>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {users.map((user) => (
+                                        <TableRow key={user.id}>
                                                     <TableCell className="whitespace-nowrap">
                                                         <div className="flex items-center gap-2">
                                                             <Avatar className="h-8 w-8">
@@ -218,25 +218,44 @@ export default function AdminUsersPage() {
                                                     <TableCell className="whitespace-nowrap">
                                                         <Badge variant={user.role === 'ADMIN' ? 'default' : 'secondary'}>
                                                             {user.role}
-                                                        </Badge>
-                                                    </TableCell>
+                                                </Badge>
+                                            </TableCell>
                                                     <TableCell className="whitespace-nowrap">
                                                         {formatDate(user.createdAt)}
                                                     </TableCell>
                                                     <TableCell className="text-right whitespace-nowrap">
-                                                        <Button
-                                                            variant="ghost"
-                                                            size="sm"
-                                                            onClick={() => handleViewUser(user)}
-                                                        >
-                                                            <Icons.eye className="h-4 w-4" />
-                                                            <span className="sr-only">View</span>
-                                                        </Button>
+                                                        <div className="flex justify-end gap-2">
+                                                            <Button 
+                                                                variant="ghost"
+                                                                size="sm"
+                                                                onClick={() => handleViewUser(user)}
+                                                            >
+                                                                <Icons.eye className="h-4 w-4" />
+                                                                <span className="sr-only">View</span>
+                                                            </Button>
+                                                            <Button
+                                                                variant="ghost"
+                                                                size="sm"
+                                                                onClick={() => handleToggleSuspendUser(user.id, user.status)}
+                                                                disabled={processingUserId === user.id}
+                                                            >
+                                                                {processingUserId === user.id ? (
+                                                                    <Icons.spinner className="h-4 w-4 animate-spin" />
+                                                                ) : user.status === 'SUSPENDED' ? (
+                                                                    <Icons.check className="h-4 w-4" />
+                                                                ) : (
+                                                                    <Icons.alertTriangle className="h-4 w-4" />
+                                                                )}
+                                                                <span className="sr-only">
+                                                                    {user.status === 'SUSPENDED' ? 'Reactivate' : 'Suspend'}
+                                                                </span>
+                                                            </Button>
+                                                        </div>
                                                     </TableCell>
-                                                </TableRow>
-                                            ))}
-                                        </TableBody>
-                                    </Table>
+                                        </TableRow>
+                                    ))}
+                                </TableBody>
+                            </Table>
                                 </div>
                             </div>
                         )}

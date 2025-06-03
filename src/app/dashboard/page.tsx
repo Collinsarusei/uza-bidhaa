@@ -79,7 +79,7 @@ function DashboardContent() {
         body: JSON.stringify({
           recipientId: messageRecipient.sellerId,
           itemId: messageRecipient.itemId,
-          content: messageText.trim(),
+          text: messageText.trim(),
           itemTitle: messageRecipient.itemTitle,
           itemImageUrl: messageRecipient.itemImageUrl
         })

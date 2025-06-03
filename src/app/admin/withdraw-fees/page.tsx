@@ -188,7 +188,7 @@ export default function WithdrawFeesPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {withdrawFees.map((fee) => (
+            {withdrawFees.map((fee) => (
                         <TableRow key={fee.id}>
                           <TableCell className="whitespace-nowrap">
                             KES {fee.amount.toLocaleString()}
@@ -250,7 +250,7 @@ export default function WithdrawFeesPage() {
                   Save Changes
                 </Button>
               </DialogFooter>
-            </div>
+      </div>
           )}
         </DialogContent>
       </Dialog>

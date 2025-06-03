@@ -16,16 +16,16 @@ interface AdminSection {
 
 const adminSections: AdminSection[] = [
     {
-        href: '/admin/fees',
-        label: 'Fee Settings', // Slightly clearer name
+        href: '/admin/fee-rules',
+        label: 'Fee Settings',
         description: "Configure platform transaction fee percentages.",
-        icon: <Icons.settings className="h-6 w-6" /> // Changed from slidersHorizontal to settings
+        icon: <Icons.settings className="h-6 w-6" />
     },
     {
         href: '/admin/platform-fees',
-        label: 'Platform Earnings', // Clearer than just "Fees"
+        label: 'Platform Earnings',
         description: "View accumulated platform earnings and financial summaries.",
-        icon: <Icons.circleDollarSign className="h-6 w-6" /> // Keep existing icon
+        icon: <Icons.circleDollarSign className="h-6 w-6" />
     },
     {
         href: '/admin/disputes',

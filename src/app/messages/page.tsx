@@ -226,12 +226,8 @@ export default function MessagesPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           conversationId: selectedConversation.id,
-          recipientId,
-          itemId: itemIdToSend,
           text: messageText,
-          itemTitle: selectedConversation.itemTitle,
-          itemImageUrl: selectedConversation.itemImageUrl,
-        }),
+        })
       });
 
       const result = await response.json();

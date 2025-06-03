@@ -247,20 +247,20 @@ export default function AdminDisputesPage() {
                         ) : (
                             <div className="overflow-x-auto -mx-4 md:mx-0">
                                 <div className="inline-block min-w-full align-middle">
-                                    <Table>
-                                        <TableHeader>
-                                            <TableRow>
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
                                                 <TableHead className="whitespace-nowrap">Order ID</TableHead>
                                                 <TableHead className="whitespace-nowrap">Item</TableHead>
                                                 <TableHead className="hidden md:table-cell">Description</TableHead>
                                                 <TableHead className="whitespace-nowrap">Status</TableHead>
                                                 <TableHead className="whitespace-nowrap">Created</TableHead>
                                                 <TableHead className="text-right whitespace-nowrap">Actions</TableHead>
-                                            </TableRow>
-                                        </TableHeader>
-                                        <TableBody>
-                                            {disputes.map((dispute) => (
-                                                <TableRow key={dispute.id}>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {disputes.map((dispute) => (
+                                            <TableRow key={dispute.id}>
                                                     <TableCell className="whitespace-nowrap">
                                                         {dispute.orderId}
                                                     </TableCell>
@@ -290,21 +290,21 @@ export default function AdminDisputesPage() {
                                                     </TableCell>
                                                     <TableCell className="whitespace-nowrap">
                                                         {formatDate(dispute.createdAt)}
-                                                    </TableCell>
+                                                </TableCell>
                                                     <TableCell className="text-right whitespace-nowrap">
-                                                        <Button
+                                                            <Button 
                                                             variant="ghost"
-                                                            size="sm"
+                                                                size="sm"
                                                             onClick={() => handleViewDispute(dispute)}
                                                         >
                                                             <Icons.eye className="h-4 w-4" />
                                                             <span className="sr-only">View</span>
-                                                        </Button>
-                                                    </TableCell>
-                                                </TableRow>
-                                            ))}
-                                        </TableBody>
-                                    </Table>
+                                                            </Button>
+                                                </TableCell>
+                                            </TableRow>
+                                        ))}
+                                    </TableBody>
+                                </Table>
                                 </div>
                             </div>
                         )}

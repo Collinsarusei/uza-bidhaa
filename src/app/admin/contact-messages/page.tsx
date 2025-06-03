@@ -235,47 +235,47 @@ export default function AdminContactMessagesPage() {
           ) : (
             <div className="overflow-x-auto -mx-4 md:mx-0">
               <div className="inline-block min-w-full align-middle">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
+              <Table>
+                <TableHeader>
+                  <TableRow>
                       <TableHead className="whitespace-nowrap">From</TableHead>
                       <TableHead className="whitespace-nowrap">Subject</TableHead>
                       <TableHead className="hidden md:table-cell">Message</TableHead>
                       <TableHead className="whitespace-nowrap">Status</TableHead>
                       <TableHead className="whitespace-nowrap">Received</TableHead>
                       <TableHead className="text-right whitespace-nowrap">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {messages.map((message) => (
-                      <TableRow key={message.id}>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {messages.map((message) => (
+                    <TableRow key={message.id}>
                         <TableCell className="whitespace-nowrap">{message.user?.name || 'Unknown User'}</TableCell>
                         <TableCell className="whitespace-nowrap">{message.subject}</TableCell>
                         <TableCell className="hidden md:table-cell">
                           <div className="max-w-[200px] truncate">{message.message}</div>
-                        </TableCell>
+                      </TableCell>
                         <TableCell className="whitespace-nowrap">
-                          <Badge variant={getStatusBadgeVariant(message.status)}>
-                            {message.status.toLowerCase().replace('_', ' ')}
-                          </Badge>
-                        </TableCell>
+                        <Badge variant={getStatusBadgeVariant(message.status)}>
+                          {message.status.toLowerCase().replace('_', ' ')}
+                        </Badge>
+                      </TableCell>
                         <TableCell className="whitespace-nowrap">
                           {formatDate(message.createdAt)}
                         </TableCell>
                         <TableCell className="text-right whitespace-nowrap">
-                          <Button
+                            <Button
                             variant="ghost"
-                            size="sm"
+                              size="sm"
                             onClick={() => handleViewMessage(message)}
                           >
                             <Icons.eye className="h-4 w-4" />
                             <span className="sr-only">View</span>
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                              </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
               </div>
             </div>
           )}

@@ -153,7 +153,7 @@ export default function AdminPlatformFeesPage() {
                 <h1 className="text-2xl md:text-3xl font-bold">Platform Fees</h1>
                 <p className="text-sm md:text-base text-muted-foreground">
                     View and manage platform fees from transactions.
-                </p>
+            </p>
             </header>
 
             <Card>
@@ -169,17 +169,17 @@ export default function AdminPlatformFeesPage() {
                     ) : (
                         <div className="overflow-x-auto -mx-4 md:mx-0">
                             <div className="inline-block min-w-full align-middle">
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow>
+                        <Table>
+                            <TableHeader>
+                                <TableRow>
                                             <TableHead className="whitespace-nowrap">Order ID</TableHead>
                                             <TableHead className="whitespace-nowrap">Amount</TableHead>
                                             <TableHead className="hidden md:table-cell">Description</TableHead>
                                             <TableHead className="whitespace-nowrap">Date</TableHead>
                                             <TableHead className="text-right whitespace-nowrap">Actions</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
                                         {feesData?.records.map((fee) => (
                                             <TableRow key={fee.id}>
                                                 <TableCell className="whitespace-nowrap">
@@ -192,10 +192,10 @@ export default function AdminPlatformFeesPage() {
                                                     <div className="max-w-[200px] truncate">
                                                         Platform fee from sale
                                                     </div>
-                                                </TableCell>
+                                        </TableCell>
                                                 <TableCell className="whitespace-nowrap">
                                                     {formatDate(fee.createdAt)}
-                                                </TableCell>
+                                        </TableCell>
                                                 <TableCell className="text-right whitespace-nowrap">
                                                     <Button
                                                         variant="ghost"
@@ -205,11 +205,11 @@ export default function AdminPlatformFeesPage() {
                                                         <Icons.eye className="h-4 w-4" />
                                                         <span className="sr-only">View</span>
                                                     </Button>
-                                                </TableCell>
-                                            </TableRow>
-                                        ))}
-                                    </TableBody>
-                                </Table>
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
                             </div>
                         </div>
                     )}

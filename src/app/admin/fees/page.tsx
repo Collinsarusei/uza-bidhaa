@@ -23,42 +23,42 @@ interface Fee {
 }
 
 export default function AdminFeesPage() {
-  const { data: session, status } = useSession();
-  const router = useRouter();
-  const { toast } = useToast();
+    const { data: session, status } = useSession();
+    const router = useRouter();
+    const { toast } = useToast();
   const [fees, setFees] = useState<Fee[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
+    const [isLoading, setIsLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+    const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
 
-  useEffect(() => {
-    if (status === 'authenticated') {
-      setIsAuthorized((session?.user as any)?.role === 'ADMIN');
-    } else if (status === 'unauthenticated') {
-      setIsAuthorized(false);
-      router.push('/auth');
-    }
-  }, [status, router, session]);
+    useEffect(() => {
+        if (status === 'authenticated') {
+            setIsAuthorized((session?.user as any)?.role === 'ADMIN');
+        } else if (status === 'unauthenticated') {
+            setIsAuthorized(false);
+            router.push('/auth');
+        }
+    }, [status, router, session]);
 
   const fetchFees = async () => {
-    try {
-      const response = await fetch('/api/admin/fees', {
-        cache: 'no-store',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
-      if (!response.ok) {
+            try {
+                const response = await fetch('/api/admin/fee-rules', {
+                    cache: 'no-store',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                });
+                if (!response.ok) {
         throw new Error('Failed to fetch fees');
-      }
-      const data = await response.json();
-      setFees(data);
-    } catch (err) {
+                }
+                const data = await response.json();
+      setFees(data.feeRules);
+            } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load fees');
-    } finally {
-      setIsLoading(false);
-    }
-  };
+            } finally {
+                setIsLoading(false);
+            }
+        };
 
   useEffect(() => {
     if (isAuthorized === true) {
@@ -75,39 +75,39 @@ export default function AdminFeesPage() {
       return format(parseISO(dateString), 'PPpp');
     } catch {
       return 'Invalid Date';
-    }
-  };
+        }
+    };
 
-  if (status === 'loading' || isAuthorized === null) {
-    return (
+    if (status === 'loading' || isAuthorized === null) {
+        return (
       <div className="container mx-auto p-4 md:p-6">
-        <Skeleton className="h-8 w-1/2 mb-2" />
-        <Skeleton className="h-4 w-3/4 mb-6" />
-        <Card>
+                <Skeleton className="h-8 w-1/2 mb-2" />
+                <Skeleton className="h-4 w-3/4 mb-6" />
+                <Card>
           <CardHeader>
             <Skeleton className="h-6 w-1/3" />
           </CardHeader>
           <CardContent>
             <Skeleton className="h-40 w-full" />
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
-  if (!isAuthorized) {
-    return (
+                    </CardContent>
+                </Card>
+            </div>
+        );
+    }
+    
+    if (!isAuthorized) {
+         return (
       <div className="container mx-auto p-4 md:p-6">
-        <Alert variant="destructive">
-          <Icons.alertTriangle className="h-4 w-4" />
-          <AlertTitle>Access Denied</AlertTitle>
+                 <Alert variant="destructive">
+                     <Icons.alertTriangle className="h-4 w-4" />
+                     <AlertTitle>Access Denied</AlertTitle>
           <AlertDescription>You do not have permission to access this page.</AlertDescription>
-        </Alert>
-      </div>
-    );
-  }
+                 </Alert>
+             </div>
+         );
+    }
 
-  return (
+    return (
     <div className="container mx-auto p-4 md:p-6 space-y-4 md:space-y-6">
       <header>
         <h1 className="text-2xl md:text-3xl font-bold">Transaction Fees</h1>
@@ -118,21 +118,21 @@ export default function AdminFeesPage() {
 
       {isLoading && (
         <Card>
-          <CardHeader>
+                <CardHeader>
             <Skeleton className="h-6 w-1/4" />
-          </CardHeader>
+                </CardHeader>
           <CardContent>
             <Skeleton className="h-40 w-full" />
           </CardContent>
         </Card>
       )}
 
-      {error && (
-        <Alert variant="destructive">
-          <Icons.alertTriangle className="h-4 w-4" />
-          <AlertTitle>Error</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
+                        {error && (
+                            <Alert variant="destructive">
+                                <Icons.alertTriangle className="h-4 w-4" />
+                                <AlertTitle>Error</AlertTitle>
+                                <AlertDescription>{error}</AlertDescription>
+                            </Alert>
       )}
 
       {!isLoading && !error && (
@@ -175,10 +175,10 @@ export default function AdminFeesPage() {
                   </Table>
                 </div>
               </div>
-            )}
-          </CardContent>
-        </Card>
+                        )}
+                    </CardContent>
+            </Card>
       )}
-    </div>
-  );
+        </div>
+    );
 }

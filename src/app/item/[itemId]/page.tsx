@@ -55,12 +55,12 @@ export default function ItemDetailPage() {
         const response = await fetch(`/api/items?itemId=${itemId}`);
         if (!response.ok) {
           const errData = await response.json();
-          throw new Error(errData.message || `HTTP error! status: ${response.status}`);
+             throw new Error(errData.message || `HTTP error! status: ${response.status}`);
         }
 
         const data = await response.json();
         if (!data || data.length === 0) { 
-          throw new Error('Item not found.');
+           throw new Error('Item not found.');
         }
 
         const itemData = data[0];
@@ -252,7 +252,7 @@ export default function ItemDetailPage() {
        
       <div className="grid md:grid-cols-2 gap-6 lg:gap-12">
         <div className="space-y-4">
-          {item.mediaUrls && item.mediaUrls.length > 0 ? (
+           {item.mediaUrls && item.mediaUrls.length > 0 ? (
             <>
               <div className="aspect-square w-full rounded-lg overflow-hidden border">
                 <img 
@@ -281,11 +281,11 @@ export default function ItemDetailPage() {
                 </div>
               )}
             </>
-          ) : (
-            <div className="aspect-square w-full bg-secondary rounded-lg flex items-center justify-center text-muted-foreground border">
+           ) : (
+             <div className="aspect-square w-full bg-secondary rounded-lg flex items-center justify-center text-muted-foreground border">
               No images available
-            </div>
-          )}
+             </div>
+           )}
         </div>
 
         <div className="space-y-4">
@@ -293,7 +293,7 @@ export default function ItemDetailPage() {
             <h1 className="text-2xl md:text-3xl font-bold">{item.title}</h1>
             <p className="text-2xl font-semibold text-primary mt-2">
               KES {item.price.toLocaleString()}
-            </p>
+          </p>
             {sellerName && (
               <p className="text-sm text-muted-foreground mt-1">
                 Listed by {sellerName}
@@ -320,15 +320,15 @@ export default function ItemDetailPage() {
               <div>
                 <p className="text-sm text-muted-foreground">Location</p>
                 <p className="font-medium">{item.location}</p>
-              </div>
-              <div>
+           </div>
+           <div>
                 <p className="text-sm text-muted-foreground">Status</p>
                 <Badge variant={isAvailable ? "default" : "secondary"}>
                   {item.status}
                 </Badge>
-              </div>
             </div>
-          </div>
+            </div>
+            </div>
 
           <div className="pt-4 space-y-2">
             {isMyListing ? (
@@ -338,11 +338,11 @@ export default function ItemDetailPage() {
             ) : (
               <>
                 {isAvailable && (
-                  <Button 
-                    className="w-full" 
-                    onClick={handleInitiatePayment}
+                     <Button 
+                         className="w-full" 
+                         onClick={handleInitiatePayment} 
                     disabled={isInitiatingPayment}
-                  >
+                     >
                     {isInitiatingPayment ? (
                       <>
                         <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
@@ -354,35 +354,35 @@ export default function ItemDetailPage() {
                         Buy Now
                       </>
                     )}
-                  </Button>
+                     </Button>
                 )}
                 {canMessageSeller && (
                   <Sheet open={isMessageSheetOpen} onOpenChange={setIsMessageSheetOpen}>
-                    <SheetTrigger asChild>
+                      <SheetTrigger asChild>
                       <Button variant="outline" className="w-full">
                         <Icons.messageSquare className="mr-2 h-4 w-4" />
                         Message Seller
-                      </Button>
-                    </SheetTrigger>
-                    <SheetContent>
-                      <SheetHeader>
+                          </Button>
+                      </SheetTrigger>
+                      <SheetContent>
+                         <SheetHeader>
                         <SheetTitle>Message Seller</SheetTitle>
                         <SheetDescription>
                           Send a message to the seller about this item.
                         </SheetDescription>
-                      </SheetHeader>
+                         </SheetHeader>
                       <div className="py-4">
                         <Label htmlFor="message">Your Message</Label>
-                        <Textarea
+                                 <Textarea 
                           id="message"
-                          value={messageText}
-                          onChange={(e) => setMessageText(e.target.value)}
+                                    value={messageText}
+                                    onChange={(e) => setMessageText(e.target.value)}
                           placeholder="Type your message here..."
                           className="mt-2"
-                          rows={4}
-                        />
-                      </div>
-                      <SheetFooter>
+                                    rows={4}
+                                 />
+                         </div>
+                         <SheetFooter>
                         <SheetClose asChild>
                           <Button variant="outline">Cancel</Button>
                         </SheetClose>
@@ -390,17 +390,17 @@ export default function ItemDetailPage() {
                           onClick={handleSendMessage}
                           disabled={!messageText.trim() || isSendingMessage}
                         >
-                          {isSendingMessage ? (
-                            <>
-                              <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
-                              Sending...
-                            </>
-                          ) : (
-                            'Send Message'
-                          )}
-                        </Button>
-                      </SheetFooter>
-                    </SheetContent>
+                  {isSendingMessage ? (
+                    <>
+                      <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
+                      Sending...
+                    </>
+                  ) : (
+                    'Send Message'
+                  )}
+                             </Button>
+                         </SheetFooter>
+                      </SheetContent>
                   </Sheet>
                 )}
               </>
