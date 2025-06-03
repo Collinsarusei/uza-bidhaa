@@ -286,7 +286,12 @@ export async function GET(req: Request) {
         }
 
         const messages = await prisma.message.findMany({
-            where: { conversationId: conversationId },
+            where: { 
+                conversationId: conversationId,
+                senderId: {
+                    not: ''
+                }
+            },
             orderBy: { createdAt: 'asc' },
             include: { 
                 sender: { 
