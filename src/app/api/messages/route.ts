@@ -6,6 +6,9 @@ import prisma from '@/lib/prisma';
 import { createNotification } from '@/lib/notifications';
 import { Prisma } from '@prisma/client';
 import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
+import { Server as SocketIOServer } from 'socket.io';
+import { Server as NetServer } from 'http';
+import { getIO } from '@/lib/socket';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -14,6 +17,11 @@ export const revalidate = 0;
 
 const SYSTEM_MESSAGE_SENDER_ID = "system_warning"; 
 const CHAT_PAYMENT_WARNING_MESSAGE = "For your safety, ensure all payments are made through the Uza Bidhaa platform. We are not liable for any losses incurred from off-platform payments or direct M-Pesa transfers arranged via chat.";
+
+// Helper function to emit socket events
+const emitMessageEvent = (io: SocketIOServer, conversationId: string, message: any) => {
+  io.to(`conversation:${conversationId}`).emit('new-message', message);
+};
 
 export async function POST(req: Request) {
     console.log("API POST /api/messages (Prisma): Received request");
@@ -36,6 +44,7 @@ export async function POST(req: Request) {
         }
 
         let conversationForNotification: any; // To store conversation data for notification logic
+        let newMessage: any;
 
         if (existingConvId) {
             const existingConversationDetails = await prisma.conversation.findUnique({ 
@@ -69,6 +78,15 @@ export async function POST(req: Request) {
                         senderId: senderId,
                         content: text.trim(),
                         createdAt: now,
+                    },
+                    include: {
+                        sender: {
+                            select: {
+                                id: true,
+                                name: true,
+                                image: true
+                            }
+                        }
                     }
                 }),
                 prisma.conversation.update({
@@ -89,7 +107,14 @@ export async function POST(req: Request) {
                     }
                 }),
             ]);
+            newMessage = transactionResults[0];
             conversationForNotification = transactionResults[1];
+
+            // Emit socket event for new message
+            const io = getIO();
+            if (io) {
+                emitMessageEvent(io, existingConvId, newMessage);
+            }
         } else {
             // For new conversations, require itemId, itemTitle and recipientId
             if (!itemId || !itemTitle || !recipientId) {
@@ -148,9 +173,25 @@ export async function POST(req: Request) {
                 },
                 include: { 
                     item: { select: { sellerId: true, title: true, id: true } }, 
-                    participants: { select: { id: true } }
+                    participants: { select: { id: true } },
+                    messages: {
+                        include: {
+                            sender: {
+                                select: {
+                                    id: true,
+                                    name: true,
+                                    image: true
+                                }
+                            }
+                        },
+                        orderBy: {
+                            createdAt: 'desc'
+                        },
+                        take: 1
+                    }
                 }
             });
+            newMessage = conversationForNotification.messages[0];
         }
 
         // Notification Logic
@@ -189,7 +230,11 @@ export async function POST(req: Request) {
         }
         
         console.log(`API Messages POST: Message successfully processed for conversation ${conversationForNotification.id}`);
-        return NextResponse.json({ message: 'Message sent successfully', conversationId: conversationForNotification.id }, { status: 201 });
+        return NextResponse.json({ 
+            message: 'Message sent successfully', 
+            conversationId: conversationForNotification.id,
+            newMessage: newMessage
+        }, { status: 201 });
 
     } catch (error: any) {
         console.error("API Messages POST Error (Prisma):", error);
@@ -243,7 +288,15 @@ export async function GET(req: Request) {
         const messages = await prisma.message.findMany({
             where: { conversationId: conversationId },
             orderBy: { createdAt: 'asc' },
-            include: { sender: { select: { id: true, name: true, image: true } } } 
+            include: { 
+                sender: { 
+                    select: { 
+                        id: true, 
+                        name: true, 
+                        image: true 
+                    } 
+                } 
+            }
         });
         
         const currentUserParticipantInfo = conversation.participantsInfo.find((p: { userId: string }) => p.userId === currentUserId);

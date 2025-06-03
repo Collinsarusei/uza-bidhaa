@@ -33,6 +33,7 @@ import {
 import { useIsMobile } from "@/hooks/use-mobile";
 import Link from 'next/link';
 import { useRouter } from 'next/navigation'; // Not used, but kept from original
+import { io, Socket } from 'socket.io-client';
 
 // Firebase imports for real-time updates
 import {adminDb} from '@/lib/firebase-admin'; // Adjust path if your firebase init is elsewhere
@@ -58,6 +59,7 @@ export default function MessagesPage() {
   const isMobile = useIsMobile();
   // const router = useRouter(); // Keep if used elsewhere, not directly in provided snippet logic
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [socket, setSocket] = useState<Socket | null>(null);
 
   const currentUserId = session?.user?.id;
 
@@ -128,7 +130,61 @@ export default function MessagesPage() {
     return { inbox, incoming };
   }, [allConversations, currentUserId]);
 
-  // Replace Firestore with REST API for message fetching
+  // Initialize socket connection
+  useEffect(() => {
+    const socketInitializer = async () => {
+      try {
+        await fetch('/api/socket');
+        const socket = io({
+          path: '/api/socket',
+          addTrailingSlash: false,
+        });
+
+        socket.on('connect', () => {
+          console.log('Socket connected');
+        });
+
+        socket.on('connect_error', (error) => {
+          console.error('Socket connection error:', error);
+        });
+
+        setSocket(socket);
+
+        return () => {
+          socket.disconnect();
+        };
+      } catch (error) {
+        console.error('Failed to initialize socket:', error);
+      }
+    };
+
+    socketInitializer();
+  }, []);
+
+  // Join conversation room when selected
+  useEffect(() => {
+    if (socket && selectedConversation?.id) {
+      socket.emit('join-conversation', selectedConversation.id);
+      
+      // Listen for new messages
+      socket.on('new-message', (message: Message) => {
+        setMessages(prev => {
+          // Check if message already exists
+          if (prev.some(m => m.id === message.id)) {
+            return prev;
+          }
+          return [...prev, message];
+        });
+      });
+
+      return () => {
+        socket.emit('leave-conversation', selectedConversation.id);
+        socket.off('new-message');
+      };
+    }
+  }, [socket, selectedConversation?.id]);
+
+  // Replace the polling message fetching with initial fetch
   useEffect(() => {
     if (!selectedConversation?.id || !currentUserId) {
       setMessages([]);
@@ -160,10 +216,6 @@ export default function MessagesPage() {
     };
 
     fetchMessages();
-    // Set up polling for new messages
-    const pollInterval = setInterval(fetchMessages, 5000); // Poll every 5 seconds
-
-    return () => clearInterval(pollInterval);
   }, [selectedConversation?.id, currentUserId, toast]);
 
   useEffect(() => {
@@ -224,12 +276,14 @@ export default function MessagesPage() {
         throw new Error(result.message || `Failed to send message (${response.status})`);
       }
 
-      // Refresh messages after successful send
-      const messagesResponse = await fetch(`/api/messages?conversationId=${selectedConversation.id}`);
-      if (messagesResponse.ok) {
-        const data = await messagesResponse.json();
-        setMessages(data.messages || []);
-      }
+      // Remove optimistic message and add the real one
+      setMessages(prev => {
+        const filtered = prev.filter(msg => msg.id !== tempMessageId);
+        if (result.newMessage) {
+          return [...filtered, result.newMessage];
+        }
+        return filtered;
+      });
     } catch (error) {
       console.error("Error sending message:", error);
       const message = error instanceof Error ? error.message : 'Failed to send message.';
