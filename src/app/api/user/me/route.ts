@@ -7,6 +7,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
 import { differenceInDays, parseISO } from 'date-fns';
 import * as z from 'zod';
+import { createNotification } from '@/lib/notifications';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -160,6 +161,14 @@ export async function PATCH(req: Request) {
                 data: updateData,
                 select: userProfileSelect // Use the predefined select for consistent response
             });
+
+            // Create notification for profile update
+            await createNotification({
+                userId: userId,
+                type: 'profile_update',
+                message: 'Your profile has been updated successfully.',
+            });
+
             console.log("--- API PATCH /user/me (Prisma) SUCCESS: Profile updated ---");
             return NextResponse.json({ message: 'Profile updated successfully', user: updatedUser }, { status: 200 });
         } else {

@@ -150,9 +150,20 @@ export function ProfileContent() {
 
           const updatedProfile = await response.json();
           setProfile(updatedProfile.user);
-          await updateSession(); // Update the session to reflect the new image
+          
+          // Update session with new data
+          await updateSession({
+              ...session,
+              user: {
+                  ...session?.user,
+                  name: updatedProfile.user.name,
+                  image: updatedProfile.user.image,
+              }
+          });
+          
           toast({ title: "Success", description: "Profile updated successfully." });
           setIsEditing(false);
+          setUploadedImageUrl(null); // Clear the temporary image URL after successful save
       } catch (err) {
           setError(err instanceof Error ? err.message : 'Failed to update profile');
           toast({ 
@@ -345,7 +356,7 @@ export function ProfileContent() {
                     </Button>
                 </>
             ) : (
-                <Button variant="outline" onClick={() => { setIsEditing(true); setError(null); }} disabled={isLoading}>Edit Profile</Button>
+                <Button variant="destructive" onClick={() => { setIsEditing(true); setError(null); }} disabled={isLoading}>Edit Profile</Button>
             )}
         </div>
       </CardContent>

@@ -113,7 +113,7 @@ export const Icons = {
   dollarSign: DollarSign,
   receipt: Receipt,
   archive: Archive,
-  spinner: Loader2, // spinner is often an alias for Loader2
+  spinner: Loader2,
   // Ensure the key here matches how you use it in your components, e.g., Icons.CheckAll or Icons.checkAll
   // If you used Icons.CheckAll in NotificationsPage, then the key should be CheckAll: CheckAll
   // If you used Icons.checkAll, then the key should be checkAll: CheckAll

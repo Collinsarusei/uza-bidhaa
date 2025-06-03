@@ -23,6 +23,14 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 
 // Required Next.js configuration for dynamic pages
 export const dynamic = 'force-dynamic';
@@ -52,6 +60,8 @@ export default function AdminContactMessagesPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [processingMessageId, setProcessingMessageId] = useState<string | null>(null);
+  const [selectedMessage, setSelectedMessage] = useState<ContactMessage | null>(null);
+  const [isUpdating, setIsUpdating] = useState(false);
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -74,12 +84,17 @@ export default function AdminContactMessagesPage() {
           },
         });
         if (!response.ok) {
-          throw new Error('Failed to fetch messages');
+          const errorData = await response.json();
+          throw new Error(errorData.message || 'Failed to fetch messages');
         }
         const data = await response.json();
+        if (!data.messages || !Array.isArray(data.messages)) {
+          throw new Error('Invalid response format from server');
+        }
         setMessages(data.messages);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load messages');
+        setMessages([]); // Set empty array on error
       } finally {
         setIsLoading(false);
       }
@@ -149,6 +164,26 @@ export default function AdminContactMessagesPage() {
     }
   };
 
+  const handleViewMessage = (message: ContactMessage) => {
+    setSelectedMessage(message);
+  };
+
+  const handleMarkAsRead = async (messageId: string) => {
+    setIsUpdating(true);
+    try {
+      await handleStatusUpdate(messageId, 'READ');
+    } catch (err) {
+      toast({
+        title: "Error",
+        description: "Failed to mark message as read. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsUpdating(false);
+      setSelectedMessage(null);
+    }
+  };
+
   if (status === 'loading' || isLoading) {
     return (
       <div className="container mx-auto p-6">
@@ -179,10 +214,10 @@ export default function AdminContactMessagesPage() {
   }
 
   return (
-    <div className="container mx-auto p-6 space-y-6">
+    <div className="container mx-auto p-4 md:p-6 space-y-4 md:space-y-6">
       <header>
-        <h1 className="text-3xl font-bold">Contact Messages</h1>
-        <p className="text-muted-foreground">
+        <h1 className="text-2xl md:text-3xl font-bold">Contact Messages</h1>
+        <p className="text-sm md:text-base text-muted-foreground">
           Review and manage messages from users.
         </p>
       </header>
@@ -198,89 +233,109 @@ export default function AdminContactMessagesPage() {
           {messages.length === 0 ? (
             <p className="text-muted-foreground">No contact messages to display.</p>
           ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>From</TableHead>
-                    <TableHead>Subject</TableHead>
-                    <TableHead>Message</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Received</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {messages.map((message) => (
-                    <TableRow key={message.id}>
-                      <TableCell>
-                        {message.user?.name || 'Unknown User'}
-                        <br />
-                        <span className="text-xs text-muted-foreground">
-                          {message.user?.email || 'No email'}
-                        </span>
-                      </TableCell>
-                      <TableCell>{message.subject}</TableCell>
-                      <TableCell className="max-w-xs truncate" title={message.message}>
-                        {message.message}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={getStatusBadgeVariant(message.status)}>
-                          {message.status.toLowerCase().replace('_', ' ')}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>{formatDate(message.createdAt)}</TableCell>
-                      <TableCell className="text-right space-x-2">
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              disabled={processingMessageId === message.id}
-                            >
-                              {processingMessageId === message.id ? (
-                                <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
-                              ) : null}
-                              Update Status
-                            </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>Update Message Status</AlertDialogTitle>
-                              <AlertDialogDescription>
-                                Select the new status for this message.
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <div className="grid gap-4 py-4">
-                              <Button
-                                variant="outline"
-                                onClick={() => handleStatusUpdate(message.id, 'READ')}
-                                disabled={processingMessageId === message.id || message.status === 'READ'}
-                              >
-                                Mark as Read
-                              </Button>
-                              <Button
-                                variant="outline"
-                                onClick={() => handleStatusUpdate(message.id, 'RESPONDED')}
-                                disabled={processingMessageId === message.id || message.status === 'RESPONDED'}
-                              >
-                                Mark as Responded
-                              </Button>
-                            </div>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>Cancel</AlertDialogCancel>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
-                      </TableCell>
+            <div className="overflow-x-auto -mx-4 md:mx-0">
+              <div className="inline-block min-w-full align-middle">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="whitespace-nowrap">From</TableHead>
+                      <TableHead className="whitespace-nowrap">Subject</TableHead>
+                      <TableHead className="hidden md:table-cell">Message</TableHead>
+                      <TableHead className="whitespace-nowrap">Status</TableHead>
+                      <TableHead className="whitespace-nowrap">Received</TableHead>
+                      <TableHead className="text-right whitespace-nowrap">Actions</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {messages.map((message) => (
+                      <TableRow key={message.id}>
+                        <TableCell className="whitespace-nowrap">{message.user?.name || 'Unknown User'}</TableCell>
+                        <TableCell className="whitespace-nowrap">{message.subject}</TableCell>
+                        <TableCell className="hidden md:table-cell">
+                          <div className="max-w-[200px] truncate">{message.message}</div>
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap">
+                          <Badge variant={getStatusBadgeVariant(message.status)}>
+                            {message.status.toLowerCase().replace('_', ' ')}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap">
+                          {formatDate(message.createdAt)}
+                        </TableCell>
+                        <TableCell className="text-right whitespace-nowrap">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleViewMessage(message)}
+                          >
+                            <Icons.eye className="h-4 w-4" />
+                            <span className="sr-only">View</span>
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             </div>
           )}
         </CardContent>
       </Card>
+
+      {/* Message Dialog */}
+      <Dialog open={!!selectedMessage} onOpenChange={() => setSelectedMessage(null)}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>Message Details</DialogTitle>
+          </DialogHeader>
+          {selectedMessage && (
+            <div className="space-y-4">
+              <div>
+                <Label>From</Label>
+                <p className="text-sm">{selectedMessage.user?.email}</p>
+              </div>
+              <div>
+                <Label>Subject</Label>
+                <p className="text-sm">{selectedMessage.subject}</p>
+              </div>
+              <div>
+                <Label>Message</Label>
+                <p className="text-sm whitespace-pre-wrap">{selectedMessage.message}</p>
+              </div>
+              <div>
+                <Label>Received</Label>
+                <p className="text-sm">{formatDate(selectedMessage.createdAt)}</p>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => setSelectedMessage(null)}
+                >
+                  Close
+                </Button>
+                {selectedMessage.status !== 'READ' && (
+                  <Button
+                    onClick={() => handleMarkAsRead(selectedMessage.id)}
+                    disabled={isUpdating}
+                  >
+                    {isUpdating ? (
+                      <>
+                        <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
+                        Updating...
+                      </>
+                    ) : (
+                      <>
+                        <Icons.check className="mr-2 h-4 w-4" />
+                        Mark as Read
+                      </>
+                    )}
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 } 

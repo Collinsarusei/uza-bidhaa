@@ -61,6 +61,7 @@ export interface Item {
   offersDelivery: boolean;
   acceptsInstallments: boolean;
   discountPercentage?: number | null; // Prisma Float
+  condition: string;
   createdAt: ApiTimestamp;
   updatedAt: ApiTimestamp;
   seller?: Partial<UserProfile>; // Optional: if seller details are embedded

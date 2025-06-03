@@ -25,9 +25,21 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 
 // Use Partial to allow for selected fields from API
-type DisplayUser = Pick<UserProfile, 'id' | 'name' | 'email' | 'phoneNumber' | 'createdAt' | 'status' | 'location'>;
+type DisplayUser = Pick<UserProfile, 'id' | 'name' | 'email' | 'phoneNumber' | 'createdAt' | 'status' | 'location'> & {
+    image?: string;
+    role?: 'ADMIN' | 'USER';
+};
 
 export default function AdminUsersPage() {
     const { data: session, status } = useSession();
@@ -39,6 +51,7 @@ export default function AdminUsersPage() {
     const [error, setError] = useState<string | null>(null);
     const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
     const [processingUserId, setProcessingUserId] = useState<string | null>(null);
+    const [selectedUser, setSelectedUser] = useState<DisplayUser | null>(null);
 
     useEffect(() => {
         if (status === 'authenticated') {
@@ -115,6 +128,10 @@ export default function AdminUsersPage() {
         }
     };
 
+    const handleViewUser = (user: DisplayUser) => {
+        setSelectedUser(user);
+    };
+
     if (status === 'loading' || isAuthorized === null) {
         return (
             <div className="space-y-4">
@@ -136,11 +153,13 @@ export default function AdminUsersPage() {
     }
 
     return (
-        <div className="space-y-6">
-            <h1 className="text-3xl font-bold">User Management</h1>
-            <p className="text-muted-foreground">
-                View and manage registered users on the platform.
-            </p>
+        <div className="container mx-auto p-4 md:p-6 space-y-4 md:space-y-6">
+            <header>
+                <h1 className="text-2xl md:text-3xl font-bold">User Management</h1>
+                <p className="text-sm md:text-base text-muted-foreground">
+                    View and manage registered users on the platform.
+                </p>
+            </header>
 
             {isLoading && (
                 <Card>
@@ -160,82 +179,115 @@ export default function AdminUsersPage() {
             {!isLoading && !error && (
                 <Card>
                     <CardHeader>
-                        <CardTitle>Registered Users</CardTitle>
+                        <CardTitle>Users</CardTitle>
                         <CardDescription>
                             Total: {users.length} user(s)
                         </CardDescription>
                     </CardHeader>
                     <CardContent>
                         {users.length === 0 ? (
-                            <p className="text-muted-foreground">No users found.</p>
+                            <p className="text-muted-foreground">No users to display.</p>
                         ) : (
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead>Name</TableHead>
-                                        <TableHead>Email</TableHead>
-                                        <TableHead>Phone</TableHead>
-                                        <TableHead>Joined</TableHead>
-                                        <TableHead>Status</TableHead>
-                                        <TableHead>Actions</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {users.map((user) => (
-                                        <TableRow key={user.id}>
-                                            <TableCell className="font-medium">{user.name || 'N/A'}</TableCell>
-                                            <TableCell>{user.email}</TableCell>
-                                            <TableCell>{user.phoneNumber || 'N/A'}</TableCell>
-                                            <TableCell>{formatDate(user.createdAt)}</TableCell>
-                                            <TableCell>
-                                                <Badge variant={user.status ? 'destructive' : 'secondary'}>
-                                                    {user.status ? 'Suspended' : 'Active'}
-                                                </Badge>
-                                            </TableCell>
-                                            <TableCell>
-                                                 <AlertDialog>
-                                                    <AlertDialogTrigger asChild>
-                                                        <Button 
-                                                            variant={user.status ? "secondary" : "destructive"}
+                            <div className="overflow-x-auto -mx-4 md:mx-0">
+                                <div className="inline-block min-w-full align-middle">
+                                    <Table>
+                                        <TableHeader>
+                                            <TableRow>
+                                                <TableHead className="whitespace-nowrap">Name</TableHead>
+                                                <TableHead className="whitespace-nowrap">Email</TableHead>
+                                                <TableHead className="hidden md:table-cell">Phone</TableHead>
+                                                <TableHead className="whitespace-nowrap">Role</TableHead>
+                                                <TableHead className="whitespace-nowrap">Joined</TableHead>
+                                                <TableHead className="text-right whitespace-nowrap">Actions</TableHead>
+                                            </TableRow>
+                                        </TableHeader>
+                                        <TableBody>
+                                            {users.map((user) => (
+                                                <TableRow key={user.id}>
+                                                    <TableCell className="whitespace-nowrap">
+                                                        <div className="flex items-center gap-2">
+                                                            <Avatar className="h-8 w-8">
+                                                                <AvatarImage src={user.image || undefined} alt={user.name || ''} />
+                                                                <AvatarFallback>{user.name?.charAt(0)?.toUpperCase() || 'U'}</AvatarFallback>
+                                                            </Avatar>
+                                                            <span>{user.name || 'Unnamed User'}</span>
+                                                        </div>
+                                                    </TableCell>
+                                                    <TableCell className="whitespace-nowrap">{user.email}</TableCell>
+                                                    <TableCell className="hidden md:table-cell">{user.phoneNumber || 'Not set'}</TableCell>
+                                                    <TableCell className="whitespace-nowrap">
+                                                        <Badge variant={user.role === 'ADMIN' ? 'default' : 'secondary'}>
+                                                            {user.role}
+                                                        </Badge>
+                                                    </TableCell>
+                                                    <TableCell className="whitespace-nowrap">
+                                                        {formatDate(user.createdAt)}
+                                                    </TableCell>
+                                                    <TableCell className="text-right whitespace-nowrap">
+                                                        <Button
+                                                            variant="ghost"
                                                             size="sm"
-                                                            disabled={processingUserId === user.id || user.id === session?.user?.id}
+                                                            onClick={() => handleViewUser(user)}
                                                         >
-                                                            {processingUserId === user.id ? <Icons.spinner className="mr-2 h-4 w-4 animate-spin" /> : null}
-                                                            {user.status ? 'Reactivate' : 'Suspend'}
+                                                            <Icons.eye className="h-4 w-4" />
+                                                            <span className="sr-only">View</span>
                                                         </Button>
-                                                    </AlertDialogTrigger>
-                                                    <AlertDialogContent>
-                                                        <AlertDialogHeader>
-                                                            <AlertDialogTitle>
-                                                                {user.status ? 'Reactivate User?' : 'Suspend User?'}
-                                                            </AlertDialogTitle>
-                                                            <AlertDialogDescription>
-                                                                Are you sure you want to {user.status ? 'reactivate' : 'suspend'} the account for {user.name || user.email}?
-                                                                {user.status ? ' They will regain access to the platform.' : ' They will lose access to their account.'}
-                                                            </AlertDialogDescription>
-                                                        </AlertDialogHeader>
-                                                        <AlertDialogFooter>
-                                                            <AlertDialogCancel disabled={processingUserId === user.id}>Cancel</AlertDialogCancel>
-                                                            <AlertDialogAction 
-                                                                onClick={() => handleToggleSuspendUser(user.id, user.status === 'SUSPENDED')} 
-                                                                disabled={processingUserId === user.id}
-                                                                className={user.status === 'SUSPENDED' ? "" : "bg-destructive hover:bg-destructive/90 text-destructive-foreground"}
-                                                            >
-                                                                {processingUserId === user.id ? <Icons.spinner className="mr-2 h-4 w-4 animate-spin" /> : null}
-                                                                Confirm {user.status ? 'Reactivation' : 'Suspension'}
-                                                            </AlertDialogAction>
-                                                        </AlertDialogFooter>
-                                                    </AlertDialogContent>
-                                                </AlertDialog>
-                                            </TableCell>
-                                        </TableRow>
-                                    ))}
-                                </TableBody>
-                            </Table>
+                                                    </TableCell>
+                                                </TableRow>
+                                            ))}
+                                        </TableBody>
+                                    </Table>
+                                </div>
+                            </div>
                         )}
                     </CardContent>
                 </Card>
             )}
+
+            {/* User Dialog */}
+            <Dialog open={!!selectedUser} onOpenChange={() => setSelectedUser(null)}>
+                <DialogContent className="sm:max-w-[500px]">
+                    <DialogHeader>
+                        <DialogTitle>User Details</DialogTitle>
+                    </DialogHeader>
+                    {selectedUser && (
+                        <div className="space-y-4">
+                            <div className="flex items-center gap-4">
+                                <Avatar className="h-16 w-16">
+                                    <AvatarImage src={selectedUser.image || undefined} alt={selectedUser.name || ''} />
+                                    <AvatarFallback>{selectedUser.name?.charAt(0)?.toUpperCase() || 'U'}</AvatarFallback>
+                                </Avatar>
+                                <div>
+                                    <h3 className="text-lg font-semibold">{selectedUser.name || 'Unnamed User'}</h3>
+                                    <p className="text-sm text-muted-foreground">{selectedUser.email}</p>
+                                </div>
+                            </div>
+                            <div>
+                                <Label>Phone Number</Label>
+                                <p className="text-sm">{selectedUser.phoneNumber || 'Not set'}</p>
+                            </div>
+                            <div>
+                                <Label>Role</Label>
+                                <Badge variant={selectedUser.role === 'ADMIN' ? 'default' : 'secondary'}>
+                                    {selectedUser.role}
+                                </Badge>
+                            </div>
+                            <div>
+                                <Label>Joined</Label>
+                                <p className="text-sm">{formatDate(selectedUser.createdAt)}</p>
+                            </div>
+                            <div className="flex justify-end">
+                                <Button
+                                    variant="outline"
+                                    onClick={() => setSelectedUser(null)}
+                                >
+                                    Close
+                                </Button>
+                            </div>
+                        </div>
+                    )}
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }

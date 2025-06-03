@@ -14,6 +14,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { format, parseISO } from 'date-fns';
 import type { PlatformFeeRecord } from '@/lib/types';
 import Link from 'next/link';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 
 interface PlatformFeesData {
     totalBalance: number;
@@ -29,6 +31,7 @@ export default function AdminPlatformFeesPage() {
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
+    const [selectedFee, setSelectedFee] = useState<PlatformFeeRecord | null>(null);
 
     useEffect(() => {
         // Basic admin authorization check
@@ -140,78 +143,117 @@ export default function AdminPlatformFeesPage() {
         );
     }
 
+    const handleViewFee = (fee: PlatformFeeRecord) => {
+        setSelectedFee(fee);
+    };
 
     return (
-        <div className="space-y-6">
-            <h1 className="text-3xl font-bold">Platform Fees</h1>
-            <p className="text-muted-foreground">
-                Overview of fees collected from successful transactions.
-            </p>
+        <div className="container mx-auto p-4 md:p-6 space-y-4 md:space-y-6">
+            <header>
+                <h1 className="text-2xl md:text-3xl font-bold">Platform Fees</h1>
+                <p className="text-sm md:text-base text-muted-foreground">
+                    View and manage platform fees from transactions.
+                </p>
+            </header>
 
-            {/* Total Balance Card */}
             <Card>
                 <CardHeader>
-                    <CardDescription>Total Accumulated Fees</CardDescription>
-                    <CardTitle className="text-3xl">
-                        KES {feesData?.totalBalance?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) ?? '0.00'}
-                    </CardTitle>
-                </CardHeader>
-                <CardContent>
-                    <p className="text-sm text-muted-foreground">
-                        This balance represents the total fees collected by the platform.
-                    </p>
-                    {/* Add withdrawal button/logic here if needed in the future */}
-                    {/* <Button disabled>Initiate Fee Withdrawal (Coming Soon)</Button> */}
-                </CardContent>
-            </Card>
-
-            {/* Fee History Card */}
-            <Card>
-                <CardHeader>
-                    <CardTitle>Fee Collection History</CardTitle>
+                    <CardTitle>Platform Fees Summary</CardTitle>
                     <CardDescription>
-                        Individual fee records from completed sales. Total Records: {feesData?.records?.length ?? 0}
+                        Total Fees: KES {feesData?.totalBalance?.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
                     {feesData?.records?.length === 0 ? (
-                        <p className="text-muted-foreground">No fee records found.</p>
+                        <p className="text-muted-foreground">No platform fees to display.</p>
                     ) : (
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>Amount (KES)</TableHead>
-                                    <TableHead>Related Item</TableHead>
-                                    <TableHead>Related Payment</TableHead>
-                                    <TableHead>Seller</TableHead>
-                                    <TableHead>Collected On</TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {feesData?.records.map((record) => (
-                                    <TableRow key={record.id}>
-                                        <TableCell className="font-medium">
-                                            {record.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                        </TableCell>
-                                        <TableCell>
-                                             {/* Optional: Link to item if needed */}
-                                             <Link href={`/item/${record.relatedItemId}`} className="hover:underline" target="_blank" rel="noopener noreferrer">
-                                                 {record.relatedItemId.substring(0, 8)}...
-                                             </Link>
-                                        </TableCell>
-                                        <TableCell>
-                                            {/* Optional: Link to payment/dispute page if needed */}
-                                            {record.relatedPaymentId.substring(0, 8)}...
-                                        </TableCell>
-                                        <TableCell>{record.sellerId.substring(0, 8)}...</TableCell>
-                                        <TableCell>{formatDate(record.createdAt)}</TableCell>
-                                    </TableRow>
-                                ))}
-                            </TableBody>
-                        </Table>
+                        <div className="overflow-x-auto -mx-4 md:mx-0">
+                            <div className="inline-block min-w-full align-middle">
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead className="whitespace-nowrap">Order ID</TableHead>
+                                            <TableHead className="whitespace-nowrap">Amount</TableHead>
+                                            <TableHead className="hidden md:table-cell">Description</TableHead>
+                                            <TableHead className="whitespace-nowrap">Date</TableHead>
+                                            <TableHead className="text-right whitespace-nowrap">Actions</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {feesData?.records.map((fee) => (
+                                            <TableRow key={fee.id}>
+                                                <TableCell className="whitespace-nowrap">
+                                                    {fee.relatedPaymentId}
+                                                </TableCell>
+                                                <TableCell className="whitespace-nowrap">
+                                                    KES {fee.amount.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                                                </TableCell>
+                                                <TableCell className="hidden md:table-cell">
+                                                    <div className="max-w-[200px] truncate">
+                                                        Platform fee from sale
+                                                    </div>
+                                                </TableCell>
+                                                <TableCell className="whitespace-nowrap">
+                                                    {formatDate(fee.createdAt)}
+                                                </TableCell>
+                                                <TableCell className="text-right whitespace-nowrap">
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        onClick={() => handleViewFee(fee)}
+                                                    >
+                                                        <Icons.eye className="h-4 w-4" />
+                                                        <span className="sr-only">View</span>
+                                                    </Button>
+                                                </TableCell>
+                                            </TableRow>
+                                        ))}
+                                    </TableBody>
+                                </Table>
+                            </div>
+                        </div>
                     )}
                 </CardContent>
             </Card>
+
+            {/* Fee Dialog */}
+            <Dialog open={!!selectedFee} onOpenChange={() => setSelectedFee(null)}>
+                <DialogContent className="sm:max-w-[500px]">
+                    <DialogHeader>
+                        <DialogTitle>Fee Details</DialogTitle>
+                    </DialogHeader>
+                    {selectedFee && (
+                        <div className="space-y-4">
+                            <div>
+                                <Label>Payment ID</Label>
+                                <p className="text-sm">{selectedFee.relatedPaymentId}</p>
+                            </div>
+                            <div>
+                                <Label>Amount</Label>
+                                <p className="text-sm">
+                                    KES {selectedFee.amount.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                                </p>
+                            </div>
+                            <div>
+                                <Label>Description</Label>
+                                <p className="text-sm whitespace-pre-wrap">Platform fee from sale</p>
+                            </div>
+                            <div>
+                                <Label>Date</Label>
+                                <p className="text-sm">{formatDate(selectedFee.createdAt)}</p>
+                            </div>
+                            <div className="flex justify-end">
+                                <Button
+                                    variant="outline"
+                                    onClick={() => setSelectedFee(null)}
+                                >
+                                    Close
+                                </Button>
+                            </div>
+                        </div>
+                    )}
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }

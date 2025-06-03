@@ -56,32 +56,30 @@ const adminSections: AdminSection[] = [
 
 export default function AdminDashboardPage() {
     return (
-        <div className="container mx-auto p-4 md:p-6 lg:p-8"> {/* Added container and padding */}
-            <div className="mb-8"> {/* Increased bottom margin */}
-                <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-gray-100">Admin Dashboard</h1>
-                <p className="mt-2 text-lg text-muted-foreground">
+        <div className="container mx-auto p-4 md:p-6 lg:p-8">
+            <div className="mb-6 md:mb-8">
+                <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-gray-900 dark:text-gray-100">Admin Dashboard</h1>
+                <p className="mt-2 text-base md:text-lg text-muted-foreground">
                     Manage platform settings, users, finances, and operations.
                 </p>
             </div>
 
-            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"> {/* Added xl breakpoint */}
+            <div className="grid gap-4 sm:gap-6 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                 {adminSections.map((section) => (
                     <Link href={section.href} key={section.href} passHref legacyBehavior>
                         <a className="group block rounded-lg border bg-card text-card-foreground shadow-sm transition-all duration-200 ease-in-out hover:shadow-md focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 dark:border-gray-700 dark:hover:bg-gray-800/50">
-                            <Card className="flex h-full flex-col border-0 bg-transparent p-0 shadow-none group-hover:bg-transparent"> {/* Remove Card's own border/bg */}
-                                <CardHeader className="flex flex-row items-start justify-between space-x-4 p-5">
-                                    {/* Icon on the left */}
-                                    <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10 text-primary dark:bg-primary/20">
+                            <Card className="flex h-full flex-col border-0 bg-transparent p-0 shadow-none group-hover:bg-transparent">
+                                <CardHeader className="flex flex-row items-start justify-between space-x-4 p-4 md:p-5">
+                                    <div className="flex h-10 w-10 md:h-12 md:w-12 items-center justify-center rounded-lg bg-primary/10 text-primary dark:bg-primary/20">
                                          {section.icon}
                                     </div>
-                                    {/* Arrow on the right */}
-                                     <ArrowRight className="h-5 w-5 text-muted-foreground transition-transform duration-200 group-hover:translate-x-1" />
+                                     <ArrowRight className="h-4 w-4 md:h-5 md:w-5 text-muted-foreground transition-transform duration-200 group-hover:translate-x-1" />
                                 </CardHeader>
-                                <CardContent className="flex flex-grow flex-col px-5 pb-5 pt-0">
-                                     <CardTitle className="mb-1 text-lg font-semibold tracking-tight group-hover:text-primary">
+                                <CardContent className="flex flex-grow flex-col px-4 md:px-5 pb-4 md:pb-5 pt-0">
+                                     <CardTitle className="mb-1 text-base md:text-lg font-semibold tracking-tight group-hover:text-primary">
                                         {section.label}
                                     </CardTitle>
-                                    <CardDescription className="text-sm text-muted-foreground">
+                                    <CardDescription className="text-xs md:text-sm text-muted-foreground">
                                         {section.description}
                                     </CardDescription>
                                 </CardContent>

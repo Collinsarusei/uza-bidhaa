@@ -71,13 +71,19 @@ export default function AdminFeeRulesPage() {
                 cache: 'no-store'
             });
             if (!response.ok) {
-                throw new Error('Failed to fetch fee rules');
+                const errorData = await response.json();
+                throw new Error(errorData.message || 'Failed to fetch fee rules');
             }
             const data = await response.json();
-            setFeeRules(data.rules);
-            setGlobalSettings(data.globalSettings);
+            if (!data.feeRules || !Array.isArray(data.feeRules)) {
+                throw new Error('Invalid response format from server');
+            }
+            setFeeRules(data.feeRules);
+            setGlobalSettings({ defaultFeePercentage: data.defaultFeePercentage });
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to load fee rules');
+            setFeeRules([]); // Set empty array on error
+            setGlobalSettings(null);
         } finally {
             setIsLoading(false);
         }
