@@ -136,38 +136,32 @@ export function ProfileContent() {
           setIsSaving(false); return;
       }
 
-      console.log("Saving profile with payload:", payload);
       try {
-          const response = await fetch('/api/user/me', { 
-              method: 'PATCH', 
-              headers: { 'Content-Type': 'application/json' }, 
-              body: JSON.stringify(payload) 
+          const response = await fetch('/api/user/me', {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
           });
-          const result = await response.json();
-          if (!response.ok) {
-              const errorMsg = result.errors ? JSON.stringify(result.errors) : (result.message || `Save error! ${response.status}`);
-              throw new Error(errorMsg);
-          }
-          
-          const updatedProfile: ProfileDataFromApi = result.user;
-          setProfile(updatedProfile);
-          setFormData({ 
-              name: updatedProfile.name || '', 
-              location: updatedProfile.location || '', 
-              mpesaPhoneNumber: updatedProfile.mpesaPhoneNumber || '' 
-          });
-          setUploadedImageUrl(null); // Clear after successful save
-          setIsEditing(false);
-          toast({ title: "Success", description: "Profile updated." });
 
-          if (payload.name || payload.image) {
-                await updateSession(); // Request session update from NextAuth
+          if (!response.ok) {
+              const error = await response.json();
+              throw new Error(error.message || 'Failed to update profile');
           }
-      } catch (err: any) {
-          setError(err.message);
-          toast({ title: "Save Failed", description: err.message, variant: "destructive" });
-      } finally { 
-          setIsSaving(false); 
+
+          const updatedProfile = await response.json();
+          setProfile(updatedProfile.user);
+          await updateSession(); // Update the session to reflect the new image
+          toast({ title: "Success", description: "Profile updated successfully." });
+          setIsEditing(false);
+      } catch (err) {
+          setError(err instanceof Error ? err.message : 'Failed to update profile');
+          toast({ 
+              title: "Update Failed", 
+              description: err instanceof Error ? err.message : 'Failed to update profile',
+              variant: "destructive" 
+          });
+      } finally {
+          setIsSaving(false);
       }
   };
 

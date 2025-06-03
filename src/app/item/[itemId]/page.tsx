@@ -96,7 +96,7 @@ export default function ItemDetailPage() {
                   itemId: item.id,
                   itemTitle: item.title,
                   itemImageUrl: item.mediaUrls?.[0] ?? null,
-                  text: messageText.trim(),
+                  content: messageText.trim(),
               }),
           });
 

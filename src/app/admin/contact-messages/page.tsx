@@ -77,7 +77,7 @@ export default function AdminContactMessagesPage() {
           throw new Error('Failed to fetch messages');
         }
         const data = await response.json();
-        setMessages(data);
+        setMessages(data.messages);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load messages');
       } finally {
