@@ -267,6 +267,10 @@ export default function MessagesPage() {
         )
       );
 
+      // Switch to inbox tab and refresh conversations
+      setActiveTab('inbox');
+      await fetchConversations();
+
       toast({ title: "Success", description: "Conversation approved successfully" });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to approve conversation';
