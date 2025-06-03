@@ -128,7 +128,7 @@ export default function MessagesPage() {
     return { inbox, incoming };
   }, [allConversations, currentUserId]);
 
-  // Real-time message fetching using onSnapshot
+  // Replace the real-time message fetching with REST API
   useEffect(() => {
     if (!selectedConversation?.id || !currentUserId) {
       setMessages([]);
@@ -136,48 +136,34 @@ export default function MessagesPage() {
       return;
     }
 
-    setIsLoadingMessages(true);
-    setError(null);
+    const fetchMessages = async () => {
+      setIsLoadingMessages(true);
+      setError(null);
 
-    const messagesColRef = collection(db, 'conversations', selectedConversation.id, 'messages');
-    const q = query(messagesColRef, orderBy('timestamp', 'asc'));
-
-    const unsubscribe = onSnapshot(q, (querySnapshot) => {
-      const fetchedMessages: Message[] = [];
-      querySnapshot.forEach((docSnapshot) => {
-        const data = docSnapshot.data();
-        const timestampFromServer = data.timestamp;
-        let isoTimestamp: string | null = null;
-        
-        if (timestampFromServer instanceof FirestoreTimestamp) {
-          isoTimestamp = timestampFromServer.toDate().toISOString();
-        } else if (typeof timestampFromServer === 'string') {
-          isoTimestamp = timestampFromServer;
-        } else if (timestampFromServer && typeof timestampFromServer.toDate === 'function') {
-          isoTimestamp = timestampFromServer.toDate().toISOString();
+      try {
+        const response = await fetch(`/api/messages?conversationId=${selectedConversation.id}`);
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.message || `Failed to fetch messages (${response.status})`);
         }
+        const data = await response.json();
+        setMessages(data.messages || []);
+      } catch (error) {
+        console.error("Error fetching messages:", error);
+        const message = error instanceof Error ? error.message : "Failed to fetch messages.";
+        setError(message);
+        toast({ title: "Message Error", description: message, variant: "destructive" });
+        setMessages([]);
+      } finally {
+        setIsLoadingMessages(false);
+      }
+    };
 
-        fetchedMessages.push({
-          id: docSnapshot.id,
-          conversationId: selectedConversation.id,
-          senderId: data.senderId,
-          content: data.text,
-          createdAt: isoTimestamp,
-          isSystemMessage: data.isSystemMessage || false,
-        });
-      });
-      setMessages(fetchedMessages);
-      setIsLoadingMessages(false);
-    }, (error) => {
-      console.error("Error fetching messages with snapshot:", error);
-      const message = error.message || "Failed to listen for messages.";
-      setError(message);
-      toast({ title: "Message Error", description: message, variant: "destructive" });
-      setMessages([]);
-      setIsLoadingMessages(false);
-    });
+    fetchMessages();
+    // Set up polling for new messages
+    const pollInterval = setInterval(fetchMessages, 5000); // Poll every 5 seconds
 
-    return () => unsubscribe();
+    return () => clearInterval(pollInterval);
   }, [selectedConversation?.id, currentUserId, toast]);
 
   useEffect(() => {
@@ -189,35 +175,28 @@ export default function MessagesPage() {
   };
 
   const handleSendMessage = async (e?: React.FormEvent | React.KeyboardEvent) => {
-    e?.preventDefault();
-    if (!newMessage.trim() || !selectedConversation?.id || !currentUserId || isSending) return;
-
-    const recipientId = selectedConversation.participants?.find(p => p.id !== currentUserId)?.id;
-    if (!recipientId) {
-      toast({ title: "Error", description: "Cannot determine recipient.", variant: "destructive" });
-      return;
+    if (e) {
+      e.preventDefault();
     }
 
-    const itemIdToSend = selectedConversation.itemId;
-    if (!itemIdToSend) {
-      toast({ title: "Error", description: "Cannot send message: Item details missing for this conversation.", variant: "destructive" });
-      return;
-    }
+    if (!selectedConversation?.id || !newMessage.trim() || isSending) return;
 
-    setIsSending(true);
-    const tempMessageId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const messageText = newMessage.trim();
+    setNewMessage("");
+    setIsSending(true);
+    setError(null);
 
-    // Optimistic update
-    setMessages(prev => [...prev, {
+    // Optimistically add message to UI
+    const tempMessageId = `temp-${Date.now()}`;
+    const optimisticMessage = {
       id: tempMessageId,
       conversationId: selectedConversation.id,
       senderId: currentUserId,
       content: messageText,
       createdAt: new Date().toISOString(),
       isSystemMessage: false,
-    }]);
-    setNewMessage("");
+    };
+    setMessages(prev => [...prev, optimisticMessage]);
 
     try {
       const response = await fetch('/api/messages', {
@@ -232,6 +211,13 @@ export default function MessagesPage() {
       const result = await response.json();
       if (!response.ok) {
         throw new Error(result.message || `Failed to send message (${response.status})`);
+      }
+
+      // Refresh messages after successful send
+      const messagesResponse = await fetch(`/api/messages?conversationId=${selectedConversation.id}`);
+      if (messagesResponse.ok) {
+        const data = await messagesResponse.json();
+        setMessages(data.messages || []);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to send message.';

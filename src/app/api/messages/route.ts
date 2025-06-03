@@ -40,34 +40,46 @@ export async function POST(req: Request) {
         if (existingConvId) {
             const existingConversationDetails = await prisma.conversation.findUnique({ 
                 where: { id: existingConvId },
-                include: { participants: { select: { id: true } } }
+                include: { 
+                    participants: { select: { id: true } },
+                    item: { select: { id: true, title: true, sellerId: true } }
+                }
             });
 
             if (!existingConversationDetails) {
                 return NextResponse.json({ message: 'Conversation not found.' }, { status: 404 });
             }
+
+            // Check if user is a participant
             if (!existingConversationDetails.participants.some((p: { id: string }) => p.id === senderId)) {
                 return NextResponse.json({ message: 'Forbidden. You are not part of this conversation.' }, { status: 403 });
             }
 
+            // Check if conversation is approved or if user is the initiator
+            const isInitiator = existingConversationDetails.initiatorId === senderId;
+            if (!existingConversationDetails.approved && !isInitiator) {
+                return NextResponse.json({ message: 'This conversation is not yet approved.' }, { status: 403 });
+            }
+
+            const now = new Date();
             const transactionResults = await prisma.$transaction([
                 prisma.message.create({
                     data: {
                         conversationId: existingConvId,
                         senderId: senderId,
                         content: text.trim(),
-                        createdAt: new Date(),
+                        createdAt: now,
                     }
                 }),
                 prisma.conversation.update({
                     where: { id: existingConvId },
                     data: {
                         lastMessageSnippet: text.trim().substring(0, 100),
-                        lastMessageTimestamp: new Date(),
+                        lastMessageTimestamp: now,
                         participantsInfo: {
                             updateMany: {
                                 where: { userId: senderId, conversationId: existingConvId },
-                                data: { lastReadAt: new Date() }
+                                data: { lastReadAt: now }
                             }
                         }
                     },
@@ -85,6 +97,7 @@ export async function POST(req: Request) {
                 return NextResponse.json({ message: 'Missing required fields for new conversation' }, { status: 400 });
             }
 
+            // Check if conversation already exists
             const foundConversation = await prisma.conversation.findFirst({
                 where: {
                     itemId: itemId,
@@ -96,9 +109,10 @@ export async function POST(req: Request) {
             });
 
             if (foundConversation) {
-                 return NextResponse.json({ message: 'Conversation already exists.', conversationId: foundConversation.id }, { status: 409 });
+                return NextResponse.json({ message: 'Conversation already exists.', conversationId: foundConversation.id }, { status: 409 });
             }
 
+            const now = new Date();
             conversationForNotification = await prisma.conversation.create({
                 data: {
                     item: { connect: { id: itemId } },
@@ -108,7 +122,7 @@ export async function POST(req: Request) {
                     participants: { connect: [{ id: senderId }, { id: recipientId }] },
                     participantsInfo: {
                         create: [
-                            { userId: senderId, lastReadAt: new Date() },
+                            { userId: senderId, lastReadAt: now },
                             { userId: recipientId, lastReadAt: null }
                         ]
                     },
@@ -118,17 +132,17 @@ export async function POST(req: Request) {
                                 senderId: SYSTEM_MESSAGE_SENDER_ID,
                                 content: CHAT_PAYMENT_WARNING_MESSAGE,
                                 isSystemMessage: true,
-                                createdAt: new Date(new Date().getTime() + 1) 
+                                createdAt: new Date(now.getTime() + 1) 
                             },
                             {
                                 senderId: senderId,
                                 content: text.trim(),
-                                createdAt: new Date(new Date().getTime() + 2) 
+                                createdAt: new Date(now.getTime() + 2) 
                             }
                         ]
                     },
                     lastMessageSnippet: text.trim().substring(0, 100),
-                    lastMessageTimestamp: new Date(new Date().getTime() + 2),
+                    lastMessageTimestamp: new Date(now.getTime() + 2),
                     hasShownPaymentWarning: true,
                     approved: false, 
                 },
