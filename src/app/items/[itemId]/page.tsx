@@ -6,6 +6,7 @@ import { ItemDetails } from '@/components/items/item-details';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Prisma, ItemStatus } from '@prisma/client';
 import { notFound } from 'next/navigation';
+import { Item } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -18,27 +19,7 @@ interface PageProps {
   searchParams: { [key: string]: string | string[] | undefined };
 }
 
-interface TransformedItem {
-  id: string;
-  title: string;
-  description: string;
-  price: string;
-  quantity: number;
-  status: ItemStatus;
-  mediaUrls: string[];
-  category: string;
-  condition?: string;
-  sellerId: string;
-  createdAt: string;
-  updatedAt: string;
-  offersDelivery: boolean;
-  acceptsInstallments: boolean;
-  seller: {
-    id: string;
-    name: string | null;
-    image: string | null;
-    email: string | null;
-  };
+interface TransformedItem extends Item {
   tracking?: {
     trackingNumber: string;
     carrier: string;
@@ -81,6 +62,7 @@ export default async function Page({ params }: PageProps) {
       createdAt: item.createdAt.toISOString(),
       updatedAt: item.updatedAt.toISOString(),
       status: item.status as ItemStatus,
+      condition: 'NEW',
       tracking: item.tracking
         ? {
             trackingNumber: item.tracking.trackingNumber,
