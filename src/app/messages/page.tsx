@@ -36,7 +36,7 @@ import { useRouter } from 'next/navigation'; // Not used, but kept from original
 
 // Firebase imports for real-time updates
 import {adminDb} from '@/lib/firebase-admin'; // Adjust path if your firebase init is elsewhere
-import { collection, query, orderBy, onSnapshot, doc, Timestamp as FirestoreTimestamp } from 'firebase/firestore';
+import { collection, query, orderBy, onSnapshot, doc, Timestamp as FirestoreTimestamp, where, updateDoc, setDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 
 type ParticipantData = Partial<Pick<UserProfile, 'id' | 'name' | 'image'>>;
@@ -128,7 +128,7 @@ export default function MessagesPage() {
     return { inbox, incoming };
   }, [allConversations, currentUserId]);
 
-  // Replace the real-time message fetching with REST API
+  // Replace Firestore with REST API for message fetching
   useEffect(() => {
     if (!selectedConversation?.id || !currentUserId) {
       setMessages([]);
@@ -231,6 +231,7 @@ export default function MessagesPage() {
         setMessages(data.messages || []);
       }
     } catch (error) {
+      console.error("Error sending message:", error);
       const message = error instanceof Error ? error.message : 'Failed to send message.';
       toast({ title: "Error", description: message, variant: "destructive" });
       // Remove optimistic message on error
