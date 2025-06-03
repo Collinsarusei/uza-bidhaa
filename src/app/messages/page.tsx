@@ -186,15 +186,26 @@ export default function MessagesPage() {
     setIsSending(true);
     setError(null);
 
+    if (!currentUserId || !session?.user?.name) {
+      toast({ title: "Error", description: "User information is missing", variant: "destructive" });
+      setIsSending(false);
+      return;
+    }
+
     // Optimistically add message to UI
     const tempMessageId = `temp-${Date.now()}`;
-    const optimisticMessage = {
+    const optimisticMessage: Message = {
       id: tempMessageId,
       conversationId: selectedConversation.id,
       senderId: currentUserId,
       content: messageText,
       createdAt: new Date().toISOString(),
       isSystemMessage: false,
+      sender: {
+        id: currentUserId,
+        name: session.user.name,
+        image: session.user.image || null
+      }
     };
     setMessages(prev => [...prev, optimisticMessage]);
 
