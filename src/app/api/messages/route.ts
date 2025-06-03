@@ -287,10 +287,7 @@ export async function GET(req: Request) {
 
         const messages = await prisma.message.findMany({
             where: { 
-                conversationId: conversationId,
-                senderId: {
-                    not: ''
-                }
+                conversationId: conversationId
             },
             orderBy: { createdAt: 'asc' },
             include: { 
@@ -303,9 +300,12 @@ export async function GET(req: Request) {
                 } 
             }
         });
+
+        // Filter out messages with null senders after fetching
+        const validMessages = messages.filter(message => message.sender !== null);
         
         const currentUserParticipantInfo = conversation.participantsInfo.find((p: { userId: string }) => p.userId === currentUserId);
-        const lastMessageInConversation = messages.length > 0 ? messages[messages.length -1] : null;
+        const lastMessageInConversation = validMessages.length > 0 ? validMessages[validMessages.length -1] : null;
         let unreadForCurrentUser = false;
         if (lastMessageInConversation && lastMessageInConversation.senderId !== currentUserId) {
             if (!currentUserParticipantInfo?.lastReadAt || currentUserParticipantInfo.lastReadAt < lastMessageInConversation.createdAt) {
@@ -313,9 +313,9 @@ export async function GET(req: Request) {
             }
         }
 
-        console.log(`API Messages GET: Found ${messages.length} messages for conversation ${conversationId}`);
+        console.log(`API Messages GET: Found ${validMessages.length} messages for conversation ${conversationId}`);
         return NextResponse.json({ 
-            messages: messages,
+            messages: validMessages,
             conversation: {
                 ...conversation,
                 itemImageUrl: conversation.item?.mediaUrls?.[0] || conversation.itemImageUrl,
