@@ -30,21 +30,12 @@ export async function POST(req: Request) {
         const body = await req.json();
         const { conversationId: existingConvId, recipientId, itemId, text, itemTitle, itemImageUrl } = body;
 
-        if ( !itemId || !text || typeof text !== 'string' || text.trim() === '' || !itemTitle) {
-            console.error("API Messages POST: Missing required fields (itemId, text, itemTitle are essential). recipientId is needed if no conversationId.");
-            return NextResponse.json({ message: 'Missing required fields' }, { status: 400 });
-        }
-        if (!existingConvId && !recipientId) {
-            return NextResponse.json({ message: 'recipientId is required to start a new conversation' }, { status: 400 });
-        }
-        if (recipientId && senderId === recipientId) {
-            console.warn(`API Messages POST: User ${senderId} attempted to send message to themselves.`);
-            return NextResponse.json({ message: 'Cannot send message to yourself' }, { status: 400 });
+        if (!text || typeof text !== 'string' || text.trim() === '') {
+            console.error("API Messages POST: Missing or invalid text field.");
+            return NextResponse.json({ message: 'Missing or invalid text field' }, { status: 400 });
         }
 
         let conversationForNotification: any; // To store conversation data for notification logic
-        const now = new Date();
-        const messageContent = text.trim();
 
         if (existingConvId) {
             const existingConversationDetails = await prisma.conversation.findUnique({ 
@@ -64,19 +55,19 @@ export async function POST(req: Request) {
                     data: {
                         conversationId: existingConvId,
                         senderId: senderId,
-                        content: messageContent,
-                        createdAt: now,
+                        content: text.trim(),
+                        createdAt: new Date(),
                     }
                 }),
                 prisma.conversation.update({
                     where: { id: existingConvId },
                     data: {
-                        lastMessageSnippet: messageContent.substring(0, 100),
-                        lastMessageTimestamp: now,
+                        lastMessageSnippet: text.trim().substring(0, 100),
+                        lastMessageTimestamp: new Date(),
                         participantsInfo: {
                             updateMany: {
                                 where: { userId: senderId, conversationId: existingConvId },
-                                data: { lastReadAt: now }
+                                data: { lastReadAt: new Date() }
                             }
                         }
                     },
@@ -87,9 +78,12 @@ export async function POST(req: Request) {
                 }),
             ]);
             conversationForNotification = transactionResults[1];
-
         } else {
-            if (!recipientId) return NextResponse.json({ message: 'Recipient ID required for new conversation' }, { status: 400 });
+            // For new conversations, require itemId, itemTitle and recipientId
+            if (!itemId || !itemTitle || !recipientId) {
+                console.error("API Messages POST: Missing required fields for new conversation (itemId, itemTitle, recipientId).");
+                return NextResponse.json({ message: 'Missing required fields for new conversation' }, { status: 400 });
+            }
 
             const foundConversation = await prisma.conversation.findFirst({
                 where: {
@@ -114,7 +108,7 @@ export async function POST(req: Request) {
                     participants: { connect: [{ id: senderId }, { id: recipientId }] },
                     participantsInfo: {
                         create: [
-                            { userId: senderId, lastReadAt: now },
+                            { userId: senderId, lastReadAt: new Date() },
                             { userId: recipientId, lastReadAt: null }
                         ]
                     },
@@ -124,17 +118,17 @@ export async function POST(req: Request) {
                                 senderId: SYSTEM_MESSAGE_SENDER_ID,
                                 content: CHAT_PAYMENT_WARNING_MESSAGE,
                                 isSystemMessage: true,
-                                createdAt: new Date(now.getTime() + 1) 
+                                createdAt: new Date(new Date().getTime() + 1) 
                             },
                             {
                                 senderId: senderId,
-                                content: messageContent,
-                                createdAt: new Date(now.getTime() + 2) 
+                                content: text.trim(),
+                                createdAt: new Date(new Date().getTime() + 2) 
                             }
                         ]
                     },
-                    lastMessageSnippet: messageContent.substring(0, 100),
-                    lastMessageTimestamp: new Date(now.getTime() + 2),
+                    lastMessageSnippet: text.trim().substring(0, 100),
+                    lastMessageTimestamp: new Date(new Date().getTime() + 2),
                     hasShownPaymentWarning: true,
                     approved: false, 
                 },
