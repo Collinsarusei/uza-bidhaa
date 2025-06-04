@@ -4,6 +4,7 @@ import { NextApiResponse } from 'next';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from '@/app/api/auth/[...nextauth]/route';
 import prisma from '@/lib/prisma';
+import { getToken } from 'next-auth/jwt';
 
 let io: SocketIOServer | null = null;
 const onlineUsers = new Map<string, string>(); // userId -> socketId
@@ -18,25 +19,31 @@ export type NextApiResponseWithSocket = NextApiResponse & {
   };
 };
 
-export const initSocket = (res: NextApiResponseWithSocket) => {
-  if (!res.socket.server.io) {
-    io = new SocketIOServer(res.socket.server, {
+export const initSocket = (server: any) => {
+  if (!io) {
+    io = new SocketIOServer(server, {
       path: '/api/socket',
       addTrailingSlash: false,
       cors: {
         origin: process.env.NEXT_PUBLIC_APP_URL || '*',
-        methods: ['GET', 'POST']
+        methods: ['GET', 'POST'],
+        credentials: true
       }
     });
 
     // Middleware for authentication
     io.use(async (socket, next) => {
       try {
-        const session = await getServerSession(authOptions);
-        if (!session?.user?.id) {
+        const token = await getToken({ 
+          req: socket.request as any,
+          secret: process.env.NEXTAUTH_SECRET 
+        });
+        
+        if (!token?.sub) {
           return next(new Error('Unauthorized'));
         }
-        socket.data.userId = session.user.id;
+        
+        socket.data.userId = token.sub;
         next();
       } catch (error) {
         next(new Error('Authentication failed'));
@@ -92,10 +99,8 @@ export const initSocket = (res: NextApiResponseWithSocket) => {
         io?.emit('user-offline', userId);
       });
     });
-
-    res.socket.server.io = io;
   }
-  return res.socket.server.io;
+  return io;
 };
 
 // Helper function to emit events to specific users
