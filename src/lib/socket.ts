@@ -64,6 +64,12 @@ export const initSocket = (res: NextApiResponseWithSocket) => {
         console.log(`Client ${socket.id} left conversation: ${conversationId}`);
       });
 
+      // Handle new messages
+      socket.on('new-message', (message) => {
+        // Broadcast to all users in the conversation except sender
+        socket.to(`conversation:${message.conversationId}`).emit('message-received', message);
+      });
+
       // Typing indicators
       socket.on('typing-start', (conversationId: string) => {
         socket.to(`conversation:${conversationId}`).emit('user-typing', {

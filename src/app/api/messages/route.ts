@@ -113,7 +113,10 @@ export async function POST(req: Request) {
             // Emit socket event for new message
             const io = getIO();
             if (io) {
-                emitMessageEvent(io, existingConvId, newMessage);
+                io.to(`conversation:${existingConvId}`).emit('message-received', {
+                    ...newMessage,
+                    conversationId: existingConvId
+                });
             }
         } else {
             // For new conversations, require itemId, itemTitle and recipientId

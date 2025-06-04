@@ -226,39 +226,28 @@ export default function MessagesPage() {
     setSelectedConversation(conv);
   };
 
-  const handleSendMessage = async (e?: React.FormEvent | React.KeyboardEvent) => {
-    if (e) {
-      e.preventDefault();
-    }
+  const handleSendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newMessage.trim() || !selectedConversation) return;
 
-    if (!selectedConversation?.id || !newMessage.trim() || isSending) return;
-
-    const messageText = newMessage.trim();
-    setNewMessage("");
-    setIsSending(true);
-    setError(null);
-
-    if (!currentUserId || !session?.user?.name) {
-      toast({ title: "Error", description: "User information is missing", variant: "destructive" });
-      setIsSending(false);
-      return;
-    }
+    const messageToSend = newMessage.trim();
+    setNewMessage(""); // Clear input immediately for better UX
 
     // Optimistically add message to UI
-    const tempMessageId = `temp-${Date.now()}`;
     const optimisticMessage: Message = {
-      id: tempMessageId,
-      conversationId: selectedConversation.id,
-      senderId: currentUserId,
-      content: messageText,
-      createdAt: new Date().toISOString(),
-      isSystemMessage: false,
-      sender: {
-        id: currentUserId,
-        name: session.user.name,
-        image: session.user.image || null
-      }
+        id: `temp-${Date.now()}`,
+        conversationId: selectedConversation.id,
+        content: messageToSend,
+        senderId: session?.user?.id || '',
+        sender: {
+            id: session?.user?.id || '',
+            name: session?.user?.name || '',
+            image: session?.user?.image || null
+        },
+        createdAt: new Date().toISOString(),
+        isSystemMessage: false
     };
+
     setMessages(prev => [...prev, optimisticMessage]);
 
     try {
@@ -267,33 +256,54 @@ export default function MessagesPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           conversationId: selectedConversation.id,
-          text: messageText,
+          text: messageToSend
         })
       });
 
-      const result = await response.json();
       if (!response.ok) {
-        throw new Error(result.message || `Failed to send message (${response.status})`);
+        throw new Error('Failed to send message');
       }
 
-      // Remove optimistic message and add the real one
-      setMessages(prev => {
-        const filtered = prev.filter(msg => msg.id !== tempMessageId);
-        if (result.newMessage) {
-          return [...filtered, result.newMessage];
-        }
-        return filtered;
-      });
+      const data = await response.json();
+      
+      // Update the optimistic message with the real one
+      setMessages(prev => prev.map(msg => 
+        msg.id === optimisticMessage.id ? data.newMessage : msg
+      ));
+
     } catch (error) {
-      console.error("Error sending message:", error);
-      const message = error instanceof Error ? error.message : 'Failed to send message.';
-      toast({ title: "Error", description: message, variant: "destructive" });
-      // Remove optimistic message on error
-      setMessages(prev => prev.filter(msg => msg.id !== tempMessageId));
-    } finally {
-      setIsSending(false);
+      console.error('Error sending message:', error);
+      // Remove the optimistic message on error
+      setMessages(prev => prev.filter(msg => msg.id !== optimisticMessage.id));
+      setNewMessage(messageToSend); // Restore the message in the input
     }
   };
+
+  // Listen for real-time messages
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleNewMessage = (message: any) => {
+      setMessages(prev => [...prev, message]);
+    };
+
+    socket.on('message-received', handleNewMessage);
+
+    return () => {
+      socket.off('message-received', handleNewMessage);
+    };
+  }, [socket]);
+
+  // Join conversation room when selected
+  useEffect(() => {
+    if (!socket || !selectedConversation) return;
+
+    socket.emit('join-conversation', selectedConversation.id);
+
+    return () => {
+      socket.emit('leave-conversation', selectedConversation.id);
+    };
+  }, [socket, selectedConversation]);
 
   const handleApprove = async (conversationId: string) => {
     if (!currentUserId || isApproving) return;
