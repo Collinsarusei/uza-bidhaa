@@ -1,115 +1,117 @@
-import { Server as NetServer } from 'http';
+import { NextResponse, NextRequest } from 'next/server';
 import { Server as SocketIOServer } from 'socket.io';
-import { NextApiResponse } from 'next';
-import { getServerSession } from "next-auth/next";
-import { authOptions } from '@/app/api/auth/[...nextauth]/route';
-import prisma from '@/lib/prisma';
+import { getToken } from 'next-auth/jwt';
 
 let io: SocketIOServer | null = null;
 const onlineUsers = new Map<string, string>(); // userId -> socketId
 
 export const getIO = () => io;
 
-export type NextApiResponseWithSocket = NextApiResponse & {
-  socket: {
-    server: NetServer & {
-      io?: SocketIOServer;
-    };
-  };
-};
-
-export const initSocket = (res: NextApiResponseWithSocket) => {
-  if (!res.socket.server.io) {
-    io = new SocketIOServer(res.socket.server, {
-      path: '/api/socket',
-      addTrailingSlash: false,
-      cors: {
-        origin: process.env.NEXT_PUBLIC_APP_URL || '*',
-        methods: ['GET', 'POST']
-      }
+export async function GET(req: NextRequest) {
+  try {
+    // Get the session token from cookies
+    const token = await getToken({ 
+      req,
+      secret: process.env.NEXTAUTH_SECRET 
     });
 
-    // Middleware for authentication
-    io.use(async (socket, next) => {
-      try {
-        const session = await getServerSession(authOptions);
-        if (!session?.user?.id) {
-          return next(new Error('Unauthorized'));
+    if (!token?.sub) {
+      return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+    }
+
+    const userId = token.sub;
+
+    if (!io) {
+      io = new SocketIOServer({
+        path: '/api/socket',
+        addTrailingSlash: false,
+        cors: {
+          origin: process.env.NEXT_PUBLIC_APP_URL || '*',
+          methods: ['GET', 'POST'],
+          credentials: true
         }
-        socket.data.userId = session.user.id;
-        next();
-      } catch (error) {
-        next(new Error('Authentication failed'));
-      }
-    });
-
-    io.on('connection', (socket) => {
-      const userId = socket.data.userId;
-      console.log('Client connected:', socket.id, 'User:', userId);
-      
-      // Update online status
-      onlineUsers.set(userId, socket.id);
-      io?.emit('user-online', userId);
-
-      // Join user's personal room for direct messages
-      socket.join(`user:${userId}`);
-
-      socket.on('join-conversation', (conversationId: string) => {
-        socket.join(`conversation:${conversationId}`);
-        console.log(`Client ${socket.id} joined conversation: ${conversationId}`);
       });
 
-      socket.on('leave-conversation', (conversationId: string) => {
-        socket.leave(`conversation:${conversationId}`);
-        console.log(`Client ${socket.id} left conversation: ${conversationId}`);
-      });
-
-      // Handle new messages
-      socket.on('new-message', async (message) => {
+      // Add authentication middleware
+      io.use(async (socket, next) => {
         try {
-          // Broadcast to all users in the conversation except sender
-          socket.to(`conversation:${message.conversationId}`).emit('message-received', message);
-          
-          // Update conversation's last message timestamp
-          await prisma.conversation.update({
-            where: { id: message.conversationId },
-            data: {
-              lastMessageTimestamp: message.createdAt,
-              lastMessageSnippet: message.content.substring(0, 100)
-            }
+          const token = await getToken({ 
+            req: socket.request as any,
+            secret: process.env.NEXTAUTH_SECRET 
           });
+          
+          if (!token?.sub) {
+            return next(new Error('Unauthorized'));
+          }
+          
+          socket.data.userId = token.sub;
+          next();
         } catch (error) {
-          console.error('Error handling new message:', error);
+          next(new Error('Authentication failed'));
         }
       });
 
-      // Typing indicators
-      socket.on('typing-start', (conversationId: string) => {
-        socket.to(`conversation:${conversationId}`).emit('user-typing', {
-          userId,
-          conversationId
+      io.on('connection', (socket) => {
+        const userId = socket.data.userId;
+        console.log('Client connected:', socket.id, 'User:', userId);
+        
+        // Update online status
+        onlineUsers.set(userId, socket.id);
+        io?.emit('user-online', userId);
+
+        // Join user's personal room for direct messages
+        socket.join(`user:${userId}`);
+
+        socket.on('join-conversation', (conversationId: string) => {
+          socket.join(`conversation:${conversationId}`);
+          console.log(`Client ${socket.id} joined conversation: ${conversationId}`);
+        });
+
+        socket.on('leave-conversation', (conversationId: string) => {
+          socket.leave(`conversation:${conversationId}`);
+          console.log(`Client ${socket.id} left conversation: ${conversationId}`);
+        });
+
+        // Handle new messages
+        socket.on('new-message', async (message) => {
+          try {
+            // Broadcast to all users in the conversation except sender
+            socket.to(`conversation:${message.conversationId}`).emit('message-received', message);
+          } catch (error) {
+            console.error('Error handling new message:', error);
+          }
+        });
+
+        // Typing indicators
+        socket.on('typing-start', (conversationId: string) => {
+          socket.to(`conversation:${conversationId}`).emit('user-typing', {
+            userId,
+            conversationId
+          });
+        });
+
+        socket.on('typing-stop', (conversationId: string) => {
+          socket.to(`conversation:${conversationId}`).emit('user-stopped-typing', {
+            userId,
+            conversationId
+          });
+        });
+
+        // Handle disconnection
+        socket.on('disconnect', () => {
+          console.log('Client disconnected:', socket.id);
+          onlineUsers.delete(userId);
+          io?.emit('user-offline', userId);
         });
       });
-
-      socket.on('typing-stop', (conversationId: string) => {
-        socket.to(`conversation:${conversationId}`).emit('user-stopped-typing', {
-          userId,
-          conversationId
-        });
-      });
-
-      // Handle disconnection
-      socket.on('disconnect', () => {
-        console.log('Client disconnected:', socket.id);
-        onlineUsers.delete(userId);
-        io?.emit('user-offline', userId);
-      });
-    });
-
-    res.socket.server.io = io;
+    }
+    
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error('Socket initialization error:', error);
+    return NextResponse.json({ error: 'Failed to initialize socket' }, { status: 500 });
   }
-  return res.socket.server.io;
-};
+}
 
 // Helper function to emit events to specific users
 export const emitToUser = (userId: string, event: string, data: any) => {
