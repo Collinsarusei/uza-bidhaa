@@ -167,7 +167,7 @@ export default function MessagesPage() {
       socket.emit('join-conversation', selectedConversation.id);
       
       // Listen for new messages
-      socket.on('new-message', (message: Message) => {
+      socket.on('message-received', (message: Message) => {
         setMessages(prev => {
           // Check if message already exists
           if (prev.some(m => m.id === message.id)) {
@@ -179,7 +179,7 @@ export default function MessagesPage() {
 
       return () => {
         socket.emit('leave-conversation', selectedConversation.id);
-        socket.off('new-message');
+        socket.off('message-received');
       };
     }
   }, [socket, selectedConversation?.id]);
@@ -228,24 +228,24 @@ export default function MessagesPage() {
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMessage.trim() || !selectedConversation) return;
+    if (!newMessage.trim() || !selectedConversation || !socket) return;
 
     const messageToSend = newMessage.trim();
     setNewMessage(""); // Clear input immediately for better UX
 
     // Optimistically add message to UI
     const optimisticMessage: Message = {
-        id: `temp-${Date.now()}`,
-        conversationId: selectedConversation.id,
-        content: messageToSend,
-        senderId: session?.user?.id || '',
-        sender: {
-            id: session?.user?.id || '',
-            name: session?.user?.name || '',
-            image: session?.user?.image || null
-        },
-        createdAt: new Date().toISOString(),
-        isSystemMessage: false
+      id: `temp-${Date.now()}`,
+      conversationId: selectedConversation.id,
+      content: messageToSend,
+      senderId: session?.user?.id || '',
+      sender: {
+        id: session?.user?.id || '',
+        name: session?.user?.name || '',
+        image: session?.user?.image || null
+      },
+      createdAt: new Date().toISOString(),
+      isSystemMessage: false
     };
 
     setMessages(prev => [...prev, optimisticMessage]);
@@ -270,6 +270,9 @@ export default function MessagesPage() {
       setMessages(prev => prev.map(msg => 
         msg.id === optimisticMessage.id ? data.newMessage : msg
       ));
+
+      // Emit the message through socket
+      socket.emit('new-message', data.newMessage);
 
     } catch (error) {
       console.error('Error sending message:', error);
@@ -608,63 +611,67 @@ export default function MessagesPage() {
 
 
   return (
-    <div className={cn("flex h-[calc(100vh-theme(spacing.16))] border-t bg-slate-50 dark:bg-slate-900", isMobile && "h-[calc(100vh-var(--mobile-nav-height,4rem))] border-none")} >
-      <div className={cn("w-full md:w-1/3 lg:w-1/4 border-r flex flex-col bg-card dark:bg-slate-800",
-                      isMobile && selectedConversation && "hidden"
+    <div className={cn(
+      "flex h-[calc(100vh-theme(spacing.16))] border-t bg-slate-50 dark:bg-slate-900",
+      isMobile && "h-[calc(100vh-var(--mobile-nav-height,4rem))] border-none fixed inset-0"
+    )}>
+      <div className={cn(
+        "w-full md:w-1/3 lg:w-1/4 border-r flex flex-col bg-card dark:bg-slate-800",
+        isMobile && selectedConversation && "hidden"
+      )}>
+        <div className="flex border-b flex-shrink-0">
+            <Button
+                variant="ghost"
+                className={cn("flex-1 justify-center rounded-none h-10", activeTab === 'inbox' && "bg-muted font-semibold")}
+                onClick={() => { setActiveTab('inbox'); setSelectedConversation(null); }} // Clear selected on tab change
+            >
+                Inbox ({categorizedConversations.inbox.length})
+            </Button>
+            <Button
+                variant="ghost"
+                className={cn("flex-1 justify-center rounded-none border-l h-10", activeTab === 'incoming' && "bg-muted font-semibold")}
+                onClick={() => { setActiveTab('incoming'); setSelectedConversation(null); }} // Clear selected on tab change
+            >
+               Requests ({categorizedConversations.incoming.length})
+            </Button>
+        </div>
+        <div className="flex-1 overflow-y-auto">
+              {isLoadingConversations ? (
+                  <div className="divide-y">
+                      {Array.from({ length: 5 }).map((_, i) => renderConversationSkeleton(i))}
+                  </div>
+              ) : (
+                  <>
+                      {activeTab === 'inbox' && categorizedConversations.inbox.length === 0 && (
+                          <p className="p-4 text-center text-sm text-muted-foreground">Your inbox is empty.</p>
                       )}
-        >
-          <div className="flex border-b flex-shrink-0">
-              <Button
-                  variant="ghost"
-                  className={cn("flex-1 justify-center rounded-none h-10", activeTab === 'inbox' && "bg-muted font-semibold")}
-                  onClick={() => { setActiveTab('inbox'); setSelectedConversation(null); }} // Clear selected on tab change
-              >
-                  Inbox ({categorizedConversations.inbox.length})
-              </Button>
-              <Button
-                  variant="ghost"
-                  className={cn("flex-1 justify-center rounded-none border-l h-10", activeTab === 'incoming' && "bg-muted font-semibold")}
-                  onClick={() => { setActiveTab('incoming'); setSelectedConversation(null); }} // Clear selected on tab change
-              >
-                 Requests ({categorizedConversations.incoming.length})
-              </Button>
-          </div>
-          <div className="flex-1 overflow-y-auto">
-                {isLoadingConversations ? (
-                    <div className="divide-y">
-                        {Array.from({ length: 5 }).map((_, i) => renderConversationSkeleton(i))}
-                    </div>
-                ) : (
-                    <>
-                        {activeTab === 'inbox' && categorizedConversations.inbox.length === 0 && (
-                            <p className="p-4 text-center text-sm text-muted-foreground">Your inbox is empty.</p>
-                        )}
-                        {activeTab === 'incoming' && categorizedConversations.incoming.length === 0 && (
-                            <p className="p-4 text-center text-sm text-muted-foreground">No incoming message requests.</p>
-                        )}
-                        {activeTab === 'inbox' && (
-                            categorizedConversations.inbox.map(conv => renderConversationItem(conv, false))
-                        )}
-                        {activeTab === 'incoming' && (
-                            categorizedConversations.incoming.map(conv => renderConversationItem(conv, true))
-                        )}
-                    </>
-                )}
-                {error && !isLoadingConversations && <p className="p-4 text-center text-sm text-destructive">{error}</p>}
-          </div>
-      </div>
-
-      <div className={cn("hidden md:flex flex-1 flex-col",
-                   selectedConversation ? "" : "items-center justify-center"
-                   )}>
-         {renderChatAreaContent(selectedConversation)}
-      </div>
-
-       {isMobile && selectedConversation && (
-            <div className="w-full flex flex-1 flex-col h-full">
-                {renderChatAreaContent(selectedConversation)}
-            </div>
-        )}
+                      {activeTab === 'incoming' && categorizedConversations.incoming.length === 0 && (
+                          <p className="p-4 text-center text-sm text-muted-foreground">No incoming message requests.</p>
+                      )}
+                      {activeTab === 'inbox' && (
+                          categorizedConversations.inbox.map(conv => renderConversationItem(conv, false))
+                      )}
+                      {activeTab === 'incoming' && (
+                          categorizedConversations.incoming.map(conv => renderConversationItem(conv, true))
+                      )}
+                  </>
+              )}
+              {error && !isLoadingConversations && <p className="p-4 text-center text-sm text-destructive">{error}</p>}
+        </div>
     </div>
+
+    <div className={cn(
+      "hidden md:flex flex-1 flex-col",
+      selectedConversation ? "" : "items-center justify-center"
+    )}>
+       {renderChatAreaContent(selectedConversation)}
+    </div>
+
+    {isMobile && selectedConversation && (
+      <div className="w-full flex flex-1 flex-col h-full">
+        {renderChatAreaContent(selectedConversation)}
+      </div>
+    )}
+  </div>
   );
 }
