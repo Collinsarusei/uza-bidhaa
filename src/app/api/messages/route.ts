@@ -260,12 +260,13 @@ export async function GET(req: Request) {
         const conversationId = searchParams.get('conversationId');
 
         if (!conversationId) {
-             console.error("API Messages GET: Missing conversationId parameter.");
-             return NextResponse.json({ message: 'Missing conversation identifier' }, { status: 400 });
+            console.error("API Messages GET: Missing conversationId parameter.");
+            return NextResponse.json({ message: 'Missing conversation identifier' }, { status: 400 });
         }
 
         console.log(`API Messages GET: Fetching messages for conversation ${conversationId}`);
 
+        // First check if conversation exists and user has access
         const conversation = await prisma.conversation.findUnique({
             where: { id: conversationId },
             include: {
@@ -285,9 +286,13 @@ export async function GET(req: Request) {
             return NextResponse.json({ message: 'Forbidden' }, { status: 403 });
         }
 
+        // Fetch messages with proper error handling
         const messages = await prisma.message.findMany({
             where: { 
-                conversationId: conversationId
+                conversationId: conversationId,
+                senderId: {
+                    not: SYSTEM_MESSAGE_SENDER_ID
+                }
             },
             orderBy: { createdAt: 'asc' },
             include: { 
@@ -299,32 +304,48 @@ export async function GET(req: Request) {
                     } 
                 } 
             }
+        }).catch(error => {
+            console.error("Error fetching messages:", error);
+            throw new Error("Failed to fetch messages from database");
         });
 
-        // Filter out messages with null senders after fetching
-        const validMessages = messages.filter(message => message.sender !== null);
-        
-        const currentUserParticipantInfo = conversation.participantsInfo.find((p: { userId: string }) => p.userId === currentUserId);
-        const lastMessageInConversation = validMessages.length > 0 ? validMessages[validMessages.length -1] : null;
-        let unreadForCurrentUser = false;
-        if (lastMessageInConversation && lastMessageInConversation.senderId !== currentUserId) {
-            if (!currentUserParticipantInfo?.lastReadAt || currentUserParticipantInfo.lastReadAt < lastMessageInConversation.createdAt) {
-                unreadForCurrentUser = true;
-            }
-        }
+        // Get participant info for unread status
+        const currentUserParticipantInfo = conversation.participantsInfo.find(
+            (p: { userId: string }) => p.userId === currentUserId
+        );
 
-        console.log(`API Messages GET: Found ${validMessages.length} messages for conversation ${conversationId}`);
-        return NextResponse.json({ 
-            messages: validMessages,
+        // Calculate unread status
+        const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
+        const unreadForCurrentUser = lastMessage && 
+            lastMessage.senderId !== currentUserId && 
+            (!currentUserParticipantInfo?.lastReadAt || 
+             currentUserParticipantInfo.lastReadAt < lastMessage.createdAt);
+
+        // Prepare response
+        const response = {
+            messages: messages.map(msg => ({
+                id: msg.id,
+                content: msg.content,
+                createdAt: msg.createdAt,
+                senderId: msg.senderId,
+                sender: msg.sender || null,
+                isSystemMessage: msg.isSystemMessage
+            })),
             conversation: {
                 ...conversation,
                 itemImageUrl: conversation.item?.mediaUrls?.[0] || conversation.itemImageUrl,
-                unread: unreadForCurrentUser 
+                unread: unreadForCurrentUser
             }
-        }, { status: 200 }); 
+        };
+
+        console.log(`API Messages GET: Successfully fetched ${messages.length} messages for conversation ${conversationId}`);
+        return NextResponse.json(response, { status: 200 });
 
     } catch (error: any) {
-        console.error("API Messages GET Error (Prisma):", error);
-        return NextResponse.json({ message: 'Failed to fetch messages', error: error.message }, { status: 500 });
+        console.error("API Messages GET Error:", error);
+        return NextResponse.json({ 
+            message: 'Failed to fetch messages', 
+            error: error.message 
+        }, { status: 500 });
     }
 }
