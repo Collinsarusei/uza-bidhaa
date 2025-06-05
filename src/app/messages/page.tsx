@@ -39,7 +39,7 @@ import { io, Socket } from 'socket.io-client';
 import {adminDb} from '@/lib/firebase-admin'; // Adjust path if your firebase init is elsewhere
 import { collection, query, orderBy, onSnapshot, doc, Timestamp as FirestoreTimestamp, where, updateDoc, setDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
-import { getSocket, initSocket } from '@/lib/socket';
+import { getSocket, initSocket } from '@/lib/socket-client';
 
 type ParticipantData = Partial<Pick<UserProfile, 'id' | 'name' | 'image'>>;
 

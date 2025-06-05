@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getToken } from 'next-auth/jwt';
-import { initSocket, getIO } from '@/lib/socket';
+import { initSocket, getIO } from '@/lib/socket-server';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -30,4 +30,4 @@ export async function GET(req: Request) {
     console.error('Socket initialization error:', error);
     return NextResponse.json({ error: 'Failed to initialize socket' }, { status: 500 });
   }
-} 
+}
