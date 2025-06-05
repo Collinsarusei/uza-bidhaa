@@ -8,7 +8,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
 import { Server as SocketIOServer } from 'socket.io';
 import { Server as NetServer } from 'http';
-import { getIO } from '@/lib/socket';
+import { getIO } from '@/lib/socket-server';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -307,7 +307,7 @@ export async function GET(req: Request) {
                     } 
                 } 
             }
-        }).catch(error => {
+        }).catch((error: any) => {
             console.error("Error fetching messages:", error);
             throw new Error("Failed to fetch messages from database");
         });
@@ -326,7 +326,7 @@ export async function GET(req: Request) {
 
         // Prepare response
         const response = {
-            messages: messages.map(msg => ({
+            messages: messages.map((msg: { id: any; content: any; createdAt: any; senderId: any; sender: any; isSystemMessage: any; }) => ({
                 id: msg.id,
                 content: msg.content,
                 createdAt: msg.createdAt,
