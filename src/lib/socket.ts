@@ -73,8 +73,10 @@ export const initSocket = (server: any) => {
 
       // Handle new messages
       socket.on('new-message', (message) => {
-        // Broadcast to all users in the conversation except sender
-        socket.to(`conversation:${message.conversationId}`).emit('message-received', message);
+        // Broadcast to all users in the conversation including the sender
+        if (io) {
+          io.to(`conversation:${message.conversationId}`).emit('message-received', message);
+        }
       });
 
       // Typing indicators
