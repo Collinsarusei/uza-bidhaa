@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { Button } from "@/components/ui/button";
@@ -37,7 +37,7 @@ interface Item {
     // Add other relevant item properties
 }
 
-export default function FileDisputePage() {
+function FileDisputeContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { data: session, status: authStatus } = useSession();
@@ -187,5 +187,13 @@ export default function FileDisputePage() {
         </Card>
       )}
     </div>
+  );
+}
+
+export default function FileDisputePage() {
+  return (
+    <Suspense fallback={<p>Loading dispute form...</p>}>
+      <FileDisputeContent />
+    </Suspense>
   );
 }
