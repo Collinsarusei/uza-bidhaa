@@ -1,15 +1,9 @@
 import { NextResponse } from 'next/server';
 import { getToken } from 'next-auth/jwt';
 import { initSocket, getIO } from '@/lib/socket';
-import { Server as NetServer } from 'http';
-import { Server as SocketIOServer } from 'socket.io';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
-
-// Get socket instance and online users map
-const io = getIO();
-const onlineUsers = new Map<string, string>();
 
 export async function GET(req: Request) {
   try {
@@ -36,17 +30,4 @@ export async function GET(req: Request) {
     console.error('Socket initialization error:', error);
     return NextResponse.json({ error: 'Failed to initialize socket' }, { status: 500 });
   }
-}
-
-// Helper function to emit events to specific users
-export const emitToUser = (userId: string, event: string, data: any) => {
-  const socketId = onlineUsers.get(userId);
-  if (socketId) {
-    io?.to(socketId).emit(event, data);
-  }
-};
-
-// Helper function to check if a user is online
-export const isUserOnline = (userId: string) => {
-  return onlineUsers.has(userId);
-}; 
+} 
