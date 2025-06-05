@@ -39,6 +39,7 @@ import { io, Socket } from 'socket.io-client';
 import {adminDb} from '@/lib/firebase-admin'; // Adjust path if your firebase init is elsewhere
 import { collection, query, orderBy, onSnapshot, doc, Timestamp as FirestoreTimestamp, where, updateDoc, setDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+import { getSocket, initSocket } from '@/lib/socket';
 
 type ParticipantData = Partial<Pick<UserProfile, 'id' | 'name' | 'image'>>;
 
@@ -59,7 +60,8 @@ export default function MessagesPage() {
   const isMobile = useIsMobile();
   // const router = useRouter(); // Keep if used elsewhere, not directly in provided snippet logic
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const [socket, setSocket] = useState<Socket | null>(null);
+  //const [socket, setSocket] = useState<Socket | null>(null);
+  const socket = getSocket();
 
   const currentUserId = session?.user?.id;
 
@@ -132,33 +134,7 @@ export default function MessagesPage() {
 
   // Initialize socket connection
   useEffect(() => {
-    const socketInitializer = async () => {
-      try {
-        await fetch('/api/socket');
-        const socket = io({
-          path: '/api/socket',
-          addTrailingSlash: false,
-        });
-
-        socket.on('connect', () => {
-          console.log('Socket connected');
-        });
-
-        socket.on('connect_error', (error) => {
-          console.error('Socket connection error:', error);
-        });
-
-        setSocket(socket);
-
-        return () => {
-          socket.disconnect();
-        };
-      } catch (error) {
-        console.error('Failed to initialize socket:', error);
-      }
-    };
-
-    socketInitializer();
+    initSocket();
   }, []);
 
   // Join conversation room when selected
@@ -287,7 +263,11 @@ export default function MessagesPage() {
     if (!socket) return;
 
     const handleNewMessage = (message: any) => {
-      setMessages(prev => [...prev, message]);
+      setMessages(prev => {
+          if (prev.some(m => m.id === message.id)) {
+            return prev;
+          }
+          return [...prev, message]});
     };
 
     socket.on('message-received', handleNewMessage);

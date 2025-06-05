@@ -1,117 +1,25 @@
-import { Server as NetServer } from 'http';
-import { Server as SocketIOServer } from 'socket.io';
-import { NextApiResponse } from 'next';
-import { getServerSession } from "next-auth/next";
-import { authOptions } from '@/app/api/auth/[...nextauth]/route';
-import prisma from '@/lib/prisma';
-import { getToken } from 'next-auth/jwt';
+import { io, Socket } from 'socket.io-client';
 
-let io: SocketIOServer | null = null;
-const onlineUsers = new Map<string, string>(); // userId -> socketId
+let socket: Socket | undefined;
 
-export const getIO = () => io;
-
-export type NextApiResponseWithSocket = NextApiResponse & {
-  socket: {
-    server: NetServer & {
-      io?: SocketIOServer;
-    };
-  };
-};
-
-export const initSocket = (server: any) => {
-  if (!io) {
-    io = new SocketIOServer(server, {
-      path: '/api/socket',
+export const initSocket = () => {
+  if (!socket) {
+    socket = io('/api/socketio', {
+      path: '/api/socketio',
       addTrailingSlash: false,
-      cors: {
-        origin: process.env.NEXT_PUBLIC_APP_URL || '*',
-        methods: ['GET', 'POST'],
-        credentials: true
-      }
+      transports: ['websocket', 'polling'],
+      autoConnect: true,
     });
 
-    // Middleware for authentication
-    io.use(async (socket, next) => {
-      try {
-        const token = await getToken({ 
-          req: socket.request as any,
-          secret: process.env.NEXTAUTH_SECRET 
-        });
-        
-        if (!token?.sub) {
-          return next(new Error('Unauthorized'));
-        }
-        
-        socket.data.userId = token.sub;
-        next();
-      } catch (error) {
-        next(new Error('Authentication failed'));
-      }
+    socket.on('connect', () => {
+      console.log('Socket connected');
     });
 
-    io.on('connection', (socket) => {
-      const userId = socket.data.userId;
-      console.log('Client connected:', socket.id, 'User:', userId);
-      
-      // Update online status
-      onlineUsers.set(userId, socket.id);
-      io?.emit('user-online', userId);
-
-      // Join user's personal room for direct messages
-      socket.join(`user:${userId}`);
-
-      socket.on('join-conversation', (conversationId: string) => {
-        socket.join(`conversation:${conversationId}`);
-        console.log(`Client ${socket.id} joined conversation: ${conversationId}`);
-      });
-
-      socket.on('leave-conversation', (conversationId: string) => {
-        socket.leave(`conversation:${conversationId}`);
-        console.log(`Client ${socket.id} left conversation: ${conversationId}`);
-      });
-
-      // Handle new messages
-      socket.on('new-message', (message) => {
-        // Broadcast to all users in the conversation except sender
-        socket.to(`conversation:${message.conversationId}`).emit('message-received', message);
-      });
-
-      // Typing indicators
-      socket.on('typing-start', (conversationId: string) => {
-        socket.to(`conversation:${conversationId}`).emit('user-typing', {
-          userId,
-          conversationId
-        });
-      });
-
-      socket.on('typing-stop', (conversationId: string) => {
-        socket.to(`conversation:${conversationId}`).emit('user-stopped-typing', {
-          userId,
-          conversationId
-        });
-      });
-
-      // Handle disconnection
-      socket.on('disconnect', () => {
-        console.log('Client disconnected:', socket.id);
-        onlineUsers.delete(userId);
-        io?.emit('user-offline', userId);
-      });
+    socket.on('disconnect', () => {
+      console.log('Socket disconnected');
     });
   }
-  return io;
+  return socket;
 };
 
-// Helper function to emit events to specific users
-export const emitToUser = (userId: string, event: string, data: any) => {
-  const socketId = onlineUsers.get(userId);
-  if (socketId) {
-    io?.to(socketId).emit(event, data);
-  }
-};
-
-// Helper function to check if a user is online
-export const isUserOnline = (userId: string) => {
-  return onlineUsers.has(userId);
-}; 
+export const getSocket = () => socket;
