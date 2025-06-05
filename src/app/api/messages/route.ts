@@ -5,6 +5,7 @@ import { authOptions } from '../auth/[...nextauth]/route'; // Adjust path if nee
 import prisma from '@/lib/prisma';
 import { createNotification } from '@/lib/notifications'; // Assuming this lib exists
 import { Message as ClientMessageType, UserProfile as ClientUserProfileType } from '@/lib/types'; // For strong typing of emitted message
+import { getIO } from '@/lib/socket';
 
 export const dynamic = 'force-dynamic'; // Ensures fresh data, good for APIs
 export const runtime = 'nodejs';        // Required for Prisma and Node.js features
@@ -23,9 +24,12 @@ interface NewMessageRequestBody {
 }
 
 // Helper function to emit socket events
-// const emitMessageEvent = (io: SocketIOServer, conversationId: string, message: any) => {
-//   io.to(`conversation:${conversationId}`).emit('new-message', message);
-// };
+const emitMessageEvent = (conversationId: string, message: any) => {
+  const io = getIO();
+  if (io) {
+    io.to(`conversation:${conversationId}`).emit('message-received', message);
+  }
+};
 
 export async function POST(req: NextRequest) {
     console.log("API POST /api/messages (Prisma): Received request");
@@ -47,7 +51,7 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ message: 'Missing or invalid text field' }, { status: 400 });
         }
 
-        let conversationForNotification: any; // To store conversation data for notification logic
+        let conversationForNotification: any;
         let newMessage: any;
 
         if (existingConvId) {
@@ -115,6 +119,8 @@ export async function POST(req: NextRequest) {
             newMessage = transactionResults[0];
             conversationForNotification = transactionResults[1];
 
+            // Emit socket event for new message
+            emitMessageEvent(existingConvId, newMessage);
         } else {
             // New Conversation - Requires item details & recipient ID.
             if (!itemId || !itemTitle || !recipientId) {
@@ -192,9 +198,12 @@ export async function POST(req: NextRequest) {
                 }
             });
             newMessage = conversationForNotification.messages[0];
+
+            // Emit socket event for new message in new conversation
+            emitMessageEvent(conversationForNotification.id, newMessage);
         }
 
-        // Notification Logic - Adapt to new conversation structure
+        // Notification Logic
         if (conversationForNotification && conversationForNotification.item) {
             const actualRecipientId = conversationForNotification.participants.find((p: { id: string }) => p.id !== senderId)?.id;
             if (actualRecipientId) {
@@ -202,7 +211,6 @@ export async function POST(req: NextRequest) {
                 if (conversationForNotification.approved) {
                     shouldNotify = true;
                 } else {
-                    // For unapproved convos, only notify on the *first* user message
                     const userMessagesCount = await prisma.message.count({
                         where: {
                             conversationId: conversationForNotification.id,

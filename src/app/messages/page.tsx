@@ -88,6 +88,73 @@ export default function MessagesPage() {
 
   useEffect(() => { fetchConversations(); }, [fetchConversations]);
 
+  const categorizedConversations = useMemo(() => {
+    const inbox: Conversation[] = [];
+    const incoming: Conversation[] = [];
+    if (!currentUserId) return { inbox, incoming };
+
+    allConversations.forEach(conv => {
+      if (conv.approved) {
+        inbox.push(conv);
+      } else {
+        incoming.push(conv);
+      }
+    });
+
+    const getTimeValue = (timestamp: string | null | undefined, fallbackTimestamp: string | null | undefined = null): number => {
+      const timestampToParse = timestamp ?? fallbackTimestamp;
+      if (timestampToParse && typeof timestampToParse === 'string') {
+        try {
+          return parseISO(timestampToParse).getTime();
+        } catch (e) {
+          console.warn(`Sorting: Could not parse timestamp "${timestampToParse}"`, e);
+          return 0;
+        }
+      }
+      return 0;
+    };
+
+    inbox.sort((a, b) => {
+      const timeA = getTimeValue(a.lastMessageTimestamp, a.createdAt);
+      const timeB = getTimeValue(b.lastMessageTimestamp, b.createdAt);
+      return timeB - timeA;
+    });
+
+    incoming.sort((a, b) => {
+      const timeA = getTimeValue(a.createdAt);
+      const timeB = getTimeValue(b.createdAt);
+      return timeB - timeA;
+    });
+
+    return { inbox, incoming };
+  }, [allConversations, currentUserId]);
+
+  // Handle conversation selection and message listening
+  useEffect(() => {
+    if (!socket || !selectedConversation?.id || !isSocketConnected) return;
+
+    // Join the conversation room
+    socket.emit('join-conversation', selectedConversation.id);
+    
+    // Listen for new messages
+    const handleNewMessage = (message: Message) => {
+      setMessages(prev => {
+        // Check if message already exists
+        if (prev.some(m => m.id === message.id)) {
+          return prev;
+        }
+        return [...prev, message];
+      });
+    };
+
+    socket.on('message-received', handleNewMessage);
+
+    return () => {
+      socket.emit('leave-conversation', selectedConversation.id);
+      socket.off('message-received', handleNewMessage);
+    };
+  }, [socket, selectedConversation?.id, isSocketConnected]);
+
   const fetchMessagesForConversation = useCallback(async (conversationId: string) => {
     if (!currentUserId) return;
     setIsLoadingMessages(true); setError(null);
@@ -235,16 +302,6 @@ export default function MessagesPage() {
       typingTimeoutRef.current = null;
     }, 1500);
   };
-
-  const categorizedConversations = useMemo(() => {
-    const inbox: Conversation[] = []; const incoming: Conversation[] = [];
-    if (!currentUserId) return { inbox, incoming };
-    allConversations.forEach(c => (c.approved || c.initiatorId === currentUserId ? inbox : incoming).push(c));
-    const getTime = (t1?: string|null,t2?: string|null)=>(t1||t2?parseISO(t1||t2!).getTime():0);
-    inbox.sort((a,b)=>getTime(b.lastMessageTimestamp,b.createdAt)-getTime(a.lastMessageTimestamp,a.createdAt));
-    incoming.sort((a,b)=>getTime(b.createdAt)-getTime(a.createdAt));
-    return { inbox, incoming };
-  }, [allConversations, currentUserId]);
 
   const getParticipantData = (conversation: Conversation | null, userIdToFind: string): ParticipantData => {
     if (!userIdToFind) return { id: 'unknown', name: 'System', image: null };
