@@ -7,7 +7,7 @@ export const initSocket = () => {
     socket = io('/api/socketio', {
       path: '/api/socketio',
       addTrailingSlash: false,
-      transports: ['websocket', 'polling'],
+      transports: ['websocket'],
       autoConnect: true,
     });
 
