@@ -169,25 +169,25 @@ export default function MessagesPage() {
       }
     };
 
-    currentSocket.on('message-received', handleNewMessage);
-    currentSocket.on('user-typing', handleUserTyping);
-    currentSocket.on('user-stopped-typing', handleUserStoppedTyping);
+    currentSocket?.on('message-received', handleNewMessage);
+    currentSocket?.on('user-typing', handleUserTyping);
+    currentSocket?.on('user-stopped-typing', handleUserStoppedTyping);
     // Add other listeners like 'user-online', 'user-offline' if needed for UI updates
 
     // Join/Leave rooms based on selectedConversation
     if (selectedConversation?.id) {
       console.log(`Client: Emitting 'join-conversation' for ${selectedConversation.id}`);
-      currentSocket.emit('join-conversation', selectedConversation.id);
+      currentSocket?.emit('join-conversation', selectedConversation.id);
     }
 
     return () => {
       console.log("Client: Cleaning up MessagesPage socket listeners.");
-      currentSocket.off('message-received', handleNewMessage);
-      currentSocket.off('user-typing', handleUserTyping);
-      currentSocket.off('user-stopped-typing', handleUserStoppedTyping);
+      currentSocket?.off('message-received', handleNewMessage);
+      currentSocket?.off('user-typing', handleUserTyping);
+      currentSocket?.off('user-stopped-typing', handleUserStoppedTyping);
       if (selectedConversation?.id) {
         console.log(`Client: Emitting 'leave-conversation' for ${selectedConversation.id}`);
-        currentSocket.emit('leave-conversation', selectedConversation.id);
+        currentSocket?.emit('leave-conversation', selectedConversation.id);
       }
       setUsersTyping(new Map()); // Clear typing users when component unmounts or conversation changes
     };
