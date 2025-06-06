@@ -11,7 +11,7 @@ generator client {
   binaryTargets = ["native", "debian-openssl-1.1.x"]
 }
 
-// --- NextAuth.js Models ---
+// --- NextAuth.js Models --- 
 model Account {
   id                String  @id @default(cuid())
   userId            String
@@ -50,7 +50,7 @@ model VerificationToken {
   @@unique([identifier, token])
 }
 
-// --- Application Models ---
+// --- Application Models --- 
 model User {
   id                      String    @id @default(cuid())
   name                    String?
@@ -100,7 +100,6 @@ model User {
   conversationParticipants ConversationParticipant[] 
   earnings                Earning[] // Added relation to Earning
   contactMessages         ContactMessage[]
-  messageReadStatus       MessageReadStatus[]
 }
 
 model AdminFeeWithdrawal {
@@ -181,7 +180,6 @@ model Conversation {
   participants            User[]    @relation("ConversationParticipants") 
   participantsInfo        ConversationParticipant[] 
   messages                Message[]
-  messageReadStatus       MessageReadStatus[]
 
   itemTitle               String?   
   itemImageUrl            String?   
@@ -213,25 +211,9 @@ model Message {
   content                 String
   isSystemMessage         Boolean?      @default(false) 
   createdAt               DateTime      @default(now())
-  
-  readStatus              MessageReadStatus[]
 
   @@index([conversationId])
   @@index([senderId])
-}
-
-model MessageReadStatus {
-  id          String   @id @default(cuid())
-  messageId   String
-  message     Message  @relation(fields: [messageId], references: [id])
-  userId      String
-  user        User     @relation(fields: [userId], references: [id])
-  isRead      Boolean  @default(false)
-  readAt      DateTime?
-
-  @@unique([messageId, userId])
-  @@index([messageId])
-  @@index([userId])
 }
 
 model Dispute {
@@ -422,7 +404,7 @@ model ItemTracking {
   @@index([itemId])
 }
 
-// --- Enums ---
+// --- Enums --- 
 enum UserRole {
   USER
   ADMIN
