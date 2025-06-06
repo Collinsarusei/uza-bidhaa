@@ -488,7 +488,12 @@ export default function MessagesPage() {
                  onChange={handleTextareaChange}
                  rows={1}
                  className="flex-1 resize-none max-h-24 overflow-y-auto p-2 text-sm border rounded-md focus-visible:ring-1 focus-visible:ring-ring"
-                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(e as any); }}}
+                 onKeyDown={(e) => {
+                   if (e.key === 'Enter' && !e.shiftKey) {
+                     e.preventDefault();
+                     handleSendMessage(e as any);
+                   }
+                 }}
                  disabled={isSending || isLoadingMessages}
                />
                <Button
