@@ -480,25 +480,25 @@ export default function MessagesPage() {
         {/* Input Footer */}
         <div className="border-t p-3 bg-background dark:bg-slate-900 mt-auto sticky bottom-0 flex-shrink-0">
           {canChat ? (
-            <form onSubmit={handleSendMessage} className="flex items-center space-x-2">
-              <Textarea
-                ref={textareaRef}
-                placeholder="Type your message..."
-                value={newMessage}
-                onChange={handleTextareaChange}
-                rows={1}
-                className="flex-1 resize-none max-h-24 overflow-y-auto p-2 text-sm border rounded-md focus-visible:ring-1 focus-visible:ring-ring"
-                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(e as any); }}}
-                disabled={isSending || isLoadingMessages} // Textarea enabled unless actively sending/loading
-              />
-              <Button
-                type="submit"
-                size="icon"
-                disabled={!newMessage.trim() || isSending || isLoadingMessages || !socket?.connected} // Send button disabled if socket not connected
-              >
-                {isSending ? <Icons.spinner className="h-4 w-4 animate-spin" /> : <Icons.send className="h-4 w-4" />}
-              </Button>
-            </form>
+               <form onSubmit={handleSendMessage} className="flex items-center space-x-2">
+               <Textarea
+                 ref={textareaRef}
+                 placeholder="Type your message..."
+                 value={newMessage}
+                 onChange={handleTextareaChange}
+                 rows={1}
+                 className="flex-1 resize-none max-h-24 overflow-y-auto p-2 text-sm border rounded-md focus-visible:ring-1 focus-visible:ring-ring"
+                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(e as any); }}}
+                 disabled={isSending || isLoadingMessages}
+               />
+               <Button
+                 type="submit"
+                 size="icon"
+                 disabled={!newMessage.trim() || isSending || isLoadingMessages || !socket} // Send button disabled if socket not connected
+               >
+                 {isSending ? <Icons.spinner className="h-4 w-4 animate-spin" /> : <Icons.send className="h-4 w-4" />}
+               </Button>
+             </form>
           ) : (
             <div className="text-center text-sm text-muted-foreground py-2">
               {/* Logic for when chat is not allowed (e.g., pending approval) */}
