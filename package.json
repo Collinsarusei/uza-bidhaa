@@ -52,6 +52,7 @@
     "firebase": "^11.8.1",
     "firebase-admin": "^13.4.0",
     "formidable": "^3.5.4",
+    "immer": "^10.1.1",
     "lucide": "^0.507.0",
     "lucide-react": "^0.475.0",
     "next-auth": "^4.24.11",

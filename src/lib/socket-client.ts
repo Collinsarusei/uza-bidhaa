@@ -22,4 +22,6 @@ export const initSocket = () => {
   return socket;
 };
 
-export const getSocket = () => socket;
+export const getSocket = () => {
+  return socket;
+};

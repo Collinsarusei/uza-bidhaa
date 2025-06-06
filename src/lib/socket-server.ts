@@ -1,10 +1,9 @@
 import { Server as NetServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import { NextApiResponse } from 'next';
-import { getServerSession } from "next-auth/next";
-import { authOptions } from '@/app/api/auth/[...nextauth]/route';
-import prisma from '@/lib/prisma';
-import { getToken } from 'next-auth/jwt';
+import type { Socket as NetSocket } from 'node:net';
+import { getServerSession } from 'next-auth';
+import { authOptions } from './auth';
 
 let io: SocketIOServer | null = null;
 const onlineUsers = new Map<string, string>(); // userId -> socketId
@@ -12,7 +11,7 @@ const onlineUsers = new Map<string, string>(); // userId -> socketId
 export const getIO = () => io;
 
 export type NextApiResponseWithSocket = NextApiResponse & {
-  socket: {
+  socket: NetSocket & {
     server: NetServer & {
       io?: SocketIOServer;
     };
@@ -34,19 +33,30 @@ export const initSocket = (server: any) => {
     // Middleware for authentication
     io.use(async (socket, next) => {
       try {
-        const token = await getToken({ 
-          req: socket.request as any,
-          secret: process.env.NEXTAUTH_SECRET 
-        });
-        
-        if (!token?.sub) {
-          return next(new Error('Unauthorized'));
+        //console.log('Middleware - Socket Data:', socket.data);
+        // Verify JWT from the client
+        // Extract token from handshake
+        // const token = socket.handshake.auth.token;
+
+        // if (!token) {
+        //   console.log('No token provided');
+        //   return next(new Error('Authentication error'));
+        // }
+
+        // const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        // socket.data.userId = decoded.userId;
+
+        const session = await getServerSession(authOptions);
+        if (!session?.user?.id) {
+          console.log('No session found');
+          return next(new Error('Authentication error'));
         }
-        
-        socket.data.userId = token.sub;
+        socket.data.userId = session.user.id;
+
         next();
       } catch (error) {
-        next(new Error('Authentication failed'));
+        console.error('Authentication error', error);
+        return next(new Error('Authentication error'));
       }
     });
 

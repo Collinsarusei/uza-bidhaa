@@ -103,6 +103,7 @@ export interface ConversationParticipantInfo {
 }
 
 export interface Conversation {
+  unreadCount: number;
   id: string;
   itemId: string;
   initiatorId: string;

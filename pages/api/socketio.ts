@@ -11,9 +11,25 @@ const SocketHandler = (req: any, res: any) => {
     res.socket.server.io = io
 
     io.on('connection', socket => {
-      socket.on('input change', msg => {
-        socket.broadcast.emit('updateInput', msg)
-      })
+        console.log('Connected:', socket.id)
+
+        // Implement Keep-Alive
+        const intervalId = setInterval(() => {
+            socket.emit('ping');
+        }, 15000); // Send ping every 15 seconds
+
+        socket.on('pong', () => {
+            console.log('Received pong from client:', socket.id);
+        });
+
+        socket.on('disconnect', () => {
+            console.log('Disconnected:', socket.id)
+            clearInterval(intervalId);
+        })
+        socket.on('new-message', (message) => {
+            console.log('new message', message)
+            socket.broadcast.emit('message-received', message)
+        })
     })
   }
   res.end()

@@ -1,29 +1,33 @@
 // src/app/api/messages/route.ts
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
-import { authOptions } from '../auth/[...nextauth]/route';
+import { authOptions } from '../auth/[...nextauth]/route'; // Adjust path if needed
 import prisma from '@/lib/prisma';
-import { createNotification } from '@/lib/notifications';
-import { Prisma } from '@prisma/client';
-import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
-import { Server as SocketIOServer } from 'socket.io';
-import { Server as NetServer } from 'http';
-import { getIO } from '@/lib/socket-server';
+import { createNotification } from '@/lib/notifications'; // Assuming this lib exists
+import { Message as ClientMessageType, UserProfile as ClientUserProfileType } from '@/lib/types'; // For strong typing of emitted message
 
-export const dynamic = 'force-dynamic';
-export const runtime = 'nodejs';
-export const fetchCache = 'force-no-store';
-export const revalidate = 0;
+export const dynamic = 'force-dynamic'; // Ensures fresh data, good for APIs
+export const runtime = 'nodejs';        // Required for Prisma and Node.js features
 
-const SYSTEM_MESSAGE_SENDER_ID = "system_warning"; 
+const SYSTEM_MESSAGE_SENDER_ID = "system_warning";
 const CHAT_PAYMENT_WARNING_MESSAGE = "For your safety, ensure all payments are made through the Uza Bidhaa platform. We are not liable for any losses incurred from off-platform payments or direct M-Pesa transfers arranged via chat.";
 
-// Helper function to emit socket events
-const emitMessageEvent = (io: SocketIOServer, conversationId: string, message: any) => {
-  io.to(`conversation:${conversationId}`).emit('new-message', message);
-};
 
-export async function POST(req: Request) {
+interface NewMessageRequestBody {
+  conversationId?: string;
+  recipientId?: string;
+  itemId?: string;
+  text?: string;
+  itemTitle?: string;
+  itemImageUrl?: string | null;
+}
+
+// Helper function to emit socket events
+// const emitMessageEvent = (io: SocketIOServer, conversationId: string, message: any) => {
+//   io.to(`conversation:${conversationId}`).emit('new-message', message);
+// };
+
+export async function POST(req: NextRequest) {
     console.log("API POST /api/messages (Prisma): Received request");
 
     const session = await getServerSession(authOptions);
@@ -35,7 +39,7 @@ export async function POST(req: Request) {
     const senderName = session.user.name; 
 
     try {
-        const body = await req.json();
+        const body: NewMessageRequestBody = await req.json();
         const { conversationId: existingConvId, recipientId, itemId, text, itemTitle, itemImageUrl } = body;
 
         if (!text || typeof text !== 'string' || text.trim() === '') {
@@ -47,6 +51,7 @@ export async function POST(req: Request) {
         let newMessage: any;
 
         if (existingConvId) {
+            // Existing Conversation - Standard message creation
             const existingConversationDetails = await prisma.conversation.findUnique({ 
                 where: { id: existingConvId },
                 include: { 
@@ -110,22 +115,14 @@ export async function POST(req: Request) {
             newMessage = transactionResults[0];
             conversationForNotification = transactionResults[1];
 
-            // Emit socket event for new message
-            const io = getIO();
-            if (io) {
-                io.to(`conversation:${existingConvId}`).emit('message-received', {
-                    ...newMessage,
-                    conversationId: existingConvId
-                });
-            }
         } else {
-            // For new conversations, require itemId, itemTitle and recipientId
+            // New Conversation - Requires item details & recipient ID.
             if (!itemId || !itemTitle || !recipientId) {
                 console.error("API Messages POST: Missing required fields for new conversation (itemId, itemTitle, recipientId).");
                 return NextResponse.json({ message: 'Missing required fields for new conversation' }, { status: 400 });
             }
 
-            // Check if conversation already exists
+            // Check if conversation already exists (based on Item and Participants combo).
             const foundConversation = await prisma.conversation.findFirst({
                 where: {
                     itemId: itemId,
@@ -147,7 +144,7 @@ export async function POST(req: Request) {
                     itemTitle: itemTitle,
                     itemImageUrl: itemImageUrl || null,
                     initiator: { connect: { id: senderId } },
-                    participants: { connect: [{ id: senderId }, { id: recipientId }] },
+                    participants: { connect: [ { id: senderId }, { id: recipientId } ] },
                     participantsInfo: {
                         create: [
                             { userId: senderId, lastReadAt: now },
@@ -197,7 +194,7 @@ export async function POST(req: Request) {
             newMessage = conversationForNotification.messages[0];
         }
 
-        // Notification Logic
+        // Notification Logic - Adapt to new conversation structure
         if (conversationForNotification && conversationForNotification.item) {
             const actualRecipientId = conversationForNotification.participants.find((p: { id: string }) => p.id !== senderId)?.id;
             if (actualRecipientId) {
@@ -205,6 +202,7 @@ export async function POST(req: Request) {
                 if (conversationForNotification.approved) {
                     shouldNotify = true;
                 } else {
+                    // For unapproved convos, only notify on the *first* user message
                     const userMessagesCount = await prisma.message.count({
                         where: {
                             conversationId: conversationForNotification.id,
@@ -241,14 +239,11 @@ export async function POST(req: Request) {
 
     } catch (error: any) {
         console.error("API Messages POST Error (Prisma):", error);
-        if (error instanceof PrismaClientKnownRequestError) {
-            console.error(`Prisma Error Code: ${error.code}, Meta: ${JSON.stringify(error.meta)}`);
-        }
         return NextResponse.json({ message: 'Failed to send message', error: error.message }, { status: 500 });
     }
 }
 
-export async function GET(req: Request) {
+export async function GET(req: NextRequest) {
     console.log("API GET /api/messages (Prisma): Received request");
     
     const session = await getServerSession(authOptions);
@@ -307,7 +302,7 @@ export async function GET(req: Request) {
                     } 
                 } 
             }
-        }).catch((error: any) => {
+        }).catch(error => {
             console.error("Error fetching messages:", error);
             throw new Error("Failed to fetch messages from database");
         });
@@ -326,7 +321,7 @@ export async function GET(req: Request) {
 
         // Prepare response
         const response = {
-            messages: messages.map((msg: { id: any; content: any; createdAt: any; senderId: any; sender: any; isSystemMessage: any; }) => ({
+            messages: messages.map(msg => ({
                 id: msg.id,
                 content: msg.content,
                 createdAt: msg.createdAt,
