@@ -8,14 +8,14 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Icons } from "@/components/icons";
 import { Textarea } from "@/components/ui/textarea";
-import { Conversation, Message, UserProfile } from '@/lib/types';
+import { Conversation, Message, UserProfile } from '@/lib/types'; // Ensure these types are accurate
 import { formatDistanceToNow, parseISO } from 'date-fns';
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { useIsMobile } from "@/hooks/use-mobile";
 import Link from 'next/link';
-import { getSocket } from '@/lib/socket-client'; // Ensure initSocket is called by getSocket if needed
+import { getSocket } from '@/lib/socket-client'; // Uses initSocket internally if socket is not ready
 import { produce } from 'immer';
 
 type ParticipantData = Partial<Pick<UserProfile, 'id' | 'name' | 'image'>>;
@@ -38,7 +38,7 @@ export default function MessagesPage() {
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'inbox' | 'incoming'>('inbox');
+  const [activeTab, setActiveTab] = useState<'inbox' | 'incoming'>('inbox'); // 'approved' | 'pending' might be better terms
 
   const { toast } = useToast();
   const isMobile = useIsMobile();
@@ -48,7 +48,7 @@ export default function MessagesPage() {
   const [usersTyping, setUsersTyping] = useState<Map<string, TypingUserInfo>>(new Map());
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  const socket = getSocket(); // This should ensure socket is initialized if not already
+  const socket = getSocket(); // Get socket instance, ensures initSocket is called if needed
 
   // --- Initial Data Fetching ---
   const fetchConversations = useCallback(async () => {
@@ -62,10 +62,11 @@ export default function MessagesPage() {
       setAllConversations(data.conversations || []);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      toast({ title: "Error", description: `Failed to load conversations: ${err instanceof Error ? err.message : String(err)}`, variant: "destructive" });
     } finally {
       setIsLoadingConversations(false);
     }
-  }, [status, currentUserId]);
+  }, [status, currentUserId, toast]);
 
   useEffect(() => {
     fetchConversations();
@@ -80,34 +81,39 @@ export default function MessagesPage() {
       if (!response.ok) throw new Error((await response.json().catch(() => ({}))).message || 'Failed to fetch messages');
       const data = await response.json();
       setMessages(data.messages || []);
-      if (data.conversationDetails) {
+      if (data.conversationDetails) { // API can return updated conversation details
         setSelectedConversation(prev => prev ? ({ ...prev, ...data.conversationDetails }) : data.conversationDetails);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      toast({ title: "Error", description: `Failed to load messages: ${err instanceof Error ? err.message : String(err)}`, variant: "destructive" });
       setMessages([]);
     } finally {
       setIsLoadingMessages(false);
     }
-  }, [currentUserId]);
+  }, [currentUserId, toast]);
 
   useEffect(() => {
     if (selectedConversation?.id) {
       fetchMessagesForConversation(selectedConversation.id);
     } else {
-      setMessages([]);
+      setMessages([]); // Clear messages if no conversation is selected
     }
   }, [selectedConversation?.id, fetchMessagesForConversation]);
 
 
-  // --- Socket.IO Event Handlers ---
+  // --- Socket.IO Event Handlers & Room Management ---
   useEffect(() => {
-    if (status !== 'authenticated' || !currentUserId || !socket) return;
+    if (status !== 'authenticated' || !currentUserId || !socket) {
+      // If socket is not ready yet, this effect might run before socket is initialized by getSocket()
+      // getSocket() should handle initialization, so this check might be for early renders.
+      return;
+    }
 
-    // Ensure socket is connected before attaching listeners
+    // Attempt to connect if socket object exists but is not connected
     if (!socket.connected) {
-        console.warn("MessagesPage Effect: Socket exists but not connected, trying to connect.");
-        socket.connect(); // Attempt to connect if not already
+        console.warn("MessagesPage Effect: Socket exists but not connected. Attempting socket.connect().");
+        socket.connect();
     }
 
     const handleNewMessage = (incomingMessage: Message) => {
@@ -130,7 +136,8 @@ export default function MessagesPage() {
               draft[convIndex].unreadCount = (draft[convIndex].unreadCount || 0) + 1;
             }
           } else {
-            fetchConversations();
+            console.log("New message for a new/unknown conversation, refetching all conversations.");
+            fetchConversations(); // Consider a more targeted update or a 'new_conversation' event
           }
         })
       );
@@ -146,27 +153,34 @@ export default function MessagesPage() {
       }
     };
 
+    // Attach listeners
     socket.on('message-received', handleNewMessage);
     socket.on('user-typing', handleUserTyping);
     socket.on('user-stopped-typing', handleUserStoppedTyping);
 
-    if (selectedConversation?.id) {
+    // Join room for selected conversation
+    if (selectedConversation?.id && socket.connected) { // Only join if connected
+      console.log(`Client: Emitting 'join-conversation' for ${selectedConversation.id}`);
       socket.emit('join-conversation', selectedConversation.id);
     }
 
-    return () => {
+    return () => { // Cleanup function
+      console.log("Client: Cleaning up MessagesPage socket listeners.");
       socket.off('message-received', handleNewMessage);
       socket.off('user-typing', handleUserTyping);
       socket.off('user-stopped-typing', handleUserStoppedTyping);
-      if (selectedConversation?.id) {
+      if (selectedConversation?.id && socket.connected) { // Only leave if connected
+        console.log(`Client: Emitting 'leave-conversation' for ${selectedConversation.id}`);
         socket.emit('leave-conversation', selectedConversation.id);
       }
-      setUsersTyping(new Map());
+      setUsersTyping(new Map()); // Clear typing users when changing conversations or unmounting
     };
-  }, [socket, status, currentUserId, selectedConversation, fetchConversations]); // Added markConversationAsReadAPI if it becomes a dependency
+  }, [socket, status, currentUserId, selectedConversation, fetchConversations]); // Dependencies
 
+  // --- Mark As Read Logic ---
   const markConversationAsReadAPI = useCallback(async (conversationId: string) => {
     if (!currentUserId) return;
+    console.log(`Marking conversation ${conversationId} as read.`);
     try {
       await fetch(`/api/conversations/${conversationId}/mark-as-read`, { method: 'POST' });
       setAllConversations(prev => produce(prev, (draft: Conversation[]) => {
@@ -182,13 +196,20 @@ export default function MessagesPage() {
     }
   }, [selectedConversation?.id, selectedConversation?.unreadCount, markConversationAsReadAPI]);
 
+
+  // --- UI Interaction Handlers ---
   const handleSelectConversation = (conv: Conversation) => {
-    if (selectedConversation?.id === conv.id) return;
-    if (socket && selectedConversation?.id) socket.emit('leave-conversation', selectedConversation.id);
-    setUsersTyping(new Map());
+    if (selectedConversation?.id === conv.id && messages.length > 0) return; // Avoid re-selecting same if messages loaded
+
+    if (socket && selectedConversation?.id && socket.connected) {
+        socket.emit('leave-conversation', selectedConversation.id);
+    }
+    setUsersTyping(new Map()); // Clear typing users from old conversation
     setSelectedConversation(conv);
-    setMessages([]);
-    if (isMobile) setTimeout(() => textareaRef.current?.focus(), 0);
+    setMessages([]); // Clear old messages; new ones will be fetched by useEffect
+    if (isMobile) {
+        setTimeout(() => textareaRef.current?.focus(), 50); // Slight delay for UI to update
+    }
   };
 
   const handleSendMessage = async (e: React.FormEvent) => {
@@ -196,33 +217,39 @@ export default function MessagesPage() {
     e.preventDefault();
 
     if (!socket) {
-        console.warn("handleSendMessage: Socket object is null or undefined.");
+        console.warn("handleSendMessage: Socket object is null. Cannot send message.");
         toast({ title: "Chat Error", description: "Chat service not available. Please refresh.", variant: "destructive" });
         return;
     }
     if (!socket.connected) {
-        console.warn("handleSendMessage: Socket is not connected.");
-        toast({ title: "Connection Error", description: "Not connected to chat server. Trying to reconnect...", variant: "destructive" });
-        socket.connect(); // Attempt to reconnect
-        return;
+        console.warn("handleSendMessage: Socket is not connected. Attempting to connect...");
+        toast({ title: "Connection Error", description: "Not connected to chat. Trying to send...", variant: "default" });
+        socket.connect(); // Attempt to reconnect, message might fail if this doesn't connect fast enough
+        // We'll proceed, but the button should ideally be disabled. The disabled state handles this.
     }
-    if (!newMessage.trim() || !selectedConversation || !currentUserId || !session?.user) {
-      console.warn("handleSendMessage: Pre-condition not met", {
+
+    // Final check for sendability, including socket.connected
+    if (!newMessage.trim() || !selectedConversation || !currentUserId || !session?.user || !socket.connected) {
+      console.warn("handleSendMessage: Pre-condition not met OR socket not connected.", {
         newMessageEmpty: !newMessage.trim(),
         noSelectedConversation: !selectedConversation,
         noCurrentUserId: !currentUserId,
         noSessionUser: !session?.user,
         socketId: socket?.id,
-        socketConnected: socket?.connected
+        isSocketConnected: socket?.connected // Explicitly log connected status
       });
+      // If socket not connected, the button should be disabled, but this is a safeguard.
+      if (!socket.connected) {
+        toast({ title: "Send Failed", description: "Still not connected to chat server.", variant: "destructive" });
+      }
       return;
     }
 
     console.log("handleSendMessage: All checks passed. Proceeding to send.");
     setIsSending(true);
     const textContent = newMessage.trim();
-    const tempNewMessage = newMessage; // Store before clearing
-    setNewMessage("");
+    const tempNewMessageForInput = newMessage; // Store original for potential revert
+    setNewMessage(""); // Clear input
 
     const optimisticId = `optimistic-${Date.now()}`;
     const optimisticMessage: Message = {
@@ -237,8 +264,10 @@ export default function MessagesPage() {
     setMessages(prev => [...prev, optimisticMessage]);
 
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-    typingTimeoutRef.current = null; // Clear ref after use
-    socket.emit('typing-stop', { conversationId: selectedConversation.id });
+    typingTimeoutRef.current = null;
+    if (selectedConversation.id && socket.connected) { // Check socket connected before emitting
+        socket.emit('typing-stop', { conversationId: selectedConversation.id });
+    }
 
     try {
       console.log("handleSendMessage: Sending POST to /api/messages");
@@ -261,14 +290,14 @@ export default function MessagesPage() {
         produce(prev, (draft: Message[]) => {
           const index = draft.findIndex(msg => msg.id === optimisticId);
           if (index !== -1) draft[index] = savedMessage;
-          else if (!draft.some(msg => msg.id === savedMessage.id)) draft.push(savedMessage);
+          else if (!draft.some(msg => msg.id === savedMessage.id)) draft.push(savedMessage); // Fallback
         })
       );
     } catch (error) {
       console.error('handleSendMessage: Error sending message:', error);
       toast({ title: "Send Error", description: (error instanceof Error ? error.message : String(error)), variant: "destructive" });
-      setMessages(prev => prev.filter(msg => msg.id !== optimisticId));
-      setNewMessage(tempNewMessage); // Restore message to input on failure
+      setMessages(prev => prev.filter(msg => msg.id !== optimisticId)); // Revert optimistic
+      setNewMessage(tempNewMessageForInput); // Restore message to input on failure
     } finally {
       console.log("handleSendMessage: setIsSending(false)");
       setIsSending(false);
@@ -277,25 +306,27 @@ export default function MessagesPage() {
 
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setNewMessage(e.target.value);
-    if (!socket || !socket.connected || !selectedConversation) return; // Add socket.connected check
+    if (!socket || !socket.connected || !selectedConversation) return;
 
-    if (!typingTimeoutRef.current) {
+    if (!typingTimeoutRef.current) { // Only emit start if not already typing (i.e., timeout is not set)
       socket.emit('typing-start', { conversationId: selectedConversation.id });
     } else {
-      clearTimeout(typingTimeoutRef.current);
+      clearTimeout(typingTimeoutRef.current); // Reset existing timeout
     }
     typingTimeoutRef.current = setTimeout(() => {
-      if (socket && socket.connected && selectedConversation) { // Check again before emitting stop
+      // Check socket and conversation again before emitting stop, as state might have changed
+      if (socket && socket.connected && selectedConversation) {
         socket.emit('typing-stop', { conversationId: selectedConversation.id });
       }
-      typingTimeoutRef.current = null;
-    }, 2000);
+      typingTimeoutRef.current = null; // Important to clear ref after timeout executes
+    }, 1500); // User considered stopped typing after 1.5s
   };
 
+  // --- Memoized Values & Utility Functions ---
   const categorizedConversations = useMemo(() => {
     const inbox: Conversation[] = []; const incoming: Conversation[] = [];
     if (!currentUserId) return { inbox, incoming };
-    allConversations.forEach(conv => {
+    allConversations.forEach(conv => { // Assuming 'approved' and 'initiatorId' are on your Conversation type
       if (conv.approved || conv.initiatorId === currentUserId) inbox.push(conv); else incoming.push(conv);
     });
     const getTimeValue = (t1: string | null | undefined, t2: string | null | undefined = null): number => {
@@ -307,83 +338,224 @@ export default function MessagesPage() {
   }, [allConversations, currentUserId]);
 
   const getParticipantData = (conversation: Conversation | null, userId: string): ParticipantData => {
-    if (!conversation?.participants) return { id: userId, name: 'User', image: null };
+    if (!conversation?.participants) return { id: userId, name: 'User...', image: null };
+    // Assuming conversation.participants is an array of UserProfile-like objects
     const pInfo = conversation.participants.find(p => p.id === userId);
-    return pInfo || { id: userId, name: 'User', image: null };
+    return pInfo || { id: userId, name: `User ${userId.slice(0,4)}...`, image: null };
   };
   const formatTimestamp = (ts: string | null): string => ts ? formatDistanceToNow(parseISO(ts), { addSuffix: true }) : '';
 
-  useEffect(() => { if (messages.length) messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+  useEffect(() => { if (messages.length) messagesEndRef.current?.scrollIntoView({ behavior: "auto" }); }, [messages]);
 
+
+  // --- Render Functions ---
   const renderConversationItem = (conv: Conversation, isIncomingView: boolean) => {
-    const otherP = (conv.participants?.filter(p => p.id !== currentUserId) || [])[0] || { id: 'unknown', name: 'Unknown', image: null };
+    const otherParticipants = conv.participants?.filter(p => p.id !== currentUserId) || [];
+    const otherParticipant = otherParticipants[0] || { id: 'unknown', name: 'Unknown User', image: null }; // Fallback
     const isSelected = selectedConversation?.id === conv.id;
     const hasUnread = (conv.unreadCount || 0) > 0 && !isSelected;
+
     return (
-        <div key={conv.id} onClick={() => handleSelectConversation(conv)}
-            className={cn("flex items-start space-x-3 p-3 border-b cursor-pointer", isSelected && !isMobile ? "bg-muted" : "hover:bg-muted/50")}>
-            <Avatar className="h-10 w-10 border"><AvatarImage src={otherP.image ?? undefined} /><AvatarFallback>{otherP.name?.charAt(0)?.toUpperCase() || 'U'}</AvatarFallback></Avatar>
+        <div
+            key={conv.id}
+            onClick={() => handleSelectConversation(conv)}
+            className={cn(
+                "flex items-start space-x-3 p-3 border-b cursor-pointer transition-colors",
+                isSelected && !isMobile ? "bg-muted dark:bg-slate-700" : "hover:bg-muted/50 dark:hover:bg-slate-700/50",
+                isIncomingView && "opacity-80 hover:opacity-100"
+            )}
+        >
+            <Avatar className="h-10 w-10 border">
+                <AvatarImage src={otherParticipant.image ?? undefined} alt={otherParticipant.name ?? 'User'} />
+                <AvatarFallback>{otherParticipant.name?.charAt(0)?.toUpperCase() || 'U'}</AvatarFallback>
+            </Avatar>
             <div className="flex-1 overflow-hidden">
                 <div className="flex justify-between items-center">
-                    <p className={cn("text-sm font-medium truncate", hasUnread && "font-bold")}>{otherP.name}</p>
-                    <p className="text-xs text-muted-foreground ml-2">{formatTimestamp(conv.lastMessageTimestamp || conv.createdAt)}</p>
+                    <p className={cn("text-sm font-medium truncate", hasUnread && "font-bold text-primary dark:text-sky-400")}>
+                    {otherParticipant?.name || (otherParticipant?.id ? `User...${otherParticipant.id.slice(-4)}` : 'Unknown User')}
+                    </p>
+                    <p className="text-xs text-muted-foreground whitespace-nowrap ml-2">
+                        {formatTimestamp(conv.lastMessageTimestamp || conv.createdAt)}
+                    </p>
                 </div>
-                <p className={cn("text-xs text-muted-foreground truncate", hasUnread && "font-semibold")}>{conv.lastMessageSnippet || '...'}</p>
-                {conv.itemTitle && <p className="text-xs italic">{conv.itemTitle}</p>}
+                <p className={cn("text-xs text-muted-foreground truncate", hasUnread && "text-foreground font-semibold")}>
+                    {conv.lastMessageSnippet || (isIncomingView ? 'Incoming request' : 'No messages yet')}
+                </p>
+                {conv.itemTitle && <p className="text-xs text-muted-foreground truncate italic">Item: {conv.itemTitle}</p>}
             </div>
-            {hasUnread && <Badge variant="destructive" className="ml-2">{conv.unreadCount}</Badge>}
-        </div>);
+            {/* Add your "Approve" button logic here if isIncomingView is true */}
+            {hasUnread && !isIncomingView && (
+                <Badge variant="destructive" className="flex-shrink-0 self-center ml-2 px-1.5 py-0.5 text-xs">
+                    {conv.unreadCount}
+                </Badge>
+            )}
+        </div>
+    );
   };
 
   const renderChatAreaContent = (conversation: Conversation | null) => {
-    if (!conversation) return <div className="flex-1 flex items-center justify-center">Select a conversation.</div>;
-    const typingNames = Array.from(usersTyping.values()).map(u => u.userName || "Someone").join(', ');
+    if (!conversation) {
+      return <div className="flex-1 flex items-center justify-center text-muted-foreground p-4 text-center h-full">Select a conversation to start chatting.</div>;
+    }
+
+    const otherParticipantData = getParticipantData(conversation, conversation?.participants?.find(p => p.id !== currentUserId)?.id || '');
+    const typingNames = Array.from(usersTyping.values())
+        .map(uInfo => uInfo.userName || "Someone") // Use userName for display
+        .join(', ');
+
+    // Determine if chat is allowed (based on approval, initiator, etc.)
+    // This logic should align with your backend rules.
+    const canChat = conversation.approved || conversation.initiatorId === currentUserId; // Simplified example
+
     return (
-      <div className="flex-1 flex flex-col h-full bg-background">
-        <div className="p-3 border-b flex items-center space-x-2 sticky top-0 z-10 bg-background">
-            {isMobile && <Button variant="ghost" size="icon" onClick={() => setSelectedConversation(null)}><Icons.arrowLeft className="h-5 w-5"/></Button>}
-            {/* Other header elements */}
+      <div className="flex-1 flex flex-col h-full bg-background dark:bg-slate-900">
+        {/* Header */}
+        <div className="p-3 border-b flex items-center space-x-3 sticky top-0 bg-background dark:bg-slate-900 z-10 flex-shrink-0">
+            {isMobile && (
+                <Button variant="ghost" size="icon" onClick={() => setSelectedConversation(null)} className="mr-2">
+                    <Icons.arrowLeft className="h-5 w-5" />
+                </Button>
+            )}
+            <Avatar className="h-9 w-9 border">
+                <AvatarImage src={otherParticipantData.image ?? undefined} />
+                <AvatarFallback>{otherParticipantData.name?.charAt(0)?.toUpperCase() || 'U'}</AvatarFallback>
+            </Avatar>
+            <div className="flex-1 overflow-hidden">
+                <p className="font-medium text-sm truncate">{otherParticipantData.name}</p>
+                {conversation.itemTitle && <p className="text-xs text-muted-foreground italic truncate">Item: {conversation.itemTitle}</p>}
+            </div>
+            {/* Payment Button or other actions */}
         </div>
-        <div className="flex-1 overflow-y-auto p-4 space-y-3">{messages.map(msg => {
+
+        {/* Messages Area */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-4" style={{ scrollBehavior: 'smooth' }}>
+          {isLoadingMessages && !messages.length && ( Array.from({ length: 5 }).map((_, i) => <Skeleton key={`msgskel-${i}`} className="h-12 w-3/4 my-2 rounded-md even:self-end even:w-2/3 odd:w-2/3" />) )}
+          {!isLoadingMessages && messages.length === 0 && canChat && ( <p className="text-center text-sm text-muted-foreground py-6">No messages yet. Start the conversation!</p> )}
+          {!isLoadingMessages && messages.length === 0 && !canChat && ( <p className="text-center text-sm text-muted-foreground py-6">Waiting for approval to chat.</p> )}
+
+          {messages.map((msg) => {
             const isSender = msg.senderId === currentUserId;
-            return (<div key={msg.id} className={cn("flex items-end gap-2", isSender ? "justify-end" : "justify-start")}>
-                {!isSender && msg.sender && <Avatar className="h-6 w-6"><AvatarImage src={msg.sender.image||undefined}/><AvatarFallback>{msg.sender.name?.charAt(0)}</AvatarFallback></Avatar>}
-                <div className={cn("rounded-lg p-2 max-w-[75%]", isSender ? "bg-primary text-primary-foreground":"bg-muted")}>
-                    <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
-                    <p className={cn("text-xs mt-0.5 opacity-70",isSender?"text-right":"text-left")}>{formatTimestamp(msg.createdAt)}</p>
+            const senderDisplay = msg.sender || getParticipantData(conversation, msg.senderId); // Fallback if sender not on msg
+            if (msg.isSystemMessage) { // Handle system messages
+                return (<div key={msg.id} className="my-3 p-2.5 bg-yellow-100 dark:bg-yellow-800 border-l-4 border-yellow-500 text-yellow-700 dark:text-yellow-200 rounded-md text-xs flex items-start gap-2">
+                    <Icons.alertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0 text-yellow-600 dark:text-yellow-400" />
+                    <p className="whitespace-pre-wrap">{msg.content}</p>
+                </div>);
+            }
+            return (
+                <div key={msg.id} className={cn("flex items-end gap-2 max-w-[85%]", isSender ? "justify-end self-end" : "justify-start self-start")}>
+                    {!isSender && senderDisplay && (
+                         <Avatar className="h-6 w-6 border flex-shrink-0 self-start">
+                             <AvatarImage src={senderDisplay.image ?? undefined} alt={senderDisplay.name ?? 'Sender'} />
+                             <AvatarFallback>{senderDisplay.name?.charAt(0)?.toUpperCase() || 'U'}</AvatarFallback>
+                         </Avatar>
+                    )}
+                    <div className={cn("rounded-lg px-3 py-2 break-words text-sm shadow-sm",
+                       isSender ? "bg-primary text-primary-foreground" : "bg-muted dark:bg-slate-700"
+                    )}>
+                       <p className="whitespace-pre-wrap">{msg.content}</p>
+                       <p className={cn("text-xs mt-1 opacity-70", isSender ? "text-right" : "text-left")}>
+                           {formatTimestamp(msg.createdAt)}
+                       </p>
+                   </div>
+                   {isSender && senderDisplay && ( // Show current user's avatar on the right
+                        <Avatar className="h-6 w-6 border flex-shrink-0 self-start">
+                            <AvatarImage src={senderDisplay.image ?? undefined} alt={senderDisplay.name ?? 'You'} />
+                            <AvatarFallback>{senderDisplay.name?.charAt(0)?.toUpperCase() || 'Y'}</AvatarFallback>
+                        </Avatar>
+                   )}
                 </div>
-                {isSender && msg.sender && <Avatar className="h-6 w-6"><AvatarImage src={msg.sender.image||undefined}/><AvatarFallback>{msg.sender.name?.charAt(0)}</AvatarFallback></Avatar>}
-            </div>);
-        })} <div ref={messagesEndRef}/></div>
-        {typingNames && <div className="p-2 text-xs italic text-muted-foreground">{typingNames} is typing...</div>}
-        <div className="border-t p-3 sticky bottom-0 bg-background">
-          <form onSubmit={handleSendMessage} className="flex gap-2">
-            <Textarea ref={textareaRef} value={newMessage} onChange={handleTextareaChange} placeholder="Type..." rows={1} className="flex-1 resize-none"
-              onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();handleSendMessage(e as any);}}}
-              disabled={isSending || isLoadingMessages || !socket?.connected} />
-            <Button type="submit" size="icon" disabled={!newMessage.trim() || isSending || isLoadingMessages || !socket?.connected}>
-              {isSending ? <Icons.spinner className="h-4 w-4 animate-spin"/> : <Icons.send className="h-4 w-4"/>}
-            </Button>
-          </form>
+            );
+          })}
+          <div ref={messagesEndRef} />
         </div>
-      </div>);
-  };
 
-  if (status === 'loading') return <div className="center-screen"><Icons.spinner className="h-8 w-8 animate-spin"/></div>;
-  if (status === 'unauthenticated') return <div className="p-6 text-center"><Link href="/login">Log in</Link> to view messages.</div>;
+        {/* Typing Indicator */}
+        {typingNames && (
+            <div className="px-4 pb-1 text-xs text-muted-foreground italic h-5 flex-shrink-0">
+                {typingNames} {usersTyping.size > 1 ? "are" : "is"} typing...
+            </div>
+        )}
 
-  return (
-    <div className={cn("flex border-t", isMobile ? "h-[calc(100dvh-var(--mobile-nav-height,0px))]" : "h-[calc(100vh-16rem)]")}>
-      <div className={cn("w-full md:w-1/3 lg:w-1/4 border-r flex flex-col", isMobile && selectedConversation && "hidden")}>
-        {/* Tabs */}
-        <div className="flex-1 overflow-y-auto">
-          {isLoadingConversations ? Array.from({length:5}).map((_,i)=><Skeleton key={i} className="h-16 m-2"/>) :
-            (activeTab === 'inbox' ? categorizedConversations.inbox : categorizedConversations.incoming)
-            .map(c => renderConversationItem(c, activeTab === 'incoming'))
-          }
+        {/* Input Footer */}
+        <div className="border-t p-3 bg-background dark:bg-slate-900 mt-auto sticky bottom-0 flex-shrink-0">
+          {canChat ? (
+            <form onSubmit={handleSendMessage} className="flex items-center space-x-2">
+              <Textarea
+                ref={textareaRef}
+                placeholder="Type your message..."
+                value={newMessage}
+                onChange={handleTextareaChange}
+                rows={1}
+                className="flex-1 resize-none max-h-24 overflow-y-auto p-2 text-sm border rounded-md focus-visible:ring-1 focus-visible:ring-ring"
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(e as any); }}}
+                disabled={isSending || isLoadingMessages} // Textarea enabled unless actively sending/loading
+              />
+              <Button
+                type="submit"
+                size="icon"
+                disabled={!newMessage.trim() || isSending || isLoadingMessages || !socket?.connected} // Send button disabled if socket not connected
+              >
+                {isSending ? <Icons.spinner className="h-4 w-4 animate-spin" /> : <Icons.send className="h-4 w-4" />}
+              </Button>
+            </form>
+          ) : (
+            <div className="text-center text-sm text-muted-foreground py-2">
+              {/* Logic for when chat is not allowed (e.g., pending approval) */}
+              This chat is pending approval or not available.
+            </div>
+          )}
         </div>
       </div>
-      <div className={cn("flex-1 flex-col", isMobile ? (selectedConversation ? "flex":"hidden") : "hidden md:flex", !selectedConversation && !isMobile && "items-center justify-center")}>
+    );
+  };
+
+  // --- Main Page Structure ---
+  if (status === 'loading') return <div className="flex items-center justify-center h-screen"><Icons.spinner className="h-8 w-8 animate-spin text-primary" /></div>;
+  if (status === 'unauthenticated') return <div className="p-6 text-center">Please <Link href="/login" className="underline text-primary hover:text-primary/80">log in</Link> to view messages.</div>;
+  if (error && !isLoadingConversations && !allConversations.length) return <div className="p-6 text-center text-destructive">Error loading conversations: {error}</div>;
+
+  return (
+    <div className={cn(
+      "flex border-t bg-slate-50 dark:bg-slate-950", // Main background
+      isMobile ? "h-[calc(100dvh-var(--mobile-nav-height,0px))]" : "h-[calc(100vh-theme(spacing.16))]"
+    )}>
+      {/* Conversation List Panel */}
+      <div className={cn(
+        "w-full md:w-1/3 lg:w-1/4 border-r border-border dark:border-slate-700 flex flex-col bg-card dark:bg-slate-900",
+        isMobile && selectedConversation && "hidden"
+      )}>
+        <div className="flex border-b border-border dark:border-slate-700 flex-shrink-0">
+            <Button variant="ghost" className={cn("flex-1 justify-center rounded-none h-10", activeTab === 'inbox' && "bg-muted dark:bg-slate-800 font-semibold")}
+                onClick={() => { setActiveTab('inbox'); setSelectedConversation(null); }}>
+                Inbox ({categorizedConversations.inbox.length})
+            </Button>
+            <Button variant="ghost" className={cn("flex-1 justify-center rounded-none border-l border-border dark:border-slate-700 h-10", activeTab === 'incoming' && "bg-muted dark:bg-slate-800 font-semibold")}
+                onClick={() => { setActiveTab('incoming'); setSelectedConversation(null); }}>
+               Requests ({categorizedConversations.incoming.length})
+            </Button>
+        </div>
+        <div className="flex-1 overflow-y-auto">
+          {isLoadingConversations ? ( Array.from({ length: 5 }).map((_, i) => <Skeleton key={`convskel-${i}`} className="h-20 m-2 rounded" />))
+            : (
+                (activeTab === 'inbox' ? categorizedConversations.inbox : categorizedConversations.incoming).length > 0 ?
+                (activeTab === 'inbox' ? categorizedConversations.inbox : categorizedConversations.incoming)
+                    .map(conv => renderConversationItem(conv, activeTab === 'incoming'))
+                : <p className="p-4 text-center text-sm text-muted-foreground">
+                    {activeTab === 'inbox' ? 'Your inbox is empty.' : 'No incoming message requests.'}
+                  </p>
+            )
+          }
+          {error && !isLoadingConversations && <p className="p-4 text-center text-sm text-destructive">{error}</p>}
+        </div>
+      </div>
+
+      {/* Chat Area Panel */}
+      <div className={cn(
+        "flex-1 flex-col",
+        isMobile ? (selectedConversation ? "flex" : "hidden") : "hidden md:flex",
+        !selectedConversation && !isMobile && "items-center justify-center" // Center "select chat" for desktop
+      )}>
         {renderChatAreaContent(selectedConversation)}
       </div>
     </div>
