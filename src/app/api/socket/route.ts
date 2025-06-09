@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { Server as SocketIOServer } from 'socket.io';
-import { getServerSession } from 'next-auth/next';
-import { authOptions } from '../auth/[...nextauth]/route';
+import { getToken } from 'next-auth/jwt';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -25,11 +24,16 @@ export async function GET(req: Request) {
       // Middleware for authentication
       io.use(async (socket, next) => {
         try {
-          const session = await getServerSession(authOptions);
-          if (!session?.user?.id) {
+          const token = await getToken({ 
+            req: socket.request as any,
+            secret: process.env.NEXTAUTH_SECRET 
+          });
+          
+          if (!token?.sub) {
             return next(new Error('Unauthorized'));
           }
-          socket.data.userId = session.user.id;
+          
+          socket.data.userId = token.sub;
           next();
         } catch (error) {
           console.error('Socket authentication error:', error);
