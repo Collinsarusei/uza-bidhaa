@@ -133,10 +133,13 @@ export default function MessagesPage() {
 
     const socketInitializer = async () => {
       try {
-        socketInstance = io(process.env.NEXT_PUBLIC_APP_URL || '', {
+        // First, ensure the socket server is initialized
+        await fetch('/api/socket');
+        
+        socketInstance = io({
           path: '/api/socket',
           addTrailingSlash: false,
-          transports: ['websocket', 'polling'],
+          transports: ['websocket'],
           autoConnect: true,
         });
 

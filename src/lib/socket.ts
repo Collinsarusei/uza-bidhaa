@@ -123,10 +123,10 @@ export const initSocket = (server?: any) => {
   } else {
     // Client-side initialization
     if (!socket) {
-      socket = socketIO(process.env.NEXT_PUBLIC_APP_URL || '', {
+      socket = socketIO({
         path: '/api/socket',
         addTrailingSlash: false,
-        transports: ['websocket', 'polling'],
+        transports: ['websocket'],
         autoConnect: true,
       });
 
