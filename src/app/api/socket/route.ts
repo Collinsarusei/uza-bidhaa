@@ -10,8 +10,8 @@ let io: SocketIOServer | null = null;
 
 export async function GET(req: Request) {
   if (!io) {
-    const { server } = req.socket as any;
-    if (!server.io) {
+    const server = (req as any).socket?.server;
+    if (!server?.io) {
       io = new SocketIOServer(server, {
         path: '/api/socket',
         addTrailingSlash: false,
