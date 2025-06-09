@@ -3,21 +3,21 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSession } from 'next-auth/react';
-import { Button } from "@/components/ui/button"; // Assuming this path is correct for your Button
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"; // Assuming correct
-import { Skeleton } from "@/components/ui/skeleton"; // Assuming correct
-import { Icons } from "@/components/icons"; // <<<< CHECK THIS PATH CAREFULLY
-import { Textarea } from "@/components/ui/textarea"; // Assuming correct
+import { Button } from "@/components/ui/button";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Icons } from "@/components/icons";
+import { Textarea } from "@/components/ui/textarea";
 import { Conversation, Message, UserProfile } from '@/lib/types';
 import { formatDistanceToNow, parseISO } from 'date-fns';
-import { useToast } from "@/hooks/use-toast"; // Assuming this is from shadcn/ui or your setup
+import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
-import { Badge } from "@/components/ui/badge"; // Assuming correct
-import { useIsMobile } from "@/hooks/use-mobile"; // Assuming custom hook
+import { Badge } from "@/components/ui/badge";
+import { useIsMobile } from "@/hooks/use-mobile";
 import Link from 'next/link';
 import { getSocket } from '@/lib/socket-client';
 import { produce } from 'immer';
-import { Socket } from 'socket.io-client';
+import { io, Socket } from 'socket.io-client';
 
 type ParticipantData = Partial<Pick<UserProfile, 'id' | 'name' | 'image'>>;
 
@@ -28,6 +28,8 @@ interface TypingUserInfo {
 
 export default function MessagesPage() {
   const { data: session, status: sessionStatus } = useSession();
+  const { toast } = useToast();
+  const isMobile = useIsMobile();
   const currentUserId = session?.user?.id;
 
   const [allConversations, setAllConversations] = useState<Conversation[]>([]);
@@ -41,39 +43,17 @@ export default function MessagesPage() {
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'inbox' | 'incoming'>('inbox');
 
-  const { toast } = useToast();
-  const isMobile = useIsMobile();
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-  const [usersTyping, setUsersTyping] = useState<Map<string, TypingUserInfo>>(new Map());
-  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  const [socket, setSocketInstance] = useState<Socket | undefined>(undefined);
+  const [socket, setSocket] = useState<Socket | null>(null);
   const [isSocketConnected, setIsSocketConnected] = useState(false);
-
-  useEffect(() => {
-    const s = getSocket();
-    setSocketInstance(s);
-    if (s) {
-      setIsSocketConnected(s.connected);
-      const handleConnect = () => setIsSocketConnected(true);
-      const handleDisconnect = () => setIsSocketConnected(false);
-      const handleConnectError = () => setIsSocketConnected(false);
-      s.on('connect', handleConnect);
-      s.on('disconnect', handleDisconnect);
-      s.on('connect_error', handleConnectError);
-      return () => {
-        s.off('connect', handleConnect);
-        s.off('disconnect', handleDisconnect);
-        s.off('connect_error', handleConnectError);
-      };
-    }
-  }, []);
+  const [usersTyping, setUsersTyping] = useState<Map<string, { userId: string; userName?: string | null }>>(new Map());
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const fetchConversations = useCallback(async () => {
     if (sessionStatus !== 'authenticated' || !currentUserId) return;
-    setIsLoadingConversations(true); setError(null);
+    setIsLoadingConversations(true);
+    setError(null);
     try {
       const response = await fetch('/api/conversations');
       if (!response.ok) throw new Error((await response.json().catch(() => ({}))).message || 'Failed to fetch conversations');
@@ -83,7 +63,9 @@ export default function MessagesPage() {
       const errorMsg = err instanceof Error ? err.message : String(err);
       setError(errorMsg);
       toast({ title: "Error", description: `Failed to load conversations: ${errorMsg}`, variant: "destructive" });
-    } finally { setIsLoadingConversations(false); }
+    } finally {
+      setIsLoadingConversations(false);
+    }
   }, [sessionStatus, currentUserId, toast]);
 
   useEffect(() => { fetchConversations(); }, [fetchConversations]);
@@ -129,6 +111,66 @@ export default function MessagesPage() {
     return { inbox, incoming };
   }, [allConversations, currentUserId]);
 
+  const fetchMessagesForConversation = async (conversationId: string) => {
+    try {
+      const response = await fetch(`/api/messages?conversationId=${conversationId}`);
+      if (!response.ok) throw new Error('Failed to fetch messages');
+      const data = await response.json();
+      setMessages(data.messages);
+    } catch (error) {
+      console.error('Error fetching messages:', error);
+      toast({
+        title: "Error",
+        description: "Failed to load messages. Please try again.",
+        variant: "destructive"
+      });
+    }
+  };
+
+  // Socket initialization
+  useEffect(() => {
+    let socketInstance: Socket | null = null;
+
+    const socketInitializer = async () => {
+      try {
+        socketInstance = io(process.env.NEXT_PUBLIC_APP_URL || '', {
+          path: '/api/socket',
+          addTrailingSlash: false,
+          transports: ['websocket', 'polling'],
+          autoConnect: true,
+        });
+
+        socketInstance.on('connect', () => {
+          console.log('Socket connected');
+          setIsSocketConnected(true);
+        });
+
+        socketInstance.on('disconnect', () => {
+          console.log('Socket disconnected');
+          setIsSocketConnected(false);
+        });
+
+        socketInstance.on('connect_error', (error: Error) => {
+          console.error('Socket connection error:', error);
+          setIsSocketConnected(false);
+        });
+
+        setSocket(socketInstance);
+      } catch (error) {
+        console.error('Failed to initialize socket:', error);
+        setIsSocketConnected(false);
+      }
+    };
+
+    socketInitializer();
+
+    return () => {
+      if (socketInstance) {
+        socketInstance.disconnect();
+      }
+    };
+  }, []);
+
   // Handle conversation selection and message listening
   useEffect(() => {
     if (!socket || !selectedConversation?.id || !isSocketConnected) return;
@@ -149,36 +191,37 @@ export default function MessagesPage() {
 
     socket.on('message-received', handleNewMessage);
 
+    // Handle reconnection
+    const handleReconnect = () => {
+      if (selectedConversation?.id) {
+        socket.emit('join-conversation', selectedConversation.id);
+      }
+    };
+
+    socket.on('connect', handleReconnect);
+
     return () => {
       socket.emit('leave-conversation', selectedConversation.id);
       socket.off('message-received', handleNewMessage);
+      socket.off('connect', handleReconnect);
     };
   }, [socket, selectedConversation?.id, isSocketConnected]);
 
-  const fetchMessagesForConversation = useCallback(async (conversationId: string) => {
-    if (!currentUserId) return;
-    setIsLoadingMessages(true); setError(null);
-    try {
-      const response = await fetch(`/api/messages?conversationId=${conversationId}`);
-      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).message || 'Failed to fetch messages');
-      const data = await response.json();
-      setMessages(data.messages || []);
-      if (data.conversationDetails) {
-        setSelectedConversation(prev => prev ? ({ ...prev, ...data.conversationDetails }) : data.conversationDetails);
-      }
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      setError(errorMsg);
-      toast({ title: "Error", description: `Failed to load messages: ${errorMsg}`, variant: "destructive" });
+  // Replace the polling message fetching with initial fetch
+  useEffect(() => {
+    if (!selectedConversation?.id || !currentUserId) {
       setMessages([]);
-    } finally { setIsLoadingMessages(false); }
-  }, [currentUserId, toast]);
+      setIsLoadingMessages(false);
+    }
+  }, [currentUserId]);
 
   useEffect(() => {
     if (selectedConversation?.id) {
       fetchMessagesForConversation(selectedConversation.id);
-    } else { setMessages([]); }
-  }, [selectedConversation?.id, fetchMessagesForConversation]);
+    } else {
+      setMessages([]);
+    }
+  }, [selectedConversation?.id]);
 
   const markConversationAsReadAPI = useCallback(async (conversationId: string) => {
     if (!currentUserId) return;
@@ -188,106 +231,104 @@ export default function MessagesPage() {
         const conv = draft.find(c => c.id === conversationId);
         if (conv) conv.unreadCount = 0;
       }));
-    } catch (error) { console.error("Failed to mark as read:", error); }
+    } catch (error) {
+      console.error("Failed to mark as read:", error);
+    }
   }, [currentUserId]);
 
   useEffect(() => {
-    if (sessionStatus !== 'authenticated' || !currentUserId || !socket || !isSocketConnected) return;
-    const handleNewMessage = (incomingMessage: Message) => {
-      if (selectedConversation?.id === incomingMessage.conversationId) {
-        setMessages(prev => produce(prev, (draft: Message[]) => {
-          if (!draft.some(m => m.id === incomingMessage.id)) draft.push(incomingMessage);
-        }));
-        if (incomingMessage.senderId !== currentUserId) markConversationAsReadAPI(incomingMessage.conversationId);
-      }
-      setAllConversations(prev => produce(prev, (draft: Conversation[]) => {
-        const convIndex = draft.findIndex(c => c.id === incomingMessage.conversationId);
-        if (convIndex !== -1) { /* update existing */
-          draft[convIndex].lastMessageSnippet = incomingMessage.content.substring(0,50)+'...';
-          draft[convIndex].lastMessageTimestamp = incomingMessage.createdAt;
-          if(selectedConversation?.id !== incomingMessage.conversationId && incomingMessage.senderId !== currentUserId){
-            draft[convIndex].unreadCount = (draft[convIndex].unreadCount || 0) + 1;
-          }
-        } else { fetchConversations(); } /* new conversation */
-      }));
-    };
-    const handleUserTyping = (data: { userId: string; userName?: string | null; conversationId: string }) => {
-      if (data.conversationId === selectedConversation?.id && data.userId !== currentUserId) {
-        setUsersTyping(prev => new Map(prev).set(data.userId, { userId: data.userId, userName: data.userName }));
-      }
-    };
-    const handleUserStoppedTyping = (data: { userId: string; conversationId: string }) => {
-      if (data.conversationId === selectedConversation?.id) {
-        setUsersTyping(prev => { const map = new Map(prev); map.delete(data.userId); return map; });
-      }
-    };
-    socket.on('message-received', handleNewMessage);
-    socket.on('user-typing', handleUserTyping);
-    socket.on('user-stopped-typing', handleUserStoppedTyping);
-    if (selectedConversation?.id) socket.emit('join-conversation', selectedConversation.id);
-    return () => {
-      socket.off('message-received', handleNewMessage);
-      socket.off('user-typing', handleUserTyping);
-      socket.off('user-stopped-typing', handleUserStoppedTyping);
-      if (selectedConversation?.id) socket.emit('leave-conversation', selectedConversation.id);
-      setUsersTyping(new Map());
-    };
-  }, [socket, isSocketConnected, sessionStatus, currentUserId, selectedConversation, fetchConversations, markConversationAsReadAPI]);
-
-  useEffect(() => {
-    if (selectedConversation?.id && (selectedConversation.unreadCount || 0) > 0) {
-      markConversationAsReadAPI(selectedConversation.id);
-    }
-  }, [selectedConversation?.id, selectedConversation?.unreadCount, markConversationAsReadAPI]);
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
   const handleSelectConversation = (conv: Conversation) => {
     if (selectedConversation?.id === conv.id && messages.length > 0) return;
     if (socket && selectedConversation?.id && isSocketConnected) {
-        socket.emit('leave-conversation', selectedConversation.id);
+      socket.emit('leave-conversation', selectedConversation.id);
     }
-    setUsersTyping(new Map()); setSelectedConversation(conv); setMessages([]);
+    setUsersTyping(new Map());
+    setSelectedConversation(conv);
+    setMessages([]);
     if (isMobile) setTimeout(() => textareaRef.current?.focus(), 50);
   };
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!socket) { toast({ title: "Chat Error", variant: "destructive" }); return; }
-    if (!isSocketConnected) { toast({ title: "Connection Error", variant: "destructive" }); return; }
-    if (!newMessage.trim() || !selectedConversation || !currentUserId || !session?.user) {
-      console.warn("handleSendMessage: Pre-condition not met."); return;
-    }
+    if (!newMessage.trim() || !selectedConversation) return;
+
+    const messageToSend = newMessage.trim();
+    setNewMessage(""); // Clear input immediately for better UX
     setIsSending(true);
-    const textContent = newMessage.trim(); const tempMsg = newMessage; setNewMessage("");
-    const optimisticId = `optimistic-${Date.now()}`;
-    const optimisticMessage: Message = {
-      id: optimisticId, conversationId: selectedConversation.id, content: textContent,
-      senderId: currentUserId, createdAt: new Date().toISOString(), isSystemMessage: false,
-      sender: { id: currentUserId, name: session.user.name || 'You', image: session.user.image || null },
-    };
-    setMessages(prev => [...prev, optimisticMessage]);
-    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current); typingTimeoutRef.current = null;
-    if (selectedConversation.id && isSocketConnected) {
-      socket.emit('typing-stop', { conversationId: selectedConversation.id });
+
+    // Clear typing timeout if exists
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = null;
     }
+
+    // Optimistically add message to UI
+    const optimisticMessage: Message = {
+      id: `temp-${Date.now()}`,
+      conversationId: selectedConversation.id,
+      content: messageToSend,
+      senderId: session?.user?.id || '',
+      sender: {
+        id: session?.user?.id || '',
+        name: session?.user?.name || '',
+        image: session?.user?.image || null
+      },
+      createdAt: new Date().toISOString(),
+      isSystemMessage: false
+    };
+
+    setMessages(prev => [...prev, optimisticMessage]);
+
     try {
-      const response = await fetch('/api/messages', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversationId: selectedConversation.id, text: textContent }),
-      });
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ message: `HTTP error! ${response.status}` }));
-        throw new Error(errorData.message);
+      // First, ensure we're in the conversation room
+      if (socket && isSocketConnected) {
+        socket.emit('join-conversation', selectedConversation.id);
       }
-      const { newMessage: savedMessage }: { newMessage: Message } = await response.json();
-      setMessages(prev => produce(prev, (draft: Message[]) => {
-        const idx = draft.findIndex(m => m.id === optimisticId);
-        if (idx !== -1) draft[idx] = savedMessage;
-        else if(!draft.some(m => m.id === savedMessage.id)) draft.push(savedMessage);
-      }));
+
+      const response = await fetch('/api/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: selectedConversation.id,
+          text: messageToSend
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to send message');
+      }
+
+      const data = await response.json();
+      
+      // Update the optimistic message with the real one
+      setMessages(prev => prev.map(msg => 
+        msg.id === optimisticMessage.id ? data.newMessage : msg
+      ));
+
+      // Emit the message through socket if connected
+      if (socket && isSocketConnected) {
+        socket.emit('new-message', {
+          conversationId: selectedConversation.id,
+          ...data.newMessage
+        });
+      }
+
     } catch (error) {
-      toast({ title: "Send Error", description:(error instanceof Error?error.message:String(error)), variant: "destructive" });
-      setMessages(prev => prev.filter(m => m.id !== optimisticId)); setNewMessage(tempMsg);
-    } finally { setIsSending(false); }
+      console.error('Error sending message:', error);
+      // Remove the optimistic message on error
+      setMessages(prev => prev.filter(msg => msg.id !== optimisticMessage.id));
+      setNewMessage(messageToSend); // Restore the message in the input
+      toast({ 
+        title: "Error", 
+        description: "Failed to send message. Please try again.", 
+        variant: "destructive" 
+      });
+    } finally {
+      setIsSending(false);
+    }
   };
 
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {

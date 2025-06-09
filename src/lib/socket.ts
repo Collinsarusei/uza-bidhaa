@@ -1,12 +1,12 @@
 import { io as socketIO, Socket } from 'socket.io-client';
 import { Server as SocketIOServer } from 'socket.io';
 import { NextApiResponse } from 'next';
-import { getServerSession } from "next-auth/next";
-import { authOptions } from '@/app/api/auth/[...nextauth]/route';
-import prisma from '@/lib/prisma';
 import { getToken } from 'next-auth/jwt';
 
-let io: SocketIOServer | null = null;
+// Client-side socket instance
+let socket: Socket | undefined;
+// Server-side socket instance
+let ioServer: SocketIOServer | null = null;
 const onlineUsers = new Map<string, string>(); // userId -> socketId
 
 export const initSocket = (server?: any) => {
@@ -23,77 +23,131 @@ export const initSocket = (server?: any) => {
         }
       });
 
-    // Middleware for authentication
-    io.use(async (socket, next) => {
-      try {
-        const token = await getToken({ 
-          req: socket.request as any,
-          secret: process.env.NEXTAUTH_SECRET 
-        });
-        
-        if (!token?.sub) {
-          return next(new Error('Unauthorized'));
+      // Middleware for authentication
+      ioServer.use(async (socket, next) => {
+        try {
+          const token = await getToken({ 
+            req: socket.request as any,
+            secret: process.env.NEXTAUTH_SECRET 
+          });
+          
+          if (!token?.sub) {
+            return next(new Error('Unauthorized'));
+          }
+          
+          socket.data.userId = token.sub;
+          next();
+        } catch (error) {
+          console.error('Socket authentication error:', error);
+          next(new Error('Authentication failed'));
         }
-        
-        socket.data.userId = token.sub;
-        next();
-      } catch (error) {
-        next(new Error('Authentication failed'));
-      }
-    });
+      });
 
-    io.on('connection', (socket) => {
-      const userId = socket.data.userId;
-      console.log('Client connected:', socket.id, 'User:', userId);
-      
-      // Update online status
-      onlineUsers.set(userId, socket.id);
-      io!.emit('user-online', userId);
+      ioServer.on('connection', (socket) => {
+        const userId = socket.data.userId;
+        if (!userId) {
+          console.error('No userId found in socket data');
+          socket.disconnect();
+          return;
+        }
+
+        console.log('Client connected:', socket.id, 'User:', userId);
+        
+        // Update online status
+        onlineUsers.set(userId, socket.id);
+        ioServer?.emit('user-online', userId);
 
         // Join user's personal room for direct messages
         socket.join(`user:${userId}`);
 
-      socket.on('join-conversation', (conversationId: string) => {
-        socket.join(`conversation:${conversationId}`);
-        console.log(`Client ${socket.id} joined conversation: ${conversationId}`);
-      });
+        socket.on('join-conversation', (conversationId: string) => {
+          if (!conversationId) {
+            console.error('Invalid conversationId received');
+            return;
+          }
+          socket.join(`conversation:${conversationId}`);
+          console.log(`Client ${socket.id} joined conversation: ${conversationId}`);
+        });
 
-      socket.on('leave-conversation', (conversationId: string) => {
-        socket.leave(`conversation:${conversationId}`);
-        console.log(`Client ${socket.id} left conversation: ${conversationId}`);
-      });
+        socket.on('leave-conversation', (conversationId: string) => {
+          if (!conversationId) {
+            console.error('Invalid conversationId received');
+            return;
+          }
+          socket.leave(`conversation:${conversationId}`);
+          console.log(`Client ${socket.id} left conversation: ${conversationId}`);
+        });
 
-      // Handle new messages
-      socket.on('new-message', (message) => {
-        // Broadcast to all users in the conversation including the sender
-        io!.to(`conversation:${message.conversationId}`).emit('message-received', message);
-      });
+        // Handle new messages
+        socket.on('new-message', (message) => {
+          if (!message?.conversationId) {
+            console.error('Invalid message format received');
+            return;
+          }
+          // Broadcast to all users in the conversation including the sender
+          ioServer?.to(`conversation:${message.conversationId}`).emit('message-received', message);
+        });
 
-      // Typing indicators
-      socket.on('typing-start', (conversationId: string) => {
-        socket.to(`conversation:${conversationId}`).emit('user-typing', {
-          userId,
-          conversationId
+        // Typing indicators
+        socket.on('typing-start', (conversationId: string) => {
+          if (!conversationId) {
+            console.error('Invalid conversationId received');
+            return;
+          }
+          socket.to(`conversation:${conversationId}`).emit('user-typing', {
+            userId,
+            conversationId
+          });
+        });
+
+        socket.on('typing-stop', (conversationId: string) => {
+          if (!conversationId) {
+            console.error('Invalid conversationId received');
+            return;
+          }
+          socket.to(`conversation:${conversationId}`).emit('user-stopped-typing', {
+            userId,
+            conversationId
+          });
+        });
+
+        // Handle disconnection
+        socket.on('disconnect', () => {
+          console.log('Client disconnected:', socket.id);
+          onlineUsers.delete(userId);
+          ioServer?.emit('user-offline', userId);
         });
       });
-
-      socket.on('typing-stop', (conversationId: string) => {
-        socket.to(`conversation:${conversationId}`).emit('user-stopped-typing', {
-          userId,
-          conversationId
-        });
+    }
+    return ioServer;
+  } else {
+    // Client-side initialization
+    if (!socket) {
+      socket = socketIO(process.env.NEXT_PUBLIC_APP_URL || '', {
+        path: '/api/socket',
+        addTrailingSlash: false,
+        transports: ['websocket', 'polling'],
+        autoConnect: true,
       });
 
-      // Handle disconnection
+      socket.on('connect', () => {
+        console.log('Socket connected');
+      });
+
       socket.on('disconnect', () => {
-        console.log('Client disconnected:', socket.id);
-        onlineUsers.delete(userId);
-        io!.emit('user-offline', userId);
+        console.log('Socket disconnected');
       });
-    });
+
+      socket.on('connect_error', (error) => {
+        console.error('Socket connection error:', error);
+      });
+    }
+    return socket;
   }
-  return io;
 };
+
+export const getSocket = () => socket;
+export const getIO = () => ioServer;
 
 // Helper function to emit events to specific users
 export const emitToUser = (userId: string, event: string, data: any) => {
@@ -102,8 +156,8 @@ export const emitToUser = (userId: string, event: string, data: any) => {
     return;
   }
   const socketId = onlineUsers.get(userId);
-  if (socketId) {
-    io?.to(socketId).emit(event, data);
+  if (socketId && ioServer) {
+    ioServer.to(socketId).emit(event, data);
   }
 };
 
