@@ -15,7 +15,6 @@ import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { useIsMobile } from "@/hooks/use-mobile";
 import Link from 'next/link';
-import { getSocket } from '@/lib/socket-client';
 import { produce } from 'immer';
 import { io, Socket } from 'socket.io-client';
 
