@@ -268,6 +268,13 @@ const MessagesPage = () => {
       if (convResponse.ok) {
         const convData = await convResponse.json();
         setAllConversations(convData.conversations || []);
+        // Automatically select the approved conversation if it was the one being approved
+        if (conversation.id === selectedConversation?.id) {
+          const updatedConversation = convData.conversations.find((c: Conversation) => c.id === conversation.id);
+          if (updatedConversation) {
+            setSelectedConversation(updatedConversation);
+          }
+        }
       }
     } catch (error) {
       console.error('Error approving conversation:', error);
@@ -384,7 +391,7 @@ const MessagesPage = () => {
                 <p className={cn("text-xs text-muted-foreground truncate",hasUnread&&"font-semibold")}>{conv.lastMessageSnippet||'...'}</p>
                 {conv.itemTitle && <p className="text-xs italic text-muted-foreground truncate">Item: {conv.itemTitle}</p>}
             </div>
-            {isIncomingView && <Button size="sm" variant="outline" className="ml-auto self-center">Approve</Button> }
+            {isIncomingView && conv.initiatorId !== currentUserId && <Button size="sm" variant="outline" className="ml-auto self-center" onClick={(e) => { e.stopPropagation(); handleApproveConversation(conv); }}>Approve</Button> }
             {hasUnread && <Badge variant="destructive" className="ml-2 self-center shrink-0">{conv.unreadCount}</Badge>}
         </div>);
   };
@@ -402,7 +409,14 @@ const MessagesPage = () => {
                 <p className="font-medium text-sm truncate">{otherPDisp.name}</p>
                 {conversation.itemTitle && <p className="text-xs italic truncate text-muted-foreground">Item: {conversation.itemTitle}</p>}
             </div>
-            {/* Action buttons like "Pay" */}
+            {conversation.itemId && conversation.approved && (
+              <Button variant="outline" size="sm" onClick={() => {
+                // Navigate to payment page or trigger payment flow
+                router.push(`/payment?itemId=${conversation.itemId}&conversationId=${conversation.id}`);
+              }}>
+                Pay
+              </Button>
+            )}
         </div>
         <div className="flex-1 overflow-y-auto p-4 space-y-3">{messages.map(msg => {
             const isSender = msg.senderId === currentUserId;
@@ -418,7 +432,7 @@ const MessagesPage = () => {
             </div>);
         })} <div ref={messagesEndRef}/></div>
         <div className="border-t p-3 sticky bottom-0 bg-background dark:bg-slate-900">
-          {conversation.approved || conversation.initiatorId === currentUserId ? (
+          {conversation.approved ? (
             <form onSubmit={handleSendMessage} className="flex gap-2 items-center">
               <Textarea 
                 placeholder="Type your message..." 
@@ -442,7 +456,7 @@ const MessagesPage = () => {
                 {isSending ? <Icons.spinner className="h-4 w-4 animate-spin"/> : <Icons.send className="h-4 w-4"/>}
               </Button>
             </form>
-          ) : ( <div className="text-center text-sm text-muted-foreground p-2">Chat unavailable.</div> )}
+          ) : ( <div className="text-center text-sm text-muted-foreground p-2">{conversation.initiatorId === currentUserId ? 'Waiting for approval from the other party.' : <Button variant="outline" size="sm" onClick={() => handleApproveConversation(conversation)}>Approve Conversation</Button>}</div> )}
         </div>
       </div>);
   };
@@ -451,7 +465,7 @@ const MessagesPage = () => {
   if ((sessionStatus as 'loading' | 'authenticated' | 'unauthenticated') === 'unauthenticated') return <div className="p-6 text-center">Please <Link href="/login" className="underline text-primary hover:text-primary/80">log in</Link>.</div>;
 
   return (
-    <div className={cn("flex border-t", isMobile ? "h-[calc(100dvh-var(--mobile-nav-height,0px))]" : "h-[calc(100vh-theme(spacing.16))]")}>
+    <div className={cn("flex", isMobile ? "h-[calc(100dvh-var(--mobile-nav-height,0px))]" : "h-[calc(100vh-theme(spacing.16))]")}>
       <div className={cn("w-full md:w-1/3 lg:w-1/4 border-r flex flex-col", isMobile && selectedConversation && "hidden")}>
         <div className="flex border-b shrink-0">
              <Button variant="ghost" className={cn("flex-1 justify-center rounded-none h-10",activeTab==='inbox'&&"bg-muted font-semibold")} onClick={()=>{setActiveTab('inbox');setSelectedConversation(null);}}>Inbox ({categorizedConversations.inbox.length})</Button>
