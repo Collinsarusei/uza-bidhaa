@@ -210,17 +210,24 @@ const MessagesPage = () => {
     setMessages(prev => [...prev, optimisticMessage]);
 
     try {
+      const messageData = {
+        conversationId: selectedConversation.id,
+        text: messageToSend,
+        recipientId: selectedConversation.participants?.find(p => p.id !== currentUserId)?.id,
+        itemId: selectedConversation.itemId,
+        itemTitle: selectedConversation.itemTitle,
+        itemImageUrl: selectedConversation.itemImageUrl
+      };
+
       const response = await fetch('/api/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          conversationId: selectedConversation.id,
-          text: messageToSend
-        })
+        body: JSON.stringify(messageData)
       });
 
       if (!response.ok) {
-        throw new Error('Failed to send message');
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Failed to send message');
       }
 
       const data = await response.json();
@@ -237,7 +244,7 @@ const MessagesPage = () => {
       setNewMessage(messageToSend); // Restore the message in the input
       toast({ 
         title: "Error", 
-        description: "Failed to send message. Please try again.", 
+        description: error instanceof Error ? error.message : "Failed to send message. Please try again.", 
         variant: "destructive" 
       });
     } finally {
