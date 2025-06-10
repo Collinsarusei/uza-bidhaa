@@ -160,16 +160,43 @@ export async function POST(req: NextRequest) {
   const userName = session.user.name || 'Unknown User';
 
   try {
-    const { conversationId, text } = await req.json();
+    const body = await req.json();
+    const { conversationId, text, recipientId, itemId, itemTitle, itemImageUrl } = body;
 
-    if (!conversationId || !text) {
-      return NextResponse.json({ message: 'Missing required fields' }, { status: 400 });
+    // Validate required fields based on whether it's a new or existing conversation
+    if (!text) {
+      return NextResponse.json({ message: 'Message text is required' }, { status: 400 });
+    }
+
+    if (!conversationId && (!recipientId || !itemId)) {
+      return NextResponse.json({ message: 'Either conversationId or (recipientId and itemId) are required' }, { status: 400 });
+    }
+
+    let targetConversationId = conversationId;
+
+    // If no conversationId, create a new conversation
+    if (!conversationId) {
+      const newConversation = await prisma.conversation.create({
+        data: {
+          initiatorId: userId,
+          itemId,
+          itemTitle,
+          itemImageUrl,
+          participants: {
+            connect: [
+              { id: userId },
+              { id: recipientId }
+            ]
+          }
+        }
+      });
+      targetConversationId = newConversation.id;
     }
 
     // Verify conversation exists and user is a participant
     const conversation = await prisma.conversation.findFirst({
       where: {
-        id: conversationId,
+        id: targetConversationId,
         participants: {
           some: {
             id: userId
@@ -180,9 +207,6 @@ export async function POST(req: NextRequest) {
         participants: true,
         item: true
       }
-    }).catch(error => {
-      console.error("Error fetching conversation for POST:", error);
-      throw new Error("Failed to fetch conversation from database");
     });
 
     if (!conversation) {
