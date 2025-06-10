@@ -413,7 +413,7 @@ const MessagesPage = () => {
               <Button variant="outline" size="sm" onClick={() => {
                 // Navigate to payment page or trigger payment flow
                 router.push(`/payment?itemId=${conversation.itemId}&conversationId=${conversation.id}`);
-              }}>
+              }} className="bg-orange-500 hover:bg-orange-600 text-white hover:text-white">
                 Pay
               </Button>
             )}
@@ -465,7 +465,7 @@ const MessagesPage = () => {
   if ((sessionStatus as 'loading' | 'authenticated' | 'unauthenticated') === 'unauthenticated') return <div className="p-6 text-center">Please <Link href="/login" className="underline text-primary hover:text-primary/80">log in</Link>.</div>;
 
   return (
-    <div className={cn("flex", isMobile ? "h-[calc(100dvh-var(--mobile-nav-height,0px))]" : "h-[calc(100vh-theme(spacing.16))]")}>
+    <div className={cn("flex", isMobile ? "h-[calc(100dvh-var(--mobile-nav-height,0px))] messages-page-mobile" : "h-[calc(100vh-theme(spacing.16))] messages-page")} style={isMobile ? { paddingBottom: '0', marginBottom: '0' } : {}}>
       <div className={cn("w-full md:w-1/3 lg:w-1/4 border-r flex flex-col", isMobile && selectedConversation && "hidden")}>
         <div className="flex border-b shrink-0">
              <Button variant="ghost" className={cn("flex-1 justify-center rounded-none h-10",activeTab==='inbox'&&"bg-muted font-semibold")} onClick={()=>{setActiveTab('inbox');setSelectedConversation(null);}}>Inbox ({categorizedConversations.inbox.length})</Button>
