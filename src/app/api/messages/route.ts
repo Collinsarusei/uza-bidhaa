@@ -41,7 +41,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
   }
 
-  const userId = session.user.id; // Store user ID in a variable to avoid repeated access
+  const userId = session.user.id;
 
   try {
     const { searchParams } = new URL(req.url);
@@ -61,6 +61,9 @@ export async function GET(req: NextRequest) {
         participants: { select: { id: true } },
         participantsInfo: { select: { userId: true, lastReadAt: true } }
       }
+    }).catch(error => {
+      console.error("Error fetching conversation:", error);
+      throw new Error("Failed to fetch conversation from database");
     });
 
     if (!conversation) {
@@ -74,33 +77,53 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ message: 'Forbidden' }, { status: 403 });
     }
 
-    // Fetch messages with proper error handling for null senders
+    // Fetch messages with minimal data to avoid relation issues
     const messages = await prisma.message.findMany({
       where: { 
-        conversationId: conversationId,
-        senderId: {
-          not: '' // Only get messages with non-empty sender IDs
-        }
+        conversationId: conversationId
       },
       orderBy: { 
         createdAt: 'asc' 
       },
-      include: { 
-        sender: { 
-          select: { 
-            id: true, 
-            name: true, 
-            image: true 
-          } 
-        } 
+      select: {
+        id: true,
+        conversationId: true,
+        senderId: true,
+        content: true,
+        createdAt: true,
+        isSystemMessage: true
       }
     }).catch(error => {
       console.error("Error fetching messages:", error);
       throw new Error("Failed to fetch messages from database");
     });
 
-    // Filter out any messages with missing sender data
-    const validMessages = messages.filter(msg => msg.sender && msg.sender.id);
+    // Manually fetch sender data separately to avoid relation issues
+    const senderIds = messages.map(msg => msg.senderId).filter(Boolean);
+    const senders = senderIds.length > 0 ? await prisma.user.findMany({
+      where: {
+        id: {
+          in: senderIds
+        }
+      },
+      select: {
+        id: true,
+        name: true,
+        image: true
+      }
+    }).catch(error => {
+      console.error("Error fetching senders:", error);
+      return [];
+    }) : [];
+
+    // Map messages with sender data
+    const messagesWithSenders = messages.map(msg => {
+      const sender = senders.find(s => s.id === msg.senderId) || null;
+      return {
+        ...msg,
+        sender
+      };
+    });
 
     // Update last read timestamp for the current user
     await prisma.conversationParticipant.updateMany({
@@ -111,10 +134,12 @@ export async function GET(req: NextRequest) {
       data: {
         lastReadAt: new Date()
       }
+    }).catch(error => {
+      console.error("Error updating last read timestamp:", error);
     });
 
-    console.log(`API Messages GET: Successfully fetched ${validMessages.length} messages for conversation ${conversationId}`);
-    return NextResponse.json({ messages: validMessages });
+    console.log(`API Messages GET: Successfully fetched ${messagesWithSenders.length} messages for conversation ${conversationId}`);
+    return NextResponse.json({ messages: messagesWithSenders });
   } catch (error) {
     console.error("API Messages GET Error:", error);
     return NextResponse.json({ 
@@ -131,7 +156,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
   }
 
-  const userId = session.user.id; // Store user ID in a variable to avoid repeated access
+  const userId = session.user.id;
   const userName = session.user.name || 'Unknown User';
 
   try {
@@ -155,6 +180,9 @@ export async function POST(req: NextRequest) {
         participants: true,
         item: true
       }
+    }).catch(error => {
+      console.error("Error fetching conversation for POST:", error);
+      throw new Error("Failed to fetch conversation from database");
     });
 
     if (!conversation) {
@@ -166,7 +194,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ message: 'This conversation is not yet approved' }, { status: 403 });
     }
 
-    // Create the message with proper error handling
+    // Create the message with minimal data
     const newMessage = await prisma.message.create({
       data: {
         conversationId,
@@ -174,23 +202,36 @@ export async function POST(req: NextRequest) {
         content: text.trim(),
         createdAt: new Date()
       },
-      include: {
-        sender: {
-          select: {
-            id: true,
-            name: true,
-            image: true
-          }
-        }
+      select: {
+        id: true,
+        conversationId: true,
+        senderId: true,
+        content: true,
+        createdAt: true,
+        isSystemMessage: true
       }
     }).catch(error => {
       console.error("Error creating message:", error);
       throw new Error("Failed to create message in database");
     });
 
-    if (!newMessage || !newMessage.sender || !newMessage.sender.id) {
-      throw new Error("Failed to create message with valid sender");
-    }
+    // Fetch sender data separately
+    const sender = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        name: true,
+        image: true
+      }
+    }).catch(error => {
+      console.error("Error fetching sender data:", error);
+      return null;
+    });
+
+    const newMessageWithSender = {
+      ...newMessage,
+      sender
+    };
 
     // Update conversation's last message
     await prisma.conversation.update({
@@ -199,6 +240,8 @@ export async function POST(req: NextRequest) {
         lastMessageSnippet: text.trim().substring(0, 100),
         lastMessageTimestamp: new Date()
       }
+    }).catch(error => {
+      console.error("Error updating conversation:", error);
     });
 
     // Create notification for other participants
@@ -209,10 +252,12 @@ export async function POST(req: NextRequest) {
         type: 'new_message',
         message: `${userName} sent you a message${conversation.item ? ` about "${conversation.item.title}"` : ''}`,
         relatedItemId: conversation.item?.id
+      }).catch(error => {
+        console.error("Error creating notification:", error);
       });
     }
 
-    return NextResponse.json({ newMessage });
+    return NextResponse.json({ newMessage: newMessageWithSender });
   } catch (error) {
     console.error('Error sending message:', error);
     return NextResponse.json({ 

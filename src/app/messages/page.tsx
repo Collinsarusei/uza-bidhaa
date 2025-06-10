@@ -3,6 +3,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSession } from 'next-auth/react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -16,7 +17,10 @@ import { Badge } from "@/components/ui/badge";
 import { useIsMobile } from "@/hooks/use-mobile";
 import Link from 'next/link';
 import { produce } from 'immer';
-import { io, Socket } from 'socket.io-client';
+import { Input } from '@/components/ui/input';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
+import { MessageSquare, Menu, Check } from 'lucide-react';
 
 type ParticipantData = Partial<Pick<UserProfile, 'id' | 'name' | 'image'>>;
 
@@ -27,9 +31,24 @@ interface TypingUserInfo {
 
 export default function MessagesPage() {
   const { data: session, status: sessionStatus } = useSession();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const { toast } = useToast();
   const isMobile = useIsMobile();
-  const currentUserId = session?.user?.id;
+
+  // Early return if not authenticated
+  if (!session?.user) {
+    return <div className="container mx-auto p-4 max-w-5xl">Please sign in to view messages</div>;
+  }
+
+  // Early return if searchParams is not available
+  if (!searchParams) {
+    return <div className="container mx-auto p-4 max-w-5xl">Loading...</div>;
+  }
+
+  const conversationId = searchParams.get('conversationId');
+  const currentUserId = session.user.id;
+  const user = session.user; // Store user in a constant to avoid repeated type checks
 
   const [allConversations, setAllConversations] = useState<Conversation[]>([]);
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
@@ -43,11 +62,7 @@ export default function MessagesPage() {
   const [activeTab, setActiveTab] = useState<'inbox' | 'incoming'>('inbox');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const [socket, setSocket] = useState<Socket | null>(null);
-  const [isSocketConnected, setIsSocketConnected] = useState(false);
-  const [usersTyping, setUsersTyping] = useState<Map<string, { userId: string; userName?: string | null }>>(new Map());
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const fetchConversations = useCallback(async () => {
     if (sessionStatus !== 'authenticated' || !currentUserId) return;
@@ -126,136 +141,40 @@ export default function MessagesPage() {
     }
   };
 
-  // Socket initialization
+  // Set up polling for messages
   useEffect(() => {
-    let socketInstance: Socket | null = null;
-
-    const socketInitializer = async () => {
-      try {
-        // First, ensure the socket server is initialized
-        await fetch('/api/socket');
-        
-        socketInstance = io({
-          path: '/api/socket',
-          addTrailingSlash: false,
-          transports: ['websocket', 'polling'],
-          autoConnect: true,
-          reconnection: true,
-          reconnectionAttempts: 5,
-          reconnectionDelay: 1000,
-          reconnectionDelayMax: 5000,
-          timeout: 20000,
-        });
-
-        socketInstance.on('connect', () => {
-          console.log('Socket connected');
-          setIsSocketConnected(true);
-        });
-
-        socketInstance.on('disconnect', () => {
-          console.log('Socket disconnected');
-          setIsSocketConnected(false);
-        });
-
-        socketInstance.on('connect_error', (error: Error) => {
-          console.error('Socket connection error:', error);
-          setIsSocketConnected(false);
-        });
-
-        setSocket(socketInstance);
-      } catch (error) {
-        console.error('Failed to initialize socket:', error);
-        setIsSocketConnected(false);
+    if (selectedConversation) {
+      // Clear any existing interval
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
       }
-    };
 
-    socketInitializer();
-
-    return () => {
-      if (socketInstance) {
-        socketInstance.disconnect();
-      }
-    };
-  }, []);
-
-  // Handle conversation selection and message listening
-  useEffect(() => {
-    if (!socket || !selectedConversation?.id || !isSocketConnected) return;
-
-    // Join the conversation room
-    socket.emit('join-conversation', selectedConversation.id);
-    
-    // Listen for new messages
-    const handleNewMessage = (message: Message) => {
-      setMessages(prev => {
-        // Check if message already exists
-        if (prev.some(m => m.id === message.id)) {
-          return prev;
-        }
-        return [...prev, message];
-      });
-    };
-
-    socket.on('message-received', handleNewMessage);
-
-    // Handle reconnection
-    const handleReconnect = () => {
-      if (selectedConversation?.id) {
-        socket.emit('join-conversation', selectedConversation.id);
-      }
-    };
-
-    socket.on('connect', handleReconnect);
-
-    return () => {
-      socket.emit('leave-conversation', selectedConversation.id);
-      socket.off('message-received', handleNewMessage);
-      socket.off('connect', handleReconnect);
-    };
-  }, [socket, selectedConversation?.id, isSocketConnected]);
-
-  // Replace the polling message fetching with initial fetch
-  useEffect(() => {
-    if (!selectedConversation?.id || !currentUserId) {
-      setMessages([]);
-      setIsLoadingMessages(false);
-    }
-  }, [currentUserId]);
-
-  useEffect(() => {
-    if (selectedConversation?.id) {
+      // Fetch messages immediately
       fetchMessagesForConversation(selectedConversation.id);
-    } else {
-      setMessages([]);
-    }
-  }, [selectedConversation?.id]);
 
-  const markConversationAsReadAPI = useCallback(async (conversationId: string) => {
-    if (!currentUserId) return;
-    try {
-      await fetch(`/api/conversations/${conversationId}/mark-as-read`, { method: 'POST' });
-      setAllConversations(prev => produce(prev, (draft: Conversation[]) => {
-        const conv = draft.find(c => c.id === conversationId);
-        if (conv) conv.unreadCount = 0;
-      }));
-    } catch (error) {
-      console.error("Failed to mark as read:", error);
-    }
-  }, [currentUserId]);
+      // Set up polling every 5 seconds
+      pollingIntervalRef.current = setInterval(() => {
+        fetchMessagesForConversation(selectedConversation.id);
+      }, 5000);
 
+      return () => {
+        if (pollingIntervalRef.current) {
+          clearInterval(pollingIntervalRef.current);
+        }
+      };
+    }
+  }, [selectedConversation]);
+
+  // Auto-scroll to the latest message
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
   const handleSelectConversation = (conv: Conversation) => {
     if (selectedConversation?.id === conv.id && messages.length > 0) return;
-    if (socket && selectedConversation?.id && isSocketConnected) {
-      socket.emit('leave-conversation', selectedConversation.id);
-    }
-    setUsersTyping(new Map());
     setSelectedConversation(conv);
     setMessages([]);
-    if (isMobile) setTimeout(() => textareaRef.current?.focus(), 50);
+    if (isMobile) setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
   };
 
   const handleSendMessage = async (e: React.FormEvent) => {
@@ -319,46 +238,126 @@ export default function MessagesPage() {
     }
   };
 
-  // Add polling for new messages
-  useEffect(() => {
-    if (!selectedConversation?.id || !currentUserId) return;
+  const handleApproveConversation = async (conversation: Conversation) => {
+    try {
+      const response = await fetch(`/api/conversations/${conversation.id}/approve`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
 
-    const pollInterval = setInterval(async () => {
-      try {
-        const response = await fetch(`/api/messages?conversationId=${selectedConversation.id}`);
-        if (!response.ok) throw new Error('Failed to fetch messages');
-        const data = await response.json();
-        setMessages(data.messages);
-      } catch (error) {
-        console.error('Error polling messages:', error);
+      if (!response.ok) {
+        throw new Error('Failed to approve conversation');
       }
-    }, 5000); // Poll every 5 seconds
 
-    return () => clearInterval(pollInterval);
-  }, [selectedConversation?.id, currentUserId]);
+      toast({
+        title: 'Success',
+        description: 'Conversation approved',
+      });
 
-  const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setNewMessage(e.target.value);
-    if (!socket || !isSocketConnected || !selectedConversation) return;
-    if (!typingTimeoutRef.current) socket.emit('typing-start', { conversationId: selectedConversation.id });
-    else clearTimeout(typingTimeoutRef.current);
-    typingTimeoutRef.current = setTimeout(() => {
-      if (socket && isSocketConnected && selectedConversation) {
-        socket.emit('typing-stop', { conversationId: selectedConversation.id });
+      // Refresh conversations
+      const convResponse = await fetch('/api/conversations');
+      if (convResponse.ok) {
+        const convData = await convResponse.json();
+        setAllConversations(convData.conversations || []);
       }
-      typingTimeoutRef.current = null;
-    }, 1500);
+    } catch (error) {
+      console.error('Error approving conversation:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to approve conversation',
+        variant: 'destructive',
+      });
+    }
   };
 
-  const getParticipantData = (conversation: Conversation | null, userIdToFind: string): ParticipantData => {
-    if (!userIdToFind) return { id: 'unknown', name: 'System', image: null };
-    if (!conversation?.participants?.length) return { id: userIdToFind, name: `User...`, image: null };
-    const p = conversation.participants.find(pt => pt.id === userIdToFind);
-    return p ? { id: p.id, name: p.name, image: p.image } : { id: userIdToFind, name: `User...`, image: null };
+  // Helper function to safely format dates
+  const safeFormatDate = (date: string | Date | null) => {
+    if (!date) return 'Never';
+    try {
+      return formatDistanceToNow(new Date(date), { addSuffix: true });
+    } catch {
+      return 'Never';
+    }
   };
-  const formatTimestamp = (ts: string | null): string => ts ? formatDistanceToNow(parseISO(ts), { addSuffix: true }) : '';
 
-  useEffect(() => { if (messages.length) messagesEndRef.current?.scrollIntoView({ behavior: "auto" }); }, [messages]);
+  // Group messages by date
+  const groupMessagesByDate = (messages: any[]) => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    return {
+      today: messages.filter(m => {
+        if (!m.createdAt) return false;
+        try {
+          return new Date(m.createdAt) >= today;
+        } catch {
+          return false;
+        }
+      }),
+      yesterday: messages.filter(m => {
+        if (!m.createdAt) return false;
+        try {
+          const date = new Date(m.createdAt);
+          return date >= yesterday && date < today;
+        } catch {
+          return false;
+        }
+      }),
+      earlier: messages.filter(m => {
+        if (!m.createdAt) return false;
+        try {
+          return new Date(m.createdAt) < yesterday;
+        } catch {
+          return false;
+        }
+      }),
+    };
+  };
+
+  const groupedMessages = selectedConversation ? groupMessagesByDate(messages) : { today: [], yesterday: [], earlier: [] };
+
+  const renderMessageGroup = (group: any[], label: string) => {
+    if (group.length === 0) return null;
+    return (
+      <>
+        <div className="text-center text-xs text-muted-foreground my-2">{label}</div>
+        {group.map((message) => (
+          <div
+            key={message.id}
+            className={`mb-2 flex items-start ${message.senderId === currentUserId ? 'justify-end' : 'justify-start'}`}
+          >
+            {message.senderId !== currentUserId && (
+              <Avatar className="mr-2 h-8 w-8">
+                <AvatarImage src={message.sender?.image || ''} />
+                <AvatarFallback>{message.sender?.name?.charAt(0) || 'U'}</AvatarFallback>
+              </Avatar>
+            )}
+            <div
+              className={`max-w-[70%] rounded-lg p-2 ${message.senderId === currentUserId ? 'bg-primary text-primary-foreground' : 'bg-muted'}`}
+            >
+              {message.senderId !== currentUserId && (
+                <div className="text-xs text-muted-foreground mb-1">{message.sender?.name || 'Unknown'}</div>
+              )}
+              <div>{message.content}</div>
+              <div className={`text-xs ${message.senderId === currentUserId ? 'text-primary-foreground/70' : 'text-muted-foreground'} mt-1`}>
+                {safeFormatDate(message.createdAt)}
+              </div>
+            </div>
+            {message.senderId === currentUserId && (
+              <Avatar className="ml-2 h-8 w-8">
+                <AvatarImage src={message.sender?.image || user.image || ''} />
+                <AvatarFallback>{message.sender?.name?.charAt(0) || user.name?.charAt(0) || 'U'}</AvatarFallback>
+              </Avatar>
+            )}
+          </div>
+        ))}
+      </>
+    );
+  };
 
   const renderConversationItem = (conv: Conversation, isIncomingView: boolean) => {
     const otherPArray = conv.participants?.filter(p => p.id !== currentUserId) || [];
@@ -373,7 +372,7 @@ export default function MessagesPage() {
             <div className="flex-1 overflow-hidden">
                 <div className="flex justify-between items-center">
                     <p className={cn("text-sm font-medium truncate",hasUnread&&"font-bold")}>{dispName}</p>
-                    <p className="text-xs text-muted-foreground ml-2 shrink-0">{formatTimestamp(conv.lastMessageTimestamp||conv.createdAt)}</p>
+                    <p className="text-xs text-muted-foreground ml-2 shrink-0">{safeFormatDate(conv.lastMessageTimestamp||conv.createdAt)}</p>
                 </div>
                 <p className={cn("text-xs text-muted-foreground truncate",hasUnread&&"font-semibold")}>{conv.lastMessageSnippet||'...'}</p>
                 {conv.itemTitle && <p className="text-xs italic text-muted-foreground truncate">Item: {conv.itemTitle}</p>}
@@ -386,9 +385,7 @@ export default function MessagesPage() {
   const renderChatAreaContent = (conversation: Conversation | null) => {
     if (!conversation) return <div className="flex-1 flex items-center justify-center text-muted-foreground">Select a conversation.</div>;
     const otherPId = conversation.participants?.find(p=>p.id!==currentUserId)?.id;
-    const otherPDisp = getParticipantData(conversation, otherPId||'');
-    const typingNames = Array.from(usersTyping.values()).map(u=>u.userName||"Someone").join(', ');
-    const canChat = conversation.approved || conversation.initiatorId === currentUserId;
+    const otherPDisp = otherPId ? { id: otherPId, name: conversation.participants?.find(p => p.id === otherPId)?.name || 'Unknown', image: conversation.participants?.find(p => p.id === otherPId)?.image || null } : { id: 'unknown', name: 'N/A', image: null };
     return (
       <div className="flex-1 flex flex-col h-full bg-background dark:bg-slate-900">
         <div className="p-3 border-b flex items-center gap-2 sticky top-0 z-10 bg-background dark:bg-slate-900">
@@ -402,29 +399,27 @@ export default function MessagesPage() {
         </div>
         <div className="flex-1 overflow-y-auto p-4 space-y-3">{messages.map(msg => {
             const isSender = msg.senderId === currentUserId;
-            const senderDisp = msg.sender || getParticipantData(conversation, msg.senderId);
+            const senderDisp = msg.sender || otherPDisp;
             if(msg.isSystemMessage) return <div key={msg.id} className="my-3 p-2.5 bg-yellow-100 dark:bg-yellow-800 border-l-4 border-yellow-500 text-yellow-700 dark:text-yellow-200 rounded-md text-xs flex items-start gap-2"><Icons.alertTriangle className="h-4 w-4 mt-0.5 shrink-0"/>{msg.content}</div>;
             return (<div key={msg.id} className={cn("flex items-end gap-2 max-w-[85%]",isSender?"justify-end self-end":"justify-start self-start")}>
                 {!isSender && senderDisp && senderDisp.id!=='unknown' && <Avatar className="h-6 w-6 border shrink-0"><AvatarImage src={senderDisp.image??undefined}/><AvatarFallback>{senderDisp.name?.charAt(0)?.toUpperCase()||'?'}</AvatarFallback></Avatar>}
                 <div className={cn("rounded-lg px-3 py-2 text-sm shadow-sm",isSender?"bg-primary text-primary-foreground":"bg-muted dark:bg-slate-700")}>
                     <p className="whitespace-pre-wrap">{msg.content}</p>
-                    <p className={cn("text-xs mt-0.5 opacity-70",isSender?"text-right":"text-left")}>{formatTimestamp(msg.createdAt)}</p>
+                    <p className={cn("text-xs mt-0.5 opacity-70",isSender?"text-right":"text-left")}>{safeFormatDate(msg.createdAt)}</p>
                 </div>
                 {isSender && senderDisp && senderDisp.id!=='unknown' && <Avatar className="h-6 w-6 border shrink-0"><AvatarImage src={senderDisp.image??undefined}/><AvatarFallback>{senderDisp.name?.charAt(0)?.toUpperCase()||'?'}</AvatarFallback></Avatar>}
             </div>);
         })} <div ref={messagesEndRef}/></div>
-        {typingNames && <div className="px-4 pb-1 text-xs italic text-muted-foreground h-5 shrink-0">{typingNames} is typing...</div>}
         <div className="border-t p-3 sticky bottom-0 bg-background dark:bg-slate-900">
-          {canChat ? (
+          {conversation.approved || conversation.initiatorId === currentUserId ? (
             <form onSubmit={handleSendMessage} className="flex gap-2 items-center">
               <Textarea 
-                ref={textareaRef} 
-                value={newMessage} 
-                onChange={handleTextareaChange} 
                 placeholder="Type your message..." 
                 rows={1} 
                 className="flex-1 resize-none max-h-24 p-2 text-sm border rounded-md"
-                onKeyDown={e => {
+                value={newMessage} 
+                onChange={(e) => setNewMessage(e.target.value)}
+                onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
                     handleSendMessage(e);
@@ -445,8 +440,8 @@ export default function MessagesPage() {
       </div>);
   };
 
-  if (sessionStatus === 'loading') return <div className="flex items-center justify-center h-screen"><Icons.spinner className="h-8 w-8 animate-spin text-primary"/></div>;
-  if (sessionStatus === 'unauthenticated') return <div className="p-6 text-center">Please <Link href="/login" className="underline text-primary hover:text-primary/80">log in</Link>.</div>;
+  if ((sessionStatus as 'loading' | 'authenticated' | 'unauthenticated') === 'loading') return <div className="flex items-center justify-center h-screen"><Icons.spinner className="h-8 w-8 animate-spin text-primary"/></div>;
+  if ((sessionStatus as 'loading' | 'authenticated' | 'unauthenticated') === 'unauthenticated') return <div className="p-6 text-center">Please <Link href="/login" className="underline text-primary hover:text-primary/80">log in</Link>.</div>;
 
   return (
     <div className={cn("flex border-t", isMobile ? "h-[calc(100dvh-var(--mobile-nav-height,0px))]" : "h-[calc(100vh-theme(spacing.16))]")}>
