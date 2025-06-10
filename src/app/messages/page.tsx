@@ -259,42 +259,31 @@ export default function MessagesPage() {
   };
 
   const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newMessage.trim() || !selectedConversation) return;
+    e.preventDefault(); // Prevent form submission
+    if (!newMessage.trim() || isSending || !selectedConversation) return;
 
     const messageToSend = newMessage.trim();
-    setNewMessage(""); // Clear input immediately for better UX
+    setNewMessage('');
     setIsSending(true);
 
-    // Clear typing timeout if exists
-    if (typingTimeoutRef.current) {
-      clearTimeout(typingTimeoutRef.current);
-      typingTimeoutRef.current = null;
-    }
-
-    // Optimistically add message to UI
+    // Create optimistic message
     const optimisticMessage: Message = {
       id: `temp-${Date.now()}`,
-      conversationId: selectedConversation.id,
       content: messageToSend,
-      senderId: session?.user?.id || '',
-      sender: {
-        id: session?.user?.id || '',
-        name: session?.user?.name || '',
-        image: session?.user?.image || null
-      },
+      senderId: currentUserId!,
+      conversationId: selectedConversation.id,
       createdAt: new Date().toISOString(),
-      isSystemMessage: false
+      sender: {
+        id: currentUserId!,
+        name: session?.user?.name || 'You',
+        image: session?.user?.image || null
+      }
     };
 
+    // Add optimistic message
     setMessages(prev => [...prev, optimisticMessage]);
 
     try {
-      // First, ensure we're in the conversation room
-      if (socket && isSocketConnected) {
-        socket.emit('join-conversation', selectedConversation.id);
-      }
-
       const response = await fetch('/api/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -315,14 +304,6 @@ export default function MessagesPage() {
         msg.id === optimisticMessage.id ? data.newMessage : msg
       ));
 
-      // Emit the message through socket if connected
-      if (socket && isSocketConnected) {
-        socket.emit('new-message', {
-          conversationId: selectedConversation.id,
-          ...data.newMessage
-        });
-      }
-
     } catch (error) {
       console.error('Error sending message:', error);
       // Remove the optimistic message on error
@@ -337,6 +318,24 @@ export default function MessagesPage() {
       setIsSending(false);
     }
   };
+
+  // Add polling for new messages
+  useEffect(() => {
+    if (!selectedConversation?.id || !currentUserId) return;
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const response = await fetch(`/api/messages?conversationId=${selectedConversation.id}`);
+        if (!response.ok) throw new Error('Failed to fetch messages');
+        const data = await response.json();
+        setMessages(data.messages);
+      } catch (error) {
+        console.error('Error polling messages:', error);
+      }
+    }, 5000); // Poll every 5 seconds
+
+    return () => clearInterval(pollInterval);
+  }, [selectedConversation?.id, currentUserId]);
 
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setNewMessage(e.target.value);
@@ -418,11 +417,27 @@ export default function MessagesPage() {
         <div className="border-t p-3 sticky bottom-0 bg-background dark:bg-slate-900">
           {canChat ? (
             <form onSubmit={handleSendMessage} className="flex gap-2 items-center">
-              <Textarea ref={textareaRef} value={newMessage} onChange={handleTextareaChange} placeholder="Type your message..." rows={1} className="flex-1 resize-none max-h-24 p-2 text-sm border rounded-md"
-                onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();handleSendMessage(e as any);}}}
-                disabled={isSending || isLoadingMessages} />
-              <Button type="submit" size="icon" disabled={!newMessage.trim()||isSending||isLoadingMessages||!isSocketConnected}>
-                {isSending?<Icons.spinner className="h-4 w-4 animate-spin"/>:<Icons.send className="h-4 w-4"/>}
+              <Textarea 
+                ref={textareaRef} 
+                value={newMessage} 
+                onChange={handleTextareaChange} 
+                placeholder="Type your message..." 
+                rows={1} 
+                className="flex-1 resize-none max-h-24 p-2 text-sm border rounded-md"
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSendMessage(e);
+                  }
+                }}
+                disabled={isSending || isLoadingMessages} 
+              />
+              <Button 
+                type="submit" 
+                size="icon" 
+                disabled={!newMessage.trim() || isSending || isLoadingMessages}
+              >
+                {isSending ? <Icons.spinner className="h-4 w-4 animate-spin"/> : <Icons.send className="h-4 w-4"/>}
               </Button>
             </form>
           ) : ( <div className="text-center text-sm text-muted-foreground p-2">Chat unavailable.</div> )}

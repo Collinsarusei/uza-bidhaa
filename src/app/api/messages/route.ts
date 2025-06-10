@@ -31,327 +31,141 @@ const emitMessageEvent = (conversationId: string, message: any) => {
   }
 };
 
-export async function POST(req: NextRequest) {
-    console.log("API POST /api/messages (Prisma): Received request");
+// GET endpoint for polling messages
+export async function GET(req: NextRequest) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) {
+    return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+  }
 
-    const session = await getServerSession(authOptions);
-    if (!session?.user?.id || !session.user.name) {
-        console.warn("API Messages POST: Unauthorized or user name missing.");
-        return NextResponse.json({ message: 'Unauthorized or user data incomplete' }, { status: 401 });
+  const { searchParams } = new URL(req.url);
+  const conversationId = searchParams.get('conversationId');
+
+  if (!conversationId) {
+    return NextResponse.json({ message: 'Conversation ID is required' }, { status: 400 });
+  }
+
+  try {
+    // Verify user is part of the conversation
+    const conversation = await prisma.conversation.findFirst({
+      where: {
+        id: conversationId,
+        participants: {
+          some: {
+            id: session.user.id
+          }
+        }
+      }
+    });
+
+    if (!conversation) {
+      return NextResponse.json({ message: 'Conversation not found' }, { status: 404 });
     }
-    const senderId = session.user.id;
-    const senderName = session.user.name; 
 
-    try {
-        const body: NewMessageRequestBody = await req.json();
-        const { conversationId: existingConvId, recipientId, itemId, text, itemTitle, itemImageUrl } = body;
-
-        if (!text || typeof text !== 'string' || text.trim() === '') {
-            console.error("API Messages POST: Missing or invalid text field.");
-            return NextResponse.json({ message: 'Missing or invalid text field' }, { status: 400 });
+    // Fetch messages
+    const messages = await prisma.message.findMany({
+      where: {
+        conversationId: conversationId
+      },
+      orderBy: {
+        createdAt: 'asc'
+      },
+      include: {
+        sender: {
+          select: {
+            id: true,
+            name: true,
+            image: true
+          }
         }
+      }
+    });
 
-        let conversationForNotification: any;
-        let newMessage: any;
-
-        if (existingConvId) {
-            // Existing Conversation - Standard message creation
-            const existingConversationDetails = await prisma.conversation.findUnique({ 
-                where: { id: existingConvId },
-                include: { 
-                    participants: { select: { id: true } },
-                    item: { select: { id: true, title: true, sellerId: true } }
-                }
-            });
-
-            if (!existingConversationDetails) {
-                return NextResponse.json({ message: 'Conversation not found.' }, { status: 404 });
-            }
-
-            // Check if user is a participant
-            if (!existingConversationDetails.participants.some((p: { id: string }) => p.id === senderId)) {
-                return NextResponse.json({ message: 'Forbidden. You are not part of this conversation.' }, { status: 403 });
-            }
-
-            // Check if conversation is approved or if user is the initiator
-            const isInitiator = existingConversationDetails.initiatorId === senderId;
-            if (!existingConversationDetails.approved && !isInitiator) {
-                return NextResponse.json({ message: 'This conversation is not yet approved.' }, { status: 403 });
-            }
-
-            const now = new Date();
-            const transactionResults = await prisma.$transaction([
-                prisma.message.create({
-                    data: {
-                        conversationId: existingConvId,
-                        senderId: senderId,
-                        content: text.trim(),
-                        createdAt: now,
-                    },
-                    include: {
-                        sender: {
-                            select: {
-                                id: true,
-                                name: true,
-                                image: true
-                            }
-                        }
-                    }
-                }),
-                prisma.conversation.update({
-                    where: { id: existingConvId },
-                    data: {
-                        lastMessageSnippet: text.trim().substring(0, 100),
-                        lastMessageTimestamp: now,
-                        participantsInfo: {
-                            updateMany: {
-                                where: { userId: senderId, conversationId: existingConvId },
-                                data: { lastReadAt: now }
-                            }
-                        }
-                    },
-                    include: { 
-                        item: { select: { sellerId: true, title: true, id: true } }, 
-                        participants: { select: { id: true } },
-                    }
-                }),
-            ]);
-            newMessage = transactionResults[0];
-            conversationForNotification = transactionResults[1];
-
-            // Emit socket event for new message
-            emitMessageEvent(existingConvId, newMessage);
-        } else {
-            // New Conversation - Requires item details & recipient ID.
-            if (!itemId || !itemTitle || !recipientId) {
-                console.error("API Messages POST: Missing required fields for new conversation (itemId, itemTitle, recipientId).");
-                return NextResponse.json({ message: 'Missing required fields for new conversation' }, { status: 400 });
-            }
-
-            // Check if conversation already exists (based on Item and Participants combo).
-            const foundConversation = await prisma.conversation.findFirst({
-                where: {
-                    itemId: itemId,
-                    AND: [
-                        { participants: { some: { id: senderId } } },
-                        { participants: { some: { id: recipientId } } },
-                    ]
-                }
-            });
-
-            if (foundConversation) {
-                return NextResponse.json({ message: 'Conversation already exists.', conversationId: foundConversation.id }, { status: 409 });
-            }
-
-            const now = new Date();
-            conversationForNotification = await prisma.conversation.create({
-                data: {
-                    item: { connect: { id: itemId } },
-                    itemTitle: itemTitle,
-                    itemImageUrl: itemImageUrl || null,
-                    initiator: { connect: { id: senderId } },
-                    participants: { connect: [ { id: senderId }, { id: recipientId } ] },
-                    participantsInfo: {
-                        create: [
-                            { userId: senderId, lastReadAt: now },
-                            { userId: recipientId, lastReadAt: null }
-                        ]
-                    },
-                    messages: {
-                        create: [
-                            {
-                                senderId: SYSTEM_MESSAGE_SENDER_ID,
-                                content: CHAT_PAYMENT_WARNING_MESSAGE,
-                                isSystemMessage: true,
-                                createdAt: new Date(now.getTime() + 1) 
-                            },
-                            {
-                                senderId: senderId,
-                                content: text.trim(),
-                                createdAt: new Date(now.getTime() + 2) 
-                            }
-                        ]
-                    },
-                    lastMessageSnippet: text.trim().substring(0, 100),
-                    lastMessageTimestamp: new Date(now.getTime() + 2),
-                    hasShownPaymentWarning: true,
-                    approved: false, 
-                },
-                include: { 
-                    item: { select: { sellerId: true, title: true, id: true } }, 
-                    participants: { select: { id: true } },
-                    messages: {
-                        include: {
-                            sender: {
-                                select: {
-                                    id: true,
-                                    name: true,
-                                    image: true
-                                }
-                            }
-                        },
-                        orderBy: {
-                            createdAt: 'desc'
-                        },
-                        take: 1
-                    }
-                }
-            });
-            newMessage = conversationForNotification.messages[0];
-
-            // Emit socket event for new message in new conversation
-            emitMessageEvent(conversationForNotification.id, newMessage);
-        }
-
-        // Notification Logic
-        if (conversationForNotification && conversationForNotification.item) {
-            const actualRecipientId = conversationForNotification.participants.find((p: { id: string }) => p.id !== senderId)?.id;
-            if (actualRecipientId) {
-                let shouldNotify = false;
-                if (conversationForNotification.approved) {
-                    shouldNotify = true;
-                } else {
-                    const userMessagesCount = await prisma.message.count({
-                        where: {
-                            conversationId: conversationForNotification.id,
-                            senderId: senderId,
-                            isSystemMessage: false
-                        }
-                    });
-                    if (userMessagesCount === 1) { 
-                        shouldNotify = true;
-                        console.log(`API Messages POST: Notifying recipient for first user message in unapproved conversation ${conversationForNotification.id}`);
-                    }
-                }
-
-                if (shouldNotify) {
-                    await createNotification({
-                        userId: actualRecipientId,
-                        type: 'new_message',
-                        message: `${senderName} sent you a message regarding "${conversationForNotification.item.title}".`,
-                        relatedItemId: conversationForNotification.item.id,
-                    });
-                    console.log(`API Messages POST: Notification created for recipient ${actualRecipientId}`);
-                }
-            }
-        } else {
-            console.warn("API Messages POST: conversationForNotification or item details missing, skipping notification.", conversationForNotification);
-        }
-        
-        console.log(`API Messages POST: Message successfully processed for conversation ${conversationForNotification.id}`);
-        return NextResponse.json({ 
-            message: 'Message sent successfully', 
-            conversationId: conversationForNotification.id,
-            newMessage: newMessage
-        }, { status: 201 });
-
-    } catch (error: any) {
-        console.error("API Messages POST Error (Prisma):", error);
-        return NextResponse.json({ message: 'Failed to send message', error: error.message }, { status: 500 });
-    }
+    return NextResponse.json({ messages });
+  } catch (error) {
+    console.error('Error fetching messages:', error);
+    return NextResponse.json({ message: 'Failed to fetch messages' }, { status: 500 });
+  }
 }
 
-export async function GET(req: NextRequest) {
-    console.log("API GET /api/messages (Prisma): Received request");
-    
-    const session = await getServerSession(authOptions);
-    if (!session?.user?.id) {
-        console.warn("API Messages GET: Unauthorized attempt.");
-        return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+// POST endpoint for sending messages
+export async function POST(req: NextRequest) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) {
+    return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+  }
+
+  try {
+    const { conversationId, text } = await req.json();
+    const senderId = session.user.id;
+    const senderName = session.user.name || 'Unknown User';
+
+    if (!conversationId || !text) {
+      return NextResponse.json({ message: 'Missing required fields' }, { status: 400 });
     }
-    const currentUserId = session.user.id;
 
-    try {
-        const { searchParams } = new URL(req.url);
-        const conversationId = searchParams.get('conversationId');
-
-        if (!conversationId) {
-            console.error("API Messages GET: Missing conversationId parameter.");
-            return NextResponse.json({ message: 'Missing conversation identifier' }, { status: 400 });
+    // Verify conversation exists and user is a participant
+    const conversation = await prisma.conversation.findFirst({
+      where: {
+        id: conversationId,
+        participants: {
+          some: {
+            id: senderId
+          }
         }
+      },
+      include: {
+        participants: true,
+        item: true
+      }
+    });
 
-        console.log(`API Messages GET: Fetching messages for conversation ${conversationId}`);
-
-        // First check if conversation exists and user has access
-        const conversation = await prisma.conversation.findUnique({
-            where: { id: conversationId },
-            include: {
-                participants: { select: { id: true, name: true, image: true } },
-                participantsInfo: { select: { userId: true, lastReadAt: true } },
-                item: { select: { id: true, title: true, sellerId: true, mediaUrls: true } },
-            }
-        });
-
-        if (!conversation) {
-            console.log(`API Messages GET: Conversation ${conversationId} not found.`);
-            return NextResponse.json({ message: 'Conversation not found' }, { status: 404 });
-        }
-
-        if (!conversation.participants.some((p: { id: string }) => p.id === currentUserId)) {
-            console.warn(`API Messages GET: User ${currentUserId} forbidden access to ${conversationId}.`);
-            return NextResponse.json({ message: 'Forbidden' }, { status: 403 });
-        }
-
-        // Fetch messages with proper error handling
-        const messages = await prisma.message.findMany({
-            where: { 
-                conversationId: conversationId,
-                senderId: {
-                    not: SYSTEM_MESSAGE_SENDER_ID
-                }
-            },
-            orderBy: { createdAt: 'asc' },
-            include: { 
-                sender: { 
-                    select: { 
-                        id: true, 
-                        name: true, 
-                        image: true 
-                    } 
-                } 
-            }
-        }).catch(error => {
-            console.error("Error fetching messages:", error);
-            throw new Error("Failed to fetch messages from database");
-        });
-
-        // Get participant info for unread status
-        const currentUserParticipantInfo = conversation.participantsInfo.find(
-            (p: { userId: string }) => p.userId === currentUserId
-        );
-
-        // Calculate unread status
-        const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
-        const unreadForCurrentUser = lastMessage && 
-            lastMessage.senderId !== currentUserId && 
-            (!currentUserParticipantInfo?.lastReadAt || 
-             currentUserParticipantInfo.lastReadAt < lastMessage.createdAt);
-
-        // Prepare response
-        const response = {
-            messages: messages.map(msg => ({
-                id: msg.id,
-                content: msg.content,
-                createdAt: msg.createdAt,
-                senderId: msg.senderId,
-                sender: msg.sender || null,
-                isSystemMessage: msg.isSystemMessage
-            })),
-            conversation: {
-                ...conversation,
-                itemImageUrl: conversation.item?.mediaUrls?.[0] || conversation.itemImageUrl,
-                unread: unreadForCurrentUser
-            }
-        };
-
-        console.log(`API Messages GET: Successfully fetched ${messages.length} messages for conversation ${conversationId}`);
-        return NextResponse.json(response, { status: 200 });
-
-    } catch (error: any) {
-        console.error("API Messages GET Error:", error);
-        return NextResponse.json({ 
-            message: 'Failed to fetch messages', 
-            error: error.message 
-        }, { status: 500 });
+    if (!conversation) {
+      return NextResponse.json({ message: 'Conversation not found' }, { status: 404 });
     }
+
+    // Create the message
+    const newMessage = await prisma.message.create({
+      data: {
+        conversationId,
+        senderId,
+        content: text.trim(),
+        createdAt: new Date()
+      },
+      include: {
+        sender: {
+          select: {
+            id: true,
+            name: true,
+            image: true
+          }
+        }
+      }
+    });
+
+    // Update conversation's last message
+    await prisma.conversation.update({
+      where: { id: conversationId },
+      data: {
+        lastMessageSnippet: text.trim().substring(0, 100),
+        lastMessageTimestamp: new Date()
+      }
+    });
+
+    // Create notification for other participants
+    const otherParticipants = conversation.participants.filter(p => p.id !== senderId);
+    for (const participant of otherParticipants) {
+      await createNotification({
+        userId: participant.id,
+        type: 'new_message',
+        message: `${senderName} sent you a message${conversation.item ? ` about "${conversation.item.title}"` : ''}`,
+        relatedItemId: conversation.item?.id
+      });
+    }
+
+    return NextResponse.json({ newMessage });
+  } catch (error) {
+    console.error('Error sending message:', error);
+    return NextResponse.json({ message: 'Failed to send message' }, { status: 500 });
+  }
 }

@@ -87,53 +87,70 @@ export default function ItemDetailPage() {
   }, [itemId]);
 
   const handleSendMessage = async () => {
-      if (!item || !messageText.trim() || !session?.user?.id) return;
+    if (!item || !messageText.trim() || !session?.user?.id) return;
 
-      if (session.user.id === item.sellerId) {
-      toast({
-        title: "Action Denied",
-        description: "You cannot message yourself.",
-        variant: "destructive"
-      });
-           return;
-      }
+    if (session.user.id === item.sellerId) {
+        toast({
+            title: "Action Denied",
+            description: "You cannot message yourself.",
+            variant: "destructive"
+        });
+        return;
+    }
 
-      setIsSendingMessage(true);
-      try {
-           const response = await fetch('/api/messages', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                  recipientId: item.sellerId,
-                  itemId: item.id,
-                  itemTitle: item.title,
-                  itemImageUrl: item.mediaUrls?.[0] ?? null,
-                  text: messageText.trim(),
-              }),
-          });
+    setIsSendingMessage(true);
+    try {
+        // First create a conversation
+        const conversationResponse = await fetch('/api/conversations', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                itemId: item.id,
+                sellerId: item.sellerId,
+                initialMessageContent: messageText.trim(),
+                itemTitle: item.title,
+                itemImageUrl: item.mediaUrls?.[0] ?? null
+            }),
+        });
 
-      if (!response.ok) {
-          const result = await response.json();
-              throw new Error(result.message || 'Failed to send message');
-          }
+        if (!conversationResponse.ok) {
+            const result = await conversationResponse.json();
+            if (result.conversationId) {
+                // If conversation already exists, send message to that conversation
+                const messageResponse = await fetch('/api/messages', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        conversationId: result.conversationId,
+                        text: messageText.trim()
+                    }),
+                });
 
-      toast({
-        title: "Message Sent",
-        description: "Your message has been sent."
-      });
-          setIsMessageSheetOpen(false); 
-          setMessageText("");
-      } catch (err) {
-           const message = err instanceof Error ? err.message : 'Failed to send message.';
-      console.error("Error sending message:", err);
-      toast({
-        title: "Send Error",
-        description: message,
-        variant: "destructive"
-      });
-      } finally {
-          setIsSendingMessage(false);
-      }
+                if (!messageResponse.ok) {
+                    throw new Error('Failed to send message');
+                }
+            } else {
+                throw new Error(result.message || 'Failed to create conversation');
+            }
+        }
+
+        toast({
+            title: "Message Sent",
+            description: "Your message has been sent."
+        });
+        setIsMessageSheetOpen(false);
+        setMessageText("");
+    } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to send message.';
+        console.error("Error sending message:", err);
+        toast({
+            title: "Send Error",
+            description: message,
+            variant: "destructive"
+        });
+    } finally {
+        setIsSendingMessage(false);
+    }
   };
 
   const handleInitiatePayment = async () => {
