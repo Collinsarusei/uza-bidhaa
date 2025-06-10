@@ -18,6 +18,15 @@ export async function GET(req: Request) {
           origin: process.env.NEXT_PUBLIC_APP_URL || '*',
           methods: ['GET', 'POST'],
           credentials: true
+        },
+        transports: ['websocket', 'polling'],
+        pingTimeout: 60000,
+        pingInterval: 25000,
+        upgradeTimeout: 30000,
+        allowUpgrades: true,
+        perMessageDeflate: false,
+        httpCompression: {
+          threshold: 2048
         }
       });
 
