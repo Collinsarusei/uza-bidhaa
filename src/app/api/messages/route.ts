@@ -33,58 +33,85 @@ const emitMessageEvent = (conversationId: string, message: any) => {
 
 // GET endpoint for polling messages
 export async function GET(req: NextRequest) {
+  console.log("API GET /api/messages: Received request");
+  
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
+    console.warn("API Messages GET: Unauthorized attempt");
     return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
   }
 
-  const { searchParams } = new URL(req.url);
-  const conversationId = searchParams.get('conversationId');
-
-  if (!conversationId) {
-    return NextResponse.json({ message: 'Conversation ID is required' }, { status: 400 });
-  }
+  const userId = session.user.id; // Store user ID in a variable to avoid repeated access
 
   try {
-    // Verify user is part of the conversation
-    const conversation = await prisma.conversation.findFirst({
-      where: {
-        id: conversationId,
-        participants: {
-          some: {
-            id: session.user.id
-          }
-        }
+    const { searchParams } = new URL(req.url);
+    const conversationId = searchParams.get('conversationId');
+
+    if (!conversationId) {
+      console.error("API Messages GET: Missing conversationId parameter");
+      return NextResponse.json({ message: 'Missing conversation identifier' }, { status: 400 });
+    }
+
+    console.log(`API Messages GET: Fetching messages for conversation ${conversationId}`);
+
+    // First check if conversation exists and user has access
+    const conversation = await prisma.conversation.findUnique({
+      where: { id: conversationId },
+      include: {
+        participants: { select: { id: true } },
+        participantsInfo: { select: { userId: true, lastReadAt: true } }
       }
     });
 
     if (!conversation) {
+      console.log(`API Messages GET: Conversation ${conversationId} not found`);
       return NextResponse.json({ message: 'Conversation not found' }, { status: 404 });
+    }
+
+    // Check if user is a participant
+    if (!conversation.participants.some(p => p.id === userId)) {
+      console.warn(`API Messages GET: User ${userId} forbidden access to ${conversationId}`);
+      return NextResponse.json({ message: 'Forbidden' }, { status: 403 });
     }
 
     // Fetch messages
     const messages = await prisma.message.findMany({
-      where: {
+      where: { 
         conversationId: conversationId
       },
-      orderBy: {
-        createdAt: 'asc'
+      orderBy: { 
+        createdAt: 'asc' 
       },
-      include: {
-        sender: {
-          select: {
-            id: true,
-            name: true,
-            image: true
-          }
-        }
+      include: { 
+        sender: { 
+          select: { 
+            id: true, 
+            name: true, 
+            image: true 
+          } 
+        } 
       }
     });
 
+    // Update last read timestamp for the current user
+    await prisma.conversationParticipant.updateMany({
+      where: {
+        conversationId: conversationId,
+        userId: userId
+      },
+      data: {
+        lastReadAt: new Date()
+      }
+    });
+
+    console.log(`API Messages GET: Successfully fetched ${messages.length} messages for conversation ${conversationId}`);
     return NextResponse.json({ messages });
   } catch (error) {
-    console.error('Error fetching messages:', error);
-    return NextResponse.json({ message: 'Failed to fetch messages' }, { status: 500 });
+    console.error("API Messages GET Error:", error);
+    return NextResponse.json({ 
+      message: 'Failed to fetch messages',
+      error: error instanceof Error ? error.message : 'Unknown error'
+    }, { status: 500 });
   }
 }
 
@@ -95,10 +122,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
   }
 
+  const userId = session.user.id; // Store user ID in a variable to avoid repeated access
+  const userName = session.user.name || 'Unknown User';
+
   try {
     const { conversationId, text } = await req.json();
-    const senderId = session.user.id;
-    const senderName = session.user.name || 'Unknown User';
 
     if (!conversationId || !text) {
       return NextResponse.json({ message: 'Missing required fields' }, { status: 400 });
@@ -110,7 +138,7 @@ export async function POST(req: NextRequest) {
         id: conversationId,
         participants: {
           some: {
-            id: senderId
+            id: userId
           }
         }
       },
@@ -124,11 +152,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ message: 'Conversation not found' }, { status: 404 });
     }
 
+    // Check if conversation is approved
+    if (!conversation.approved && conversation.initiatorId !== userId) {
+      return NextResponse.json({ message: 'This conversation is not yet approved' }, { status: 403 });
+    }
+
     // Create the message
     const newMessage = await prisma.message.create({
       data: {
         conversationId,
-        senderId,
+        senderId: userId,
         content: text.trim(),
         createdAt: new Date()
       },
@@ -153,12 +186,12 @@ export async function POST(req: NextRequest) {
     });
 
     // Create notification for other participants
-    const otherParticipants = conversation.participants.filter(p => p.id !== senderId);
+    const otherParticipants = conversation.participants.filter(p => p.id !== userId);
     for (const participant of otherParticipants) {
       await createNotification({
         userId: participant.id,
         type: 'new_message',
-        message: `${senderName} sent you a message${conversation.item ? ` about "${conversation.item.title}"` : ''}`,
+        message: `${userName} sent you a message${conversation.item ? ` about "${conversation.item.title}"` : ''}`,
         relatedItemId: conversation.item?.id
       });
     }
@@ -166,6 +199,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ newMessage });
   } catch (error) {
     console.error('Error sending message:', error);
-    return NextResponse.json({ message: 'Failed to send message' }, { status: 500 });
+    return NextResponse.json({ 
+      message: 'Failed to send message',
+      error: error instanceof Error ? error.message : 'Unknown error'
+    }, { status: 500 });
   }
 }
