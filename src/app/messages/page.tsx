@@ -4,6 +4,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import dynamic from 'next/dynamic';
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -29,12 +30,18 @@ interface TypingUserInfo {
     userName?: string | null;
 }
 
-export default function MessagesPage() {
+// Wrap the main component with dynamic import
+const MessagesPage = () => {
   const { data: session, status: sessionStatus } = useSession();
   const router = useRouter();
   const searchParams = useSearchParams();
   const { toast } = useToast();
   const isMobile = useIsMobile();
+
+  // Add early return for server-side rendering
+  if (typeof window === 'undefined') {
+    return null;
+  }
 
   // Early return if not authenticated
   if (!session?.user) {
@@ -464,4 +471,9 @@ export default function MessagesPage() {
       </div>
     </div>
   );
-}
+};
+
+// Export with dynamic import
+export default dynamic(() => Promise.resolve(MessagesPage), {
+  ssr: false
+});
