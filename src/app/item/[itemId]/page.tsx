@@ -87,69 +87,76 @@ export default function ItemDetailPage() {
   }, [itemId]);
 
   const handleSendMessage = async () => {
-    if (!item || !messageText.trim() || !session?.user?.id) return;
-
-    if (session.user.id === item.sellerId) {
-        toast({
-            title: "Action Denied",
-            description: "You cannot message yourself.",
-            variant: "destructive"
-        });
-        return;
-    }
-
+    if (!messageText.trim() || !session?.user || !item) return;
     setIsSendingMessage(true);
+
     try {
-        // First create a conversation
-        const conversationResponse = await fetch('/api/conversations', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                itemId: item.id,
-                sellerId: item.sellerId,
-                initialMessageContent: messageText.trim(),
-                itemTitle: item.title,
-                itemImageUrl: item.mediaUrls?.[0] ?? null
-            }),
-        });
-
-        if (!conversationResponse.ok) {
-            const result = await conversationResponse.json();
-            if (result.conversationId) {
-                // If conversation already exists, send message to that conversation
-                const messageResponse = await fetch('/api/messages', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        conversationId: result.conversationId,
-                        text: messageText.trim()
-                    }),
-                });
-
-                if (!messageResponse.ok) {
-                    throw new Error('Failed to send message');
-                }
-            } else {
-                throw new Error(result.message || 'Failed to create conversation');
-            }
+      // Check if conversation already exists
+      const existingConvRes = await fetch(`/api/conversations?itemId=${item.id}&sellerId=${item.sellerId}`);
+      let conversationId = null;
+      if (existingConvRes.ok) {
+        const convData = await existingConvRes.json();
+        if (convData.conversation) {
+          conversationId = convData.conversation.id;
         }
+      }
 
-        toast({
-            title: "Message Sent",
-            description: "Your message has been sent."
+      // If conversation already exists, send message to that conversation
+      if (conversationId) {
+        const msgRes = await fetch('/api/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            conversationId,
+            text: messageText,
+            recipientId: item.sellerId,
+            itemId: item.id,
+            itemTitle: item.title,
+            itemImageUrl: item.mediaUrls?.[0] || ''
+          })
         });
-        setIsMessageSheetOpen(false);
-        setMessageText("");
+        if (!msgRes.ok) throw new Error('Failed to send message');
+        toast({ title: 'Message Sent', description: 'Your message has been sent.' });
+        router.push(`/messages?conversationId=${conversationId}`);
+      } else {
+        // Create new conversation and send message
+        const convRes = await fetch('/api/conversations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            recipientId: item.sellerId,
+            itemId: item.id,
+            itemTitle: item.title,
+            itemImageUrl: item.mediaUrls?.[0] || ''
+          })
+        });
+        if (!convRes.ok) throw new Error('Failed to create conversation');
+        const convData = await convRes.json();
+        if (!convData.conversationId) throw new Error('Failed to get conversation ID');
+        const msgRes = await fetch('/api/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            conversationId: convData.conversationId,
+            text: messageText,
+            recipientId: item.sellerId,
+            itemId: item.id,
+            itemTitle: item.title,
+            itemImageUrl: item.mediaUrls?.[0] || ''
+          })
+        });
+        if (!msgRes.ok) throw new Error('Failed to send message');
+        toast({ title: 'Message Sent', description: 'Your message has been sent.' });
+        router.push(`/messages?conversationId=${convData.conversationId}`);
+      }
+      setMessageText('');
+      setIsMessageSheetOpen(false);
     } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to send message.';
-        console.error("Error sending message:", err);
-        toast({
-            title: "Send Error",
-            description: message,
-            variant: "destructive"
-        });
+      console.error('Error sending message:', err);
+      const message = err instanceof Error ? err.message : 'Failed to send message.';
+      toast({ title: 'Error', description: message, variant: 'destructive' });
     } finally {
-        setIsSendingMessage(false);
+      setIsSendingMessage(false);
     }
   };
 

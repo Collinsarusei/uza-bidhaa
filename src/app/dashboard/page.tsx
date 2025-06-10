@@ -56,8 +56,9 @@ function DashboardContent() {
   const [messageText, setMessageText] = useState("");
   const [isSendingMessage, setIsSendingMessage] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
+  const [unreadMessageCount, setUnreadMessageCount] = useState(0);
 
-  const { unreadCount, markAllAsRead: markAllNotificationsAsRead } = useNotifications(); // Renamed to avoid conflict if local markAllAsRead exists
+  const { unreadCount, markAllAsRead: markAllNotificationsAsRead } = useNotifications();
 
   const isAdminUser = useMemo(() => {
       return session?.user?.email === process.env.NEXT_PUBLIC_ADMIN_EMAIL;
@@ -69,17 +70,17 @@ function DashboardContent() {
   };
 
   const handleSendMessage = async () => {
-    if (!messageRecipient || !messageText.trim() || !session?.user?.id) return;
-    
+    if (!messageText.trim() || !messageRecipient) return;
     setIsSendingMessage(true);
+
     try {
       const response = await fetch('/api/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           recipientId: messageRecipient.sellerId,
+          text: messageText,
           itemId: messageRecipient.itemId,
-          text: messageText.trim(),
           itemTitle: messageRecipient.itemTitle,
           itemImageUrl: messageRecipient.itemImageUrl
         })
@@ -92,17 +93,16 @@ function DashboardContent() {
 
       toast({
         title: "Message Sent",
-        description: "Your message has been sent to the seller.",
-        duration: 3000
+        description: "Your message has been sent successfully."
       });
-      setIsMessageSheetOpen(false);
-    } catch (error: any) {
+      setMessageText('');
+      setMessageRecipient(null);
+    } catch (error) {
       console.error('Error sending message:', error);
       toast({
         title: "Failed to Send Message",
-        description: error.message || "Please try again later.",
-        variant: "destructive",
-        duration: 5000
+        description: error instanceof Error ? error.message : "There was an error sending your message. Please try again.",
+        variant: "destructive"
       });
     } finally {
       setIsSendingMessage(false);
@@ -146,6 +146,21 @@ function DashboardContent() {
     }
   }, [session?.user?.id, status]);
 
+  useEffect(() => {
+    const checkUnreadMessages = () => {
+      const count = parseInt(localStorage.getItem('unreadMessageCount') || '0', 10);
+      setUnreadMessageCount(count);
+    };
+
+    // Check immediately
+    checkUnreadMessages();
+
+    // Set up interval to check periodically
+    const interval = setInterval(checkUnreadMessages, 5000);
+
+    return () => clearInterval(interval);
+  }, []);
+
   const filteredItems = useMemo(() => {
       if (!searchTerm) return items;
       return items.filter(item => item.title.toLowerCase().includes(searchTerm.toLowerCase()));
@@ -168,7 +183,16 @@ function DashboardContent() {
         <div className="flex items-center gap-1 md:gap-2">
             {session?.user && (
                 <div className="flex items-center gap-1 md:hidden">
-                    <Link href="/messages" passHref><Button variant="ghost" size="icon"><Icons.mail className="h-5 w-5" /></Button></Link>
+                    <Link href="/messages" passHref>
+                        <Button variant="ghost" size="icon" className="relative">
+                            <Icons.mail className="h-5 w-5" />
+                            {unreadMessageCount > 0 && (
+                                <Badge variant="destructive" className="absolute -top-1 -right-1 h-4 w-4 justify-center rounded-full p-0.5 text-xs">
+                                    {unreadMessageCount > 9 ? '9+' : unreadMessageCount}
+                                </Badge>
+                            )}
+                        </Button>
+                    </Link>
                     <Button variant="ghost" size="icon" className="relative" onClick={handleOpenNotifications}>
                          <Icons.bell className="h-5 w-5" />
                          {unreadCount > 0 && <Badge variant="destructive" className="absolute -top-1 -right-1 h-4 w-4 justify-center rounded-full p-0.5 text-xs">{unreadCount > 9 ? '9+' : unreadCount}</Badge>}
@@ -217,12 +241,21 @@ function DashboardContent() {
                  )}
                  {session?.user && (
                      <TooltipProvider><Tooltip><TooltipTrigger asChild>
-                         <Link href="/messages" passHref><Button variant="ghost" size="icon" className="hover:bg-accent"><Icons.mail className="h-5 w-5" /></Button></Link>
+                         <Link href="/messages" passHref>
+                             <Button variant="ghost" size="icon" className="relative hover:bg-accent">
+                                 <Icons.mail className="h-5 w-5" />
+                                 {unreadMessageCount > 0 && (
+                                     <Badge variant="destructive" className="absolute -top-1 -right-1 h-4 w-4 justify-center rounded-full p-0.5 text-xs">
+                                         {unreadMessageCount > 9 ? '9+' : unreadMessageCount}
+                                     </Badge>
+                                 )}
+                             </Button>
+                         </Link>
                      </TooltipTrigger><TooltipContent><p>Messages</p></TooltipContent></Tooltip></TooltipProvider>
                  )}
                  {session?.user && (
                     <TooltipProvider><Tooltip><TooltipTrigger asChild>
-                        <Button variant="ghost" size="icon" className="relative hover:bg-accent" onClick={handleOpenNotifications}>
+                        <Button variant="ghost" size="icon" onClick={handleOpenNotifications}>
                             <Icons.bell className="h-5 w-5" />
                             {unreadCount > 0 && <Badge variant="destructive" className="absolute -top-1 -right-1 h-4 w-4 justify-center rounded-full p-0.5 text-xs">{unreadCount > 9 ? '9+' : unreadCount}</Badge>}
                         </Button>

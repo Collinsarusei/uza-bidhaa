@@ -61,6 +61,7 @@ const MessagesPage = () => {
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState("");
+  const [unreadCount, setUnreadCount] = useState<number>(0);
 
   const [isLoadingConversations, setIsLoadingConversations] = useState(true);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
@@ -80,6 +81,11 @@ const MessagesPage = () => {
       if (!response.ok) throw new Error((await response.json().catch(() => ({}))).message || 'Failed to fetch conversations');
       const data = await response.json();
       setAllConversations(data.conversations || []);
+      // Calculate total unread count
+      const totalUnread = data.conversations.reduce((count: number, conv: Conversation) => count + (conv.unreadCount || 0), 0);
+      setUnreadCount(totalUnread);
+      // Store unread count in localStorage for dashboard to access
+      localStorage.setItem('unreadMessageCount', totalUnread.toString());
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       setError(errorMsg);
@@ -236,6 +242,8 @@ const MessagesPage = () => {
       setMessages(prev => prev.map(msg => 
         msg.id === optimisticMessage.id ? data.newMessage : msg
       ));
+      // Refresh conversations to update unread counts
+      fetchConversations();
 
     } catch (error) {
       console.error('Error sending message:', error);
