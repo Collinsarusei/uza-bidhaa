@@ -74,10 +74,13 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ message: 'Forbidden' }, { status: 403 });
     }
 
-    // Fetch messages
+    // Fetch messages with proper error handling for null senders
     const messages = await prisma.message.findMany({
       where: { 
-        conversationId: conversationId
+        conversationId: conversationId,
+        senderId: {
+          not: '' // Only get messages with non-empty sender IDs
+        }
       },
       orderBy: { 
         createdAt: 'asc' 
@@ -91,7 +94,13 @@ export async function GET(req: NextRequest) {
           } 
         } 
       }
+    }).catch(error => {
+      console.error("Error fetching messages:", error);
+      throw new Error("Failed to fetch messages from database");
     });
+
+    // Filter out any messages with missing sender data
+    const validMessages = messages.filter(msg => msg.sender && msg.sender.id);
 
     // Update last read timestamp for the current user
     await prisma.conversationParticipant.updateMany({
@@ -104,8 +113,8 @@ export async function GET(req: NextRequest) {
       }
     });
 
-    console.log(`API Messages GET: Successfully fetched ${messages.length} messages for conversation ${conversationId}`);
-    return NextResponse.json({ messages });
+    console.log(`API Messages GET: Successfully fetched ${validMessages.length} messages for conversation ${conversationId}`);
+    return NextResponse.json({ messages: validMessages });
   } catch (error) {
     console.error("API Messages GET Error:", error);
     return NextResponse.json({ 
@@ -157,7 +166,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ message: 'This conversation is not yet approved' }, { status: 403 });
     }
 
-    // Create the message
+    // Create the message with proper error handling
     const newMessage = await prisma.message.create({
       data: {
         conversationId,
@@ -174,7 +183,14 @@ export async function POST(req: NextRequest) {
           }
         }
       }
+    }).catch(error => {
+      console.error("Error creating message:", error);
+      throw new Error("Failed to create message in database");
     });
+
+    if (!newMessage || !newMessage.sender || !newMessage.sender.id) {
+      throw new Error("Failed to create message with valid sender");
+    }
 
     // Update conversation's last message
     await prisma.conversation.update({
