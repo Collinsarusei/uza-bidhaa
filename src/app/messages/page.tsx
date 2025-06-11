@@ -30,47 +30,41 @@ interface TypingUserInfo {
     userName?: string | null;
 }
 
-// Wrap the main component with dynamic import
 const MessagesPage = () => {
   const { data: session, status: sessionStatus } = useSession();
   const router = useRouter();
   const searchParams = useSearchParams();
   const { toast } = useToast();
   const isMobile = useIsMobile();
+  const [allConversations, setAllConversations] = useState<Conversation[]>([]);
+  const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [newMessage, setNewMessage] = useState("");
+  const [unreadCount, setUnreadCount] = useState<number>(0);
+  const [isLoadingConversations, setIsLoadingConversations] = useState(true);
+  const [isLoadingMessages, setIsLoadingMessages] = useState(false);
+  const [isSending, setIsSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'inbox' | 'incoming'>('inbox');
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Add early return for server-side rendering
+  // Handle early returns after hooks are initialized
   if (typeof window === 'undefined') {
     return null;
   }
 
-  // Early return if not authenticated
   if (!session?.user) {
     return <div className="container mx-auto p-4 max-w-5xl">Please sign in to view messages</div>;
   }
 
-  // Early return if searchParams is not available
   if (!searchParams) {
     return <div className="container mx-auto p-4 max-w-5xl">Loading...</div>;
   }
 
   const conversationId = searchParams.get('conversationId');
   const currentUserId = session.user.id;
-  const user = session.user; // Store user in a constant to avoid repeated type checks
-
-  const [allConversations, setAllConversations] = useState<Conversation[]>([]);
-  const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [newMessage, setNewMessage] = useState("");
-  const [unreadCount, setUnreadCount] = useState<number>(0);
-
-  const [isLoadingConversations, setIsLoadingConversations] = useState(true);
-  const [isLoadingMessages, setIsLoadingMessages] = useState(false);
-  const [isSending, setIsSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'inbox' | 'incoming'>('inbox');
-
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const user = session.user;
 
   const fetchConversations = useCallback(async () => {
     if (sessionStatus !== 'authenticated' || !currentUserId) return;
