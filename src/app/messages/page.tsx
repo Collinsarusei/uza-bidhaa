@@ -36,6 +36,8 @@ const MessagesPage = () => {
   const searchParams = useSearchParams();
   const { toast } = useToast();
   const isMobile = useIsMobile();
+
+  // State declarations
   const [allConversations, setAllConversations] = useState<Conversation[]>([]);
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -46,10 +48,45 @@ const MessagesPage = () => {
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'inbox' | 'incoming'>('inbox');
+
+  // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Handle early returns after hooks are initialized
+  // Derived values
+  const currentUserId = session?.user?.id;
+  const conversationId = searchParams?.get('conversationId');
+
+  // Memoized fetch function
+  const fetchConversations = useCallback(async () => {
+    if (sessionStatus !== 'authenticated' || !currentUserId) return;
+    setIsLoadingConversations(true);
+    setError(null);
+    try {
+      const response = await fetch('/api/conversations');
+      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).message || 'Failed to fetch conversations');
+      const data = await response.json();
+      setAllConversations(data.conversations || []);
+      const totalUnread = data.conversations.reduce((count: number, conv: Conversation) => count + (conv.unreadCount || 0), 0);
+      setUnreadCount(totalUnread);
+      localStorage.setItem('unreadMessageCount', totalUnread.toString());
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      setError(errorMsg);
+      toast({ title: "Error", description: `Failed to load conversations: ${errorMsg}`, variant: "destructive" });
+    } finally {
+      setIsLoadingConversations(false);
+    }
+  }, [sessionStatus, currentUserId, toast]);
+
+  // Effect for fetching conversations
+  useEffect(() => {
+    if (sessionStatus === 'authenticated') {
+      fetchConversations();
+    }
+  }, [fetchConversations, sessionStatus]);
+
+  // Early returns after hooks
   if (typeof window === 'undefined') {
     return null;
   }
@@ -62,34 +99,7 @@ const MessagesPage = () => {
     return <div className="container mx-auto p-4 max-w-5xl">Loading...</div>;
   }
 
-  const conversationId = searchParams.get('conversationId');
-  const currentUserId = session.user.id;
   const user = session.user;
-
-  const fetchConversations = useCallback(async () => {
-    if (sessionStatus !== 'authenticated' || !currentUserId) return;
-    setIsLoadingConversations(true);
-    setError(null);
-    try {
-      const response = await fetch('/api/conversations');
-      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).message || 'Failed to fetch conversations');
-      const data = await response.json();
-      setAllConversations(data.conversations || []);
-      // Calculate total unread count
-      const totalUnread = data.conversations.reduce((count: number, conv: Conversation) => count + (conv.unreadCount || 0), 0);
-      setUnreadCount(totalUnread);
-      // Store unread count in localStorage for dashboard to access
-      localStorage.setItem('unreadMessageCount', totalUnread.toString());
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      setError(errorMsg);
-      toast({ title: "Error", description: `Failed to load conversations: ${errorMsg}`, variant: "destructive" });
-    } finally {
-      setIsLoadingConversations(false);
-    }
-  }, [sessionStatus, currentUserId, toast]);
-
-  useEffect(() => { fetchConversations(); }, [fetchConversations]);
 
   const categorizedConversations = useMemo(() => {
     const inbox: Conversation[] = [];

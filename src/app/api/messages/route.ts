@@ -192,6 +192,16 @@ export async function POST(req: NextRequest) {
           }
         });
         targetConversationId = newConversation.id;
+
+        // Add system message about payment safety
+        await prisma.message.create({
+          data: {
+            content: "For your safety, ensure all payments are made through the Uza Bidhaa platform. We are not liable for any losses incurred from off-platform payments or direct bank transfers arranged via chat.",
+            senderId: userId,
+            conversationId: targetConversationId,
+            isSystemMessage: true
+          }
+        });
       } catch (error) {
         console.error('Error creating conversation:', error);
         return NextResponse.json({ message: 'Failed to create conversation' }, { status: 500 });
