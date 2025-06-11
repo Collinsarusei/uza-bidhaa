@@ -176,21 +176,26 @@ export async function POST(req: NextRequest) {
 
     // If no conversationId, create a new conversation
     if (!conversationId) {
-      const newConversation = await prisma.conversation.create({
-        data: {
-          initiatorId: userId,
-          itemId,
-          itemTitle,
-          itemImageUrl,
-          participants: {
-            connect: [
-              { id: userId },
-              { id: recipientId }
-            ]
+      try {
+        const newConversation = await prisma.conversation.create({
+          data: {
+            initiatorId: userId,
+            itemId,
+            itemTitle,
+            itemImageUrl,
+            participants: {
+              connect: [
+                { id: userId },
+                { id: recipientId }
+              ]
+            }
           }
-        }
-      });
-      targetConversationId = newConversation.id;
+        });
+        targetConversationId = newConversation.id;
+      } catch (error) {
+        console.error('Error creating conversation:', error);
+        return NextResponse.json({ message: 'Failed to create conversation' }, { status: 500 });
+      }
     }
 
     // Verify conversation exists and user is a participant
@@ -213,80 +218,44 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ message: 'Conversation not found' }, { status: 404 });
     }
 
-    // Check if conversation is approved
-    if (!conversation.approved && conversation.initiatorId !== userId) {
-      return NextResponse.json({ message: 'This conversation is not yet approved' }, { status: 403 });
-    }
-
-    // Create the message with minimal data
-    const newMessage = await prisma.message.create({
-      data: {
-        conversationId,
-        senderId: userId,
-        content: text.trim(),
-        createdAt: new Date()
-      },
-      select: {
-        id: true,
-        conversationId: true,
-        senderId: true,
-        content: true,
-        createdAt: true,
-        isSystemMessage: true
-      }
-    }).catch(error => {
-      console.error("Error creating message:", error);
-      throw new Error("Failed to create message in database");
-    });
-
-    // Fetch sender data separately
-    const sender = await prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        id: true,
-        name: true,
-        image: true
-      }
-    }).catch(error => {
-      console.error("Error fetching sender data:", error);
-      return null;
-    });
-
-    const newMessageWithSender = {
-      ...newMessage,
-      sender
-    };
-
-    // Update conversation's last message
-    await prisma.conversation.update({
-      where: { id: conversationId },
-      data: {
-        lastMessageSnippet: text.trim().substring(0, 100),
-        lastMessageTimestamp: new Date()
-      }
-    }).catch(error => {
-      console.error("Error updating conversation:", error);
-    });
-
-    // Create notification for other participants
-    const otherParticipants = conversation.participants.filter(p => p.id !== userId);
-    for (const participant of otherParticipants) {
-      await createNotification({
-        userId: participant.id,
-        type: 'new_message',
-        message: `${userName} sent you a message${conversation.item ? ` about "${conversation.item.title}"` : ''}`,
-        relatedItemId: conversation.item?.id
-      }).catch(error => {
-        console.error("Error creating notification:", error);
+    // Create the message
+    try {
+      const message = await prisma.message.create({
+        data: {
+          content: text,
+          senderId: userId,
+          conversationId: targetConversationId
+        },
+        include: {
+          sender: {
+            select: {
+              id: true,
+              name: true,
+              image: true
+            }
+          }
+        }
       });
-    }
 
-    return NextResponse.json({ newMessage: newMessageWithSender });
+      // Update conversation's last message timestamp
+      await prisma.conversation.update({
+        where: { id: targetConversationId },
+        data: {
+          lastMessageTimestamp: new Date(),
+          lastMessageSnippet: text.substring(0, 50)
+        }
+      });
+
+      return NextResponse.json({ 
+        message: 'Message sent successfully',
+        newMessage: message
+      });
+    } catch (error) {
+      console.error('Error creating message:', error);
+      return NextResponse.json({ message: 'Failed to create message in database' }, { status: 500 });
+    }
   } catch (error) {
-    console.error('Error sending message:', error);
-    return NextResponse.json({ 
-      message: 'Failed to send message',
-      error: error instanceof Error ? error.message : 'Unknown error'
-    }, { status: 500 });
+    console.error('Error in message creation:', error);
+    return NextResponse.json({ message: 'Internal server error' }, { status: 500 });
   }
 }
