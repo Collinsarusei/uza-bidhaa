@@ -202,7 +202,7 @@ export default function ItemDetailPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           itemId: item.id, 
-          amount: Number(item.price) * 100 // Convert to kobo (cents)
+          amount: Number(item.price)
         })
       });
 
