@@ -55,12 +55,12 @@ export default function ItemDetailPage() {
         const response = await fetch(`/api/items?itemId=${itemId}`);
         if (!response.ok) {
           const errData = await response.json();
-             throw new Error(errData.message || `HTTP error! status: ${response.status}`);
+          throw new Error(errData.message || `HTTP error! status: ${response.status}`);
         }
 
         const data = await response.json();
         if (!data || data.length === 0) { 
-           throw new Error('Item not found.');
+          throw new Error('Item not found.');
         }
 
         const itemData = data[0];
@@ -68,10 +68,17 @@ export default function ItemDetailPage() {
 
         // Fetch seller's name
         if (itemData.sellerId) {
-          const sellerResponse = await fetch(`/api/user/${itemData.sellerId}`);
-          if (sellerResponse.ok) {
-            const sellerData = await sellerResponse.json();
-            setSellerName(sellerData.name || 'Unknown Seller');
+          try {
+            const sellerResponse = await fetch(`/api/user/${itemData.sellerId}`);
+            if (sellerResponse.ok) {
+              const sellerData = await sellerResponse.json();
+              setSellerName(sellerData.name || 'Unknown Seller');
+            } else {
+              setSellerName('Unknown Seller');
+            }
+          } catch (error) {
+            console.error('Error fetching seller data:', error);
+            setSellerName('Unknown Seller');
           }
         }
       } catch (err) {
@@ -161,14 +168,14 @@ export default function ItemDetailPage() {
   };
 
   const handleInitiatePayment = async () => {
-      if (!item || !session?.user?.id) {
+    if (!item || !session?.user?.id) {
       toast({
         title: "Login Required",
         description: "Please log in to purchase items.",
         variant: "destructive"
       });
-           return;
-      }
+      return;
+    }
 
     if (item.status !== 'AVAILABLE') {
       toast({
@@ -176,37 +183,37 @@ export default function ItemDetailPage() {
         description: "This item is no longer available for purchase.",
         variant: "destructive"
       });
-            return;
-      }
+      return;
+    }
 
-      if (session.user.id === item.sellerId) {
+    if (session.user.id === item.sellerId) {
       toast({
         title: "Action Denied",
         description: "You cannot purchase your own item.",
         variant: "destructive"
       });
-           return;
+      return;
+    }
+
+    setIsInitiatingPayment(true);
+    try {
+      const response = await fetch('/api/payment/initiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          itemId: item.id, 
+          amount: Number(item.price) * 100 // Convert to kobo (cents)
+        })
+      });
+
+      const result = await response.json();
+      if (!response.ok || !result.authorization_url) {
+        throw new Error(result.message || 'Failed to prepare payment checkout.');
       }
 
-      setIsInitiatingPayment(true);
-      try {
-            const response = await fetch('/api/payment/initiate', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    itemId: item.id, 
-          amount: item.price
-                })
-            });
-
-            const result = await response.json();
-            if (!response.ok || !result.authorization_url) {
-                throw new Error(result.message || 'Failed to prepare payment checkout.');
-            }
-
-            window.location.href = result.authorization_url;
-      } catch (err) {
-            const message = err instanceof Error ? err.message : 'Failed to initiate payment.';
+      window.location.href = result.authorization_url;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to initiate payment.';
       console.error("Payment Error:", err);
       toast({
         title: "Payment Error",
@@ -214,8 +221,8 @@ export default function ItemDetailPage() {
         variant: "destructive"
       });
     } finally {
-            setIsInitiatingPayment(false); 
-      }
+      setIsInitiatingPayment(false); 
+    }
   };
 
   if (isLoading) {
