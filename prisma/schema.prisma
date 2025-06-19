@@ -98,8 +98,10 @@ model User {
   userWithdrawals         UserWithdrawal[] 
   platformFees            PlatformFee[]
   conversationParticipants ConversationParticipant[] 
-  earnings                Earning[] // Added relation to Earning
+  earnings                Earning[]
   contactMessages         ContactMessage[]
+  ordersAsBuyer           Order[]   @relation("BuyerOrders")
+  ordersAsSeller          Order[]   @relation("SellerOrders")
 }
 
 model AdminFeeWithdrawal {
@@ -162,6 +164,27 @@ model Earning {
   @@index([userId, createdAt])
 }
 
+model Order {
+  id          String   @id @default(cuid())
+  buyerId     String
+  buyer       User     @relation("BuyerOrders", fields: [buyerId], references: [id])
+  sellerId    String
+  seller      User     @relation("SellerOrders", fields: [sellerId], references: [id])
+  itemId      String
+  item        Item     @relation(fields: [itemId], references: [id])
+  paymentId   String   @unique
+  payment     Payment  @relation(fields: [paymentId], references: [id])
+  itemTitle   String
+  amount      Decimal
+  status      String   @default("PENDING_FULFILLMENT")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([buyerId])
+  @@index([sellerId])
+  @@index([itemId])
+  @@index([paymentId])
+}
 
 model Conversation {
   id                      String    @id @default(cuid())
@@ -265,8 +288,9 @@ model Item {
   payments              Payment[]
   disputes              Dispute[]
   platformFees          PlatformFee[]
-  earnings              Earning[] // Added relation to Earning
+  earnings              Earning[]
   tracking              ItemTracking?
+  orders                Order[]
 
   @@index([sellerId, createdAt(sort: Desc)]) 
   @@index([status, createdAt(sort: Desc)])   
@@ -322,7 +346,8 @@ model Payment {
   itemTitle                 String?       
 
   platformFees              PlatformFee[] 
-  earning                   Earning? // Relation to Earning (if one-to-one with Payment)
+  earning                   Earning?
+  order                     Order?
 
   @@index([itemId])
   @@index([status, createdAt]) 

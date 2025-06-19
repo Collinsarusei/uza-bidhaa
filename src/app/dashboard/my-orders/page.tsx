@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useSession } from 'next-auth/react';
-import { Payment, Item } from '@/lib/types'; 
+
 import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -25,9 +25,22 @@ enum PaymentStatus {
   FAILED = 'FAILED'
 }
 
-interface OrderDisplayItem extends Omit<Payment, 'status'> {
-    status: PaymentStatus;
-    itemDetails?: Partial<Item>; 
+interface OrderDisplayItem {
+    id: string;
+    buyerId: string;
+    sellerId: string;
+    itemId: string;
+    itemTitle: string;
+    amount: number;
+    status: string;
+    createdAt: Date;
+    updatedAt: Date;
+    itemDetails: {
+        id: string;
+        title: string;
+        mediaUrls: string[];
+        seller: { id: string; name: string };
+    } | null;
 }
 
 export default function MyOrdersPage() {
@@ -85,7 +98,7 @@ export default function MyOrdersPage() {
            setOrders(prevOrders => 
                prevOrders.map(order => 
           order.id === orderId 
-            ? { ...order, status: PaymentStatus.RELEASED_TO_SELLER }
+            ? { ...order, status: 'RELEASED_TO_SELLER' }
             : order
                )
            );
@@ -122,7 +135,7 @@ export default function MyOrdersPage() {
       setOrders(prevOrders => 
         prevOrders.map(order => 
           order.id === orderId 
-            ? { ...order, status: PaymentStatus.DISPUTED }
+            ? { ...order, status: 'DISPUTED' }
             : order
         )
       );
@@ -143,13 +156,13 @@ export default function MyOrdersPage() {
     }
     };
 
-  const getStatusVariant = (status: PaymentStatus) => {
+  const getStatusVariant = (status: string) => {
     switch (status) {
-      case PaymentStatus.RELEASED_TO_SELLER:
+      case 'RELEASED_TO_SELLER':
         return 'default';
-      case PaymentStatus.DISPUTED:
+      case 'DISPUTED':
         return 'destructive';
-      case PaymentStatus.PENDING_CONFIRMATION:
+      case 'PENDING_FULFILLMENT':
         return 'secondary';
       default:
         return 'outline';
@@ -188,9 +201,15 @@ export default function MyOrdersPage() {
           <div className="flex-grow space-y-1">
             <h3 className="font-medium text-sm md:text-base">{item.title}</h3>
             <p className="text-xs md:text-sm text-muted-foreground">KES {order.amount.toLocaleString()}</p>
-            <p className="text-xs md:text-sm text-muted-foreground">Seller: {item.seller?.name || 'Unknown'}</p>
+            <p className="text-xs md:text-sm text-muted-foreground">Seller: {item.seller.name || 'Unknown'}</p>
           </div>
         </CardContent>
+
+        {order.status === 'PENDING_FULFILLMENT' && (
+          <CardFooter className="p-2 md:p-4">
+            <Button onClick={() => handleConfirmReceipt(order.id)}>Confirm Receipt</Button>
+          </CardFooter>
+        )}
       </Card>
     );
   };

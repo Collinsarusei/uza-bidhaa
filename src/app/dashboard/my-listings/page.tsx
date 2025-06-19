@@ -28,7 +28,8 @@ export default function MyListingsPage() {
       setIsLoading(true);
       setError(null);
 
-      const apiUrl = `/api/items?sellerId=${userId}`; 
+      // Fetch items with both AVAILABLE and PAID_ESCROW statuses
+      const apiUrl = `/api/items?sellerId=${userId}&status=AVAILABLE,PAID_ESCROW`; 
       console.log(`Fetching my items from: ${apiUrl}`);
 
       try {

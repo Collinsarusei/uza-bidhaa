@@ -3,29 +3,13 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from '../../auth/[...nextauth]/route'; 
 import prisma from '@/lib/prisma';
-import { Prisma, PaymentStatus } from '@prisma/client';
+import { Prisma } from '@prisma/client';
+import { Order } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const fetchCache = 'force-no-store';
 export const revalidate = 0;
-
-// Define the structure for the response, if needed for type safety on client
-interface UserOrder {
-    id: string;
-    buyerId: string;
-    sellerId: string;
-    itemId: string;
-    amount: Prisma.Decimal;
-    status: PaymentStatus;
-    createdAt: Date;
-    updatedAt: Date;
-    item: {
-        id: string;
-        title: string;
-        mediaUrls: string[];
-    } | null;
-}
 
 export async function GET(req: Request) {
     console.log("--- API GET /api/user/orders (Prisma) START ---");
@@ -42,13 +26,13 @@ export async function GET(req: Request) {
     // Validate userId if provided in query params
     if (searchParams.get('userId') && searchParams.get('userId') !== session.user.id) {
         console.warn(`API User Orders GET: User ${session.user.id} attempted to access orders for user ${userId}`);
-        return NextResponse.json({ message: 'Forbidden: Cannot access other users\' orders' }, { status: 403 });
+        return NextResponse.json({ message: 'Forbidden: Cannot access other users' orders' }, { status: 403 });
     }
 
     console.log(`API User Orders GET: Fetching orders for user ${userId}`);
 
     try {
-        const userOrders = await prisma.payment.findMany({
+        const userOrders = await prisma.order.findMany({
             where: {
                 buyerId: userId,
             },
@@ -58,8 +42,9 @@ export async function GET(req: Request) {
                         id: true,
                         title: true,
                         mediaUrls: true,
+                        seller: { select: { id: true, name: true } }
                     }
-                }
+                },
             },
             orderBy: {
                 createdAt: 'desc',
@@ -72,15 +57,22 @@ export async function GET(req: Request) {
         }
 
         // Type-safe conversion
-        const ordersToReturn: UserOrder[] = userOrders.map(order => ({
-            ...order,
+        const ordersToReturn: Order[] = userOrders.map((order) => ({
+            id: order.id,
+            buyerId: order.buyerId,
+            sellerId: order.sellerId,
+            itemId: order.itemId,
+            itemTitle: order.itemTitle,
             amount: order.amount as Prisma.Decimal,
-            status: order.status as PaymentStatus,
-            item: order.item ? {
+            status: order.status,
+            createdAt: order.createdAt,
+            updatedAt: order.updatedAt,
+            itemDetails: order.item ? {
                 id: order.item.id,
                 title: order.item.title,
-                mediaUrls: order.item.mediaUrls
-            } : null
+                mediaUrls: order.item.mediaUrls,
+                seller: order.item.seller ? { id: order.item.seller.id, name: order.item.seller.name || '' } : { id: 'N/A', name: 'N/A' }
+            } : null,
         }));
 
         console.log(`API User Orders GET: Found ${ordersToReturn.length} orders for user ${userId}`);

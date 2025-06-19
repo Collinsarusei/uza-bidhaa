@@ -22,6 +22,9 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
+import {TrackingForm} from '@/components/items/tracking-form';
+import { TrackingDisplay } from '@/components/items/tracking-display';
+
 
 export default function ItemDetailPage() {
   const params = useParams();
@@ -274,6 +277,7 @@ export default function ItemDetailPage() {
   const canMessageSeller = session?.user && session.user.id !== item.sellerId;
   const isMyListing = session?.user?.id === item.sellerId;
   const isAvailable = item.status === 'AVAILABLE';
+  const isPaidEscrow = item.status === 'PAID_ESCROW';
 
   return (
     <div className="container mx-auto p-4 md:p-6 max-w-4xl">
@@ -363,9 +367,15 @@ export default function ItemDetailPage() {
 
           <div className="pt-4 space-y-2">
             {isMyListing ? (
-              <Button variant="outline" className="w-full" disabled>
-                This is your listing
-              </Button>
+              <>
+                {isPaidEscrow ? (
+                  <TrackingForm itemId={itemId} />
+                ) : (
+                  <Button variant="outline" className="w-full" disabled>
+                    This is your listing
+                  </Button>
+                )}
+              </>
             ) : (
               <>
                 {isAvailable && (
@@ -437,6 +447,7 @@ export default function ItemDetailPage() {
               </>
             )}
           </div>
+          {isMyListing && isPaidEscrow && <TrackingDisplay itemId={itemId} />}
         </div>
       </div>
     </div>

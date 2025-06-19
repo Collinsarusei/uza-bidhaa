@@ -4,6 +4,7 @@ import prisma from '@/lib/prisma';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from '@/app/api/auth/[...nextauth]/route';
 import * as z from 'zod';
+import { ItemStatus } from '@prisma/client';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -36,9 +37,9 @@ export async function GET(request: Request) {
     const statusQuery = searchParams.get('status');
     const searchTerm = searchParams.get('q');
 
-    let itemStatusFilter: 'AVAILABLE' | 'SOLD' | 'DELISTED' | 'DISPUTED' = 'AVAILABLE';
-    if (statusQuery && ['AVAILABLE', 'SOLD', 'DELISTED', 'DISPUTED'].includes(statusQuery)) {
-        itemStatusFilter = statusQuery as 'AVAILABLE' | 'SOLD' | 'DELISTED' | 'DISPUTED';
+    let itemStatusFilter: ItemStatus[] = [ItemStatus.AVAILABLE];
+    if (statusQuery) {
+        itemStatusFilter = statusQuery.split(',') as ItemStatus[];
     }
 
     if (itemIdToFetch) {
@@ -69,16 +70,18 @@ export async function GET(request: Request) {
     }
 
     let whereClause: {
-        status: 'AVAILABLE' | 'SOLD' | 'DELISTED' | 'DISPUTED';
+        status?: { in: ItemStatus[] };
         sellerId?: string | { not: string };
         category?: string;
         OR?: Array<{
             title?: { contains: string; mode: 'insensitive' };
             description?: { contains: string; mode: 'insensitive' };
         }>;
-    } = {
-        status: itemStatusFilter,
-    };
+    } = {};
+
+    if (itemStatusFilter.length > 0) {
+        whereClause.status = { in: itemStatusFilter };
+    }
 
     if (sellerIdToInclude) {
         whereClause.sellerId = sellerIdToInclude;

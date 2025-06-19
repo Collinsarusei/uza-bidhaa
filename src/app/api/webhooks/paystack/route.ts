@@ -76,7 +76,7 @@ async function handleChargeSuccess(payload: any) {
     try {
         const payment = await prisma.payment.findUnique({
             where: { id: prismaPaymentId },
-            include: { item: { select: { id: true, title: true, quantity: true, status: true } } } // Include item details
+            include: { item: { select: { id: true, title: true, quantity: true, status: true, sellerId: true } } } // Include item details
         });
 
         if (!payment) {
@@ -89,42 +89,69 @@ async function handleChargeSuccess(payload: any) {
             console.log(`Webhook charge.success: Payment ${prismaPaymentId} already in terminal state (${payment.status}). Skipping.`);
             return;
         }
+        
+        try {
+            await prisma.$transaction(async (tx) => {
+                // 1. Update Payment status
+                await tx.payment.update({
+                    where: { id: prismaPaymentId },
+                    data: {
+                        status: PaymentStatus.SUCCESSFUL_ESCROW, 
+                        gatewayTransactionId: paystackTransactionId ? paystackTransactionId.toString() : null,
+                    }
+                });
+                console.log(`Webhook charge.success: Payment ${prismaPaymentId} status updated to SUCCESSFUL_ESCROW.`);
 
-        await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-            // 1. Update Payment status
-            await tx.payment.update({
-                where: { id: prismaPaymentId },
-                data: {
-                    status: PaymentStatus.SUCCESSFUL_ESCROW, 
-                    gatewayTransactionId: paystackTransactionId ? paystackTransactionId.toString() : null,
+                // 2. Handle Item status and quantity
+                if (payment.item) {
+                    if (payment.item.status === ItemStatus.AVAILABLE) {
+                        if (payment.item.quantity === 1) {
+                            // This is the last unit, mark as PAID_ESCROW (no longer available for others to buy)
+                            await tx.item.update({
+                                where: { id: payment.itemId },
+                                data: { status: ItemStatus.PAID_ESCROW }
+                            });
+                            console.log(`Webhook charge.success: Item ${payment.itemId} (last unit, quantity: 1) status updated to PAID_ESCROW.`);
+                        } else if (payment.item.quantity > 1) {
+                            // Quantity > 1, decrement quantity and optionally create a line item
+                            await tx.item.update({
+                                where: { id: payment.itemId },
+                                data: { quantity: payment.item.quantity - 1 }
+                            });
+                            console.log(`Webhook charge.success: Item ${payment.itemId} quantity decremented to ${payment.item.quantity - 1}.`);
+                        } else {
+                            // Quantity is 0 or less, but status was AVAILABLE. This is an inconsistent state.
+                            // Log this, but proceed with payment. Item should ideally not be buyable if quantity <= 0.
+                            console.warn(`Webhook charge.success: Item ${payment.itemId} has quantity ${payment.item.quantity} but status was AVAILABLE. Proceeding with payment update.`);
+                        }
+
+                        // 3. Create Order record
+                        await tx.order.create({
+                            data: {
+                                buyerId: payment.buyerId,
+                                sellerId: payment.item.sellerId,
+                                itemId: payment.itemId,
+                                paymentId: prismaPaymentId,
+                                itemTitle: payment.itemTitle || '',
+                                amount: payment.amount,
+                                status: 'PENDING_FULFILLMENT', // Or any other relevant initial status
+                            }
+                        });
+                        console.log(`Webhook charge.success: Order created for buyer ${payment.buyerId}, item ${payment.itemId}.`);
+
+                    }
+                } else {
+                    console.warn(`Webhook charge.success: Item data not found for payment ${prismaPaymentId}. Cannot update item status or create order.`);
                 }
             });
-            console.log(`Webhook charge.success: Payment ${prismaPaymentId} status updated to SUCCESSFUL_ESCROW.`);
-
-            // 2. Update Item status (conditionally based on quantity) - NO quantity decrement here
-            if (payment.item) {
-                if (payment.item.status === ItemStatus.AVAILABLE) {
-                    if (payment.item.quantity === 1) {
-                        // This is the last unit, mark as PAID_ESCROW (no longer available for others to buy)
-                        await tx.item.update({
-                            where: { id: payment.itemId },
-                            data: { status: ItemStatus.PAID_ESCROW }
-                        });
-                        console.log(`Webhook charge.success: Item ${payment.itemId} (last unit, quantity: 1) status updated to PAID_ESCROW.`);
-                    } else if (payment.item.quantity > 1) {
-                        // Quantity > 1, item listing remains AVAILABLE. No status change needed here for the item itself.
-                        console.log(`Webhook charge.success: Item ${payment.itemId} (quantity: ${payment.item.quantity}) status remains AVAILABLE.`);
-                    } else {
-                        // Quantity is 0 or less, but status was AVAILABLE. This is an inconsistent state.
-                        // Log this, but proceed with payment. Item should ideally not be buyable if quantity <= 0.
-                        console.warn(`Webhook charge.success: Item ${payment.itemId} has quantity ${payment.item.quantity} but status was AVAILABLE. Proceeding with payment update.`);
-                    }
-                }
-            } else {
-                console.warn(`Webhook charge.success: Item data not found for payment ${prismaPaymentId}. Cannot update item status.`);
+        } catch (error: any) {
+            if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+                console.warn(`Webhook charge.success: Order for payment ${prismaPaymentId} already exists. Skipping.`);
+                return;
             }
-        });
-        
+            throw error;
+        }
+
         // Notifications
         if (payment.item) {
             await createNotification({
@@ -234,7 +261,7 @@ async function handleTransferFailedOrReversed(payload: any, eventType: 'transfer
                 console.log(`Webhook ${eventType}: AdminFeeWithdrawal ${adminWithdrawalId} not found or already processed. Skipping.`);
                 return;
             }
-            await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+            await prisma.$transaction(async (tx) => {
                 await tx.adminFeeWithdrawal.update({
                     where: { id: adminWithdrawalId },
                     data: {
@@ -268,7 +295,7 @@ async function handleTransferFailedOrReversed(payload: any, eventType: 'transfer
                  console.log(`Webhook ${eventType}: UserWithdrawal ${userWithdrawalId} not found or already processed. Skipping.`);
                 return;
             }
-            await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+            await prisma.$transaction(async (tx) => {
                 await tx.userWithdrawal.update({
                     where: { id: userWithdrawalId },
                     data: {
