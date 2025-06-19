@@ -38,6 +38,22 @@ export type User = {
   // Add other fields from your User model as needed
 };
 
+export type UserProfile = {
+  id: string;
+  name: string | null;
+  email: string | null;
+  image: string | null;
+  emailVerified: Date | null;
+  role: UserRole;
+  createdAt: Date;
+  location: string | null;
+  mpesaPhoneNumber: string | null;
+  phoneNumber: string | null;
+  phoneVerified: boolean;
+  kycVerified: boolean;
+};
+
+
 export type Item = {
   id: string;
   sellerId: string;
@@ -90,3 +106,27 @@ export type Order = {
         seller: { id: string; name: string };
     } | null;
 }
+
+export type DisputeRecord = {
+  id: string;
+  reason: string;
+  status: string;
+  createdAt: Date;
+  item: {
+    id: string;
+    title: string;
+    mediaUrls: string[];
+  };
+  payment: {
+    id: string;
+    amount: Prisma.Decimal;
+  };
+  filedByUser: {
+    id: string;
+    name: string | null;
+  };
+  otherPartyUser: {
+    id: string;
+    name: string | null;
+  };
+};
