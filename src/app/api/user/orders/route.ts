@@ -26,7 +26,7 @@ export async function GET(req: Request) {
     // Validate userId if provided in query params
     if (searchParams.get('userId') && searchParams.get('userId') !== session.user.id) {
         console.warn(`API User Orders GET: User ${session.user.id} attempted to access orders for user ${userId}`);
-        return NextResponse.json({ message: 'Forbidden: Cannot access other users' orders' }, { status: 403 });
+        return NextResponse.json({ message: "Forbidden: Cannot access other users' orders" }, { status: 403 });
     }
 
     console.log(`API User Orders GET: Fetching orders for user ${userId}`);
