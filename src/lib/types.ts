@@ -130,3 +130,26 @@ export type DisputeRecord = {
     name: string | null;
   };
 };
+
+export type PlatformFeeRecord = {
+    id: string;
+    relatedPaymentId: string;
+    relatedItemId: string;
+    sellerId: string;
+    amount: Prisma.Decimal;
+    appliedFeePercentage: Prisma.Decimal | null;
+    createdAt: Date;
+    payment: {
+        id: string;
+        amount: Prisma.Decimal;
+        status: string;
+    };
+    item: {
+        id: string;
+        title: string;
+    };
+    seller: {
+        id: string;
+        name: string | null;
+    };
+};
