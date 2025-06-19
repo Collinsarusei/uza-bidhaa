@@ -160,7 +160,7 @@ export default function AdminPlatformFeesPage() {
                 <CardHeader>
                     <CardTitle>Platform Fees Summary</CardTitle>
                     <CardDescription>
-                        Total Fees: KES {feesData?.totalBalance?.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                        Total Fees: KES {Number(feesData?.totalBalance).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -186,7 +186,7 @@ export default function AdminPlatformFeesPage() {
                                                     {fee.relatedPaymentId}
                                                 </TableCell>
                                                 <TableCell className="whitespace-nowrap">
-                                                    KES {fee.amount.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                                                    KES {Number(fee.amount).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
                                                 </TableCell>
                                                 <TableCell className="hidden md:table-cell">
                                                     <div className="max-w-[200px] truncate">
@@ -231,7 +231,7 @@ export default function AdminPlatformFeesPage() {
                             <div>
                                 <Label>Amount</Label>
                                 <p className="text-sm">
-                                    KES {selectedFee.amount.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                                    KES {Number(selectedFee.amount).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
                                 </p>
                             </div>
                             <div>
